@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-YUPS - Core Executable
+YUPS - Core Executable (v5)
 
-This script implements the core logic via subcommands:
-- (default): Logs a user query (formerly Objective 3)
-- --cnf-handle: Handles "Command Not Found" (formerly Objective 1)
-- --ce-handle: Handles "Command Error" (formerly Objective 2)
-- --auto-config: (Re)generates the configuration cache
+Implements:
+- Full argparse help text for PM commands via the 'epilog'.
+- A single-source-of-truth PM_COMMANDS dictionary.
+- Smarter 'handle_pm_command' logic.
 """
 
 import sys
@@ -18,26 +17,148 @@ import datetime
 import json
 import shutil
 import subprocess
+import argparse
+import threading
 
 # --- Configuration ---
 YUPS_DIR = os.path.expanduser("~/.yups")
-LOG_FILE = os.path.join(YUPS_DIR, "yups.log")
 CONFIG_FILE = os.path.join(YUPS_DIR, "config.json")
+LOG_DIR = os.path.join(YUPS_DIR, "logs")
 
-# List of package managers we monitor
+LOG_FILES = {
+    "cnf": os.path.join(LOG_DIR, "cnf.log"),
+    "ce": os.path.join(LOG_DIR, "ce.log"),
+    "query": os.path.join(LOG_DIR, "query.log"),
+    "action": os.path.join(LOG_DIR, "action.log")
+}
+
 KNOWN_PMS = ["apt", "apt-get", "dnf", "yum", "pacman", "zypper"]
 
-# --- 1. Config and Detection Logic ("Memory") ---
+# --- PM Abstraction Matrix (Single Source of Truth) ---
+# Now includes 'help' and 'takes_packages' for automated
+# help generation and logic.
+PM_COMMANDS = {
+    "install": {
+        "help": "Install one or more packages.",
+        "takes_packages": True,
+        "commands": {
+            "apt": "sudo apt install {packages}",
+            "dnf": "sudo dnf install {packages}",
+            "pacman": "sudo pacman -S {packages}",
+            "zypper": "sudo zypper install {packages}",
+        }
+    },
+    "remove": {
+        "help": "Remove one or more packages.",
+        "takes_packages": True,
+        "commands": {
+            "apt": "sudo apt remove {packages}",
+            "dnf": "sudo dnf remove {packages}",
+            "pacman": "sudo pacman -R {packages}",
+            "zypper": "sudo zypper remove {packages}",
+        }
+    },
+    "search": {
+        "help": "Search for available packages.",
+        "takes_packages": True,
+        "commands": {
+            "apt": "apt search {packages}",
+            "dnf": "dnf search {packages}",
+            "pacman": "pacman -Ss {packages}",
+            "zypper": "zypper search {packages}",
+        }
+    },
+    "autoremove": {
+        "help": "Remove unused packages (cleanup).",
+        "takes_packages": False,
+        "commands": {
+            "apt": "sudo apt autoremove",
+            "dnf": "sudo dnf autoremove",
+            "pacman": "sudo pacman -Rns $(pacman -Qdtq)",
+            "zypper": "sudo zypper remove --clean-deps",
+        }
+    },
+    "upgrade": {
+        "help": "Upgrade all installed packages.",
+        "takes_packages": False,
+        "commands": {
+            "apt": "sudo apt upgrade",
+            "dnf": "sudo dnf upgrade",
+            "pacman": "sudo pacman -Syu",
+            "zypper": "sudo zypper dup",
+        }
+    },
+    "update": {
+        "help": "Refresh package repository information.",
+        "takes_packages": False,
+        "commands": {
+            "apt": "sudo apt update",
+            "dnf": "sudo dnf check-update",
+            "pacman": "sudo pacman -Sy",
+            "zypper": "sudo zypper refresh",
+        }
+    },
+    "provides": {
+        "help": "Find which package provides a file or command.",
+        "takes_packages": True,
+        "commands": {
+            "apt": "echo 'Use: apt-file search {packages} (requires apt-file)'",
+            "dnf": "dnf provides {packages}",
+            "pacman": "echo 'Use: pacman -F {packages} (requires pkgfile)'",
+            "zypper": "zypper what-provides {packages}",
+        }
+    }
+}
+PM_ALIASES = {
+    "add": "install",
+    "+": "install",
+    "-": "remove",
+    "uninstall": "remove",
+    "delete": "remove",
+    "del": "remove",
+    "available": "search",
+    "find": "search",
+    "clean": "autoremove",
+    "upgrade-all": "upgrade",
+    "update-repos": "update",
+    "what-provides": "provides",
+}
+
+# --- 1. Asynchronous Logging ---
+
+def _log_to_file_sync(log_file, message):
+    """(Internal) Synchronous I/O function. Runs in a thread."""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        timestamp = datetime.datetime.now().isoformat()
+        log_entry = f"{timestamp} | {message}\n"
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
+    except Exception:
+        pass
+
+def log_async(log_type, message):
+    """Spawns a daemon thread to write the log message."""
+    log_file = LOG_FILES.get(log_type)
+    if not log_file:
+        return
+    log_thread = threading.Thread(
+        target=_log_to_file_sync,
+        args=(log_file, message),
+        daemon=True
+    )
+    log_thread.start()
+
+# --- 2. Config and Detection Logic ---
 
 def detect_os_details():
     """Detects OS, Distribution, and Version."""
-    os_name = platform.system() # "Linux", "Darwin", "Windows"
+    os_name = platform.system()
     distro_info = {
         "id": "unknown",
         "version_id": "unknown",
         "pretty_name": f"{os_name} (Unknown Distro)"
     }
-    
     if os_name == "Linux" and os.path.exists("/etc/os-release"):
         try:
             with open("/etc/os-release", 'r', encoding='utf-8') as f:
@@ -53,27 +174,27 @@ def detect_os_details():
                         elif key == "PRETTY_NAME":
                             distro_info["pretty_name"] = value
         except Exception:
-            # If parsing fails, we stick with 'unknown'
-            pass 
-    
+            pass
     return os_name, distro_info
 
 def detect_pm():
     """Detects the available package manager."""
     for pm_name in KNOWN_PMS:
         if shutil.which(pm_name):
+            if pm_name == "apt-get":
+                return "apt"
+            if pm_name == "yum":
+                if shutil.which("dnf"):
+                    return "dnf"
+                return "yum"
             return pm_name
     return "unknown"
 
 def run_auto_config():
-    """
-    (Re)generates and saves the configuration cache.
-    This is the '--auto-config' command.
-    """
+    """(Re)generates and saves the configuration cache."""
     os.makedirs(YUPS_DIR, exist_ok=True)
     os_name, distro_info = detect_os_details()
     pm_name = detect_pm()
-    
     config = {
         "os": os_name,
         "pm": pm_name,
@@ -81,7 +202,6 @@ def run_auto_config():
         "distro_version": distro_info.get("version_id"),
         "distro_pretty": distro_info.get("pretty_name"),
     }
-    
     try:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2)
@@ -89,52 +209,44 @@ def run_auto_config():
         return config
     except Exception as e:
         print(f"YUPS_ERROR: Could not write config file: {e}", file=sys.stderr)
-        return config # Return config even if saving failed
+        return config
 
 def get_config_cache():
-    """
-    Retrieves config from cache. If cache doesn't exist, creates it.
-    This is the automatic "memory".
-    """
+    """Retrieves config from cache or creates it."""
     if not os.path.exists(CONFIG_FILE):
         return run_auto_config()
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception:
-        # File is corrupt, regenerate it
         return run_auto_config()
 
-# --- 2. Handler Logic ---
-# TODO: check if a known pm is in args and search the command in the packages an offer to install
+# --- 3. Handler Logic ---
+
 def handle_cnf(args):
-    """
-    Handles the 'command_not_found_handle' logic.
-    args is a list: ['failed_command', 'arg1', 'arg2', ...]
-    """
+    """Handles the 'command_not_found_handle' logic."""
+    log_async("cnf", f"raw_args: {args}")
     if not args:
-        return 127 # Should not happen
+        return 127
     
     failed_cmd = args[0]
     failed_args = args[1:]
     config = get_config_cache()
     host_pm = config.get("pm")
 
-    # 1. Check if the command is a known PM
     if failed_cmd in KNOWN_PMS:
-        # 2. Check if it's *not* our system's PM
         if failed_cmd != host_pm and host_pm != "unknown":
-            # 3. Make recommendation
+            log_async("cnf", f"PM mismatch. Found: {failed_cmd}, Host: {host_pm}")
             print(f"YUPS: Command '{failed_cmd}' not found.", file=sys.stderr)
             print(f"YUPS: Maybe you meant '{host_pm}'?", file=sys.stderr)
             print(f"YUPS: Try 'yups {failed_cmd} {' '.join(failed_args)}'", file=sys.stderr)
-            return 126 # Appropriate error code
+            return 126
     
-    # If we're not interested, pass control to the default handler
     default_handlers = [
+        "/usr/libexec/packagekit-command-not-found",
+        "/usr/libexec/pk-command-not-found",
         "/usr/lib/command-not-found",
-        "/usr/share/command-not-found/command-not-found",
-        "/usr/libexec/pk-command-not-found"
+        "/usr/share/command-not-found/command-not-found"
     ]
     for handler in default_handlers:
         if os.path.exists(handler):
@@ -144,109 +256,189 @@ def handle_cnf(args):
             except Exception:
                 pass
                 
-    # Fallback if no default handler is found
     return 127
 
 def handle_ce(args):
-    """
-    Handles the 'command_error_handle' logic.
-    args is a list: ['exit_code', 'last_command_string']
-    """
+    """Handles the 'command_error_handle' logic."""
     if len(args) != 2:
-        return # Do nothing if args are wrong
+        return
     
     exit_code_str, last_command = args[0], args[1]
-
-    # --- Simplified MVP Logic ---
-    # "if the command string contains one of the PM commands"
+    log_async("ce", f"exit_code: {exit_code_str}, cmd: '{last_command}'")
     
-    found_pm_in_cmd = False
-    # Pad with spaces to avoid matching substrings (e.g., "myapt")
     command_with_padding = f" {last_command} "
-    
+    found_pm_in_cmd = False
     for pm in KNOWN_PMS:
         if f" {pm} " in command_with_padding:
             found_pm_in_cmd = True
             break
 
     if found_pm_in_cmd:
-        # The command failed and contained a PM!
         print(f"---", file=sys.stderr)
         print(f"YUPS: The command '{last_command.strip()}' failed (Code: {exit_code_str}).", file=sys.stderr)
-        
-        # Basic error interpretation
         if ' instal ' in last_command:
             print(f"YUPS: Did you mean 'install'?", file=sys.stderr)
         elif ' delete ' in last_command:
             print(f"YUPS: Did you mean 'remove' or 'autoremove'?", file=sys.stderr)
-
-        # Offer recommendation
         print(f"YUPS: Try 'yups {last_command.strip()}'", file=sys.stderr)
         print(f"---", file=sys.stderr)
-    
-    # This handler returns nothing; it just prints to stderr
 
-def handle_log_call(args):
-    """
-    Default 'yups' logic: log the query.
-    args is a list: ['how', 'do', 'i', 'install', 'nano']
-    """
-    query_string = " ".join(args)
-    if not query_string:
-        print("YUPS: Hello. Type 'yups <your question>' to log it.")
-        print("Usage: yups --auto-config (to refresh system cache)")
+def handle_pm_command(action, packages, config):
+    """Handles the PM Abstraction ("Straw Boss") logic."""
+    host_pm = config.get("pm")
+    if host_pm == "unknown":
+        print(f"YUPS_ERROR: Could not detect a known package manager.", file=sys.stderr)
+        return
+        
+    action = PM_ALIASES.get(action, action)
+
+    if action not in PM_COMMANDS:
+        print(f"YUPS_ERROR: Unknown action '{action}'.", file=sys.stderr)
         return
 
-    # Ensure log dir exists
-    os.makedirs(YUPS_DIR, exist_ok=True)
-    config = get_config_cache()
+    pm_config = PM_COMMANDS[action]
+    command_template = pm_config["commands"].get(host_pm)
     
-    log_entry = {
-        "timestamp": datetime.datetime.now().isoformat(),
-        "query": query_string,
-        "os": config.get("os"),
-        "pm_detected": config.get("pm"),
-        "distro_id": config.get("distro_id"),
-        "distro_version": config.get("distro_version")
-    }
+    if not command_template:
+        print(f"YUPS_ERROR: Action '{action}' is not supported for '{host_pm}'.", file=sys.stderr)
+        return
+        
+    package_string = " ".join(packages)
+
+    # New logic to validate arguments
+    if not pm_config["takes_packages"] and packages:
+        print(f"YUPS_WARN: Action '{action}' does not take package arguments. Ignoring '{package_string}'.")
+        package_string = ""
+            
+    if pm_config["takes_packages"] and not packages:
+         print(f"YUPS_ERROR: Action '{action}' requires one or more package names.", file=sys.stderr)
+         print(f"Example: yups {action} <package_name>")
+         return
+
+    final_command = command_template.format(packages=package_string)
     
-    try:
-        with open(LOG_FILE, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(log_entry) + "\n")
-    except Exception as e:
-        print(f"YUPS_ERROR: Could not write to log file: {e}", file=sys.stderr)
+    log_async("action", f"user: 'yups {action} {package_string}', host_pm: {host_pm}, exec: '{final_command}'")
+    
+    print(f"YUPS: Detected {host_pm}. Running:")
+    print(f"+ {final_command}\n")
+    
+    # Special case for complex pacman autoremove
+    if "pacman -Qdtq" in final_command:
+        print("YUPS_WARN: This Pacman command is complex. Executing with shell=True.")
+        subprocess.run(final_command, shell=True, check=False)
+    else:
+        subprocess.run(shutil.split(final_command), check=False)
 
-    print(f"\n--- YUPS (Log Mode) ---")
-    print(f"Detected: {config.get('distro_pretty')} (PM: {config.get('pm')})")
-    print(f"Logged: '{query_string}'")
-    print(f"Log file: {LOG_FILE}")
-    print("-------------------------")
 
+# --- 4. Main Argument Parsing & Routing ---
 
-# --- 3. Main Argument Routing ---
+def build_help_epilog():
+    """Dynamically builds the help text from the dictionaries."""
+    
+    # 1. Build Commands text
+    pm_help = "\nPackage Manager Commands:\n"
+    for action, config in PM_COMMANDS.items():
+        pm_help += f"  {action:<12} {config['help']}\n"
+        
+    # 2. Build Aliases text
+    alias_help = "\nCommand Aliases:\n"
+    # Invert the alias dictionary for easier display
+    inverted_aliases = {}
+    for alias, target in PM_ALIASES.items():
+        inverted_aliases.setdefault(target, []).append(alias)
+        
+    for target, aliases in inverted_aliases.items():
+        alias_help += f"  ({', '.join(aliases)}) -> {target}\n"
+        
+    final_epilog = (
+        f"{pm_help}"
+        f"{alias_help}\n"
+        "If no specific command is given, 'yups' logs your query."
+    )
+    return final_epilog
 
 def main():
-    # We use simple manual parsing for speed
-    # and to avoid conflicts with --cnf-handle args
+    """Main entry point with argparse."""
     
+    # --- Fast Path for Handlers (before argparse) ---
+    # This is crucial for shell performance. We don't want to
+    # launch the full argparse for every single prompt.
     if len(sys.argv) > 1:
         if sys.argv[1] == '--cnf-handle':
-            # cnf-handle needs the args passed straight through
             args = sys.argv[2:]
             exit_code = handle_cnf(args)
             sys.exit(exit_code)
             
-        elif sys.argv[1] == '--ce-handle':
+        if sys.argv[1] == '--ce-handle':
             args = sys.argv[2:]
             handle_ce(args)
-            sys.exit(0) # CE handler should never fail the shell
-            
-        elif sys.argv[1] == '--auto-config':
-            run_auto_config()
             sys.exit(0)
     
-    # If no subcommand matched, treat it as a log query
-    handle_log_call(sys.argv[1:])
+    # --- Full argparse parsing (for user-facing commands) ---
+    
+    # Build the dynamic help text
+    help_epilog = build_help_epilog()
+    
+    parser = argparse.ArgumentParser(
+        description="YUPS: A Shell Helper and Package Manager wrapper.",
+        epilog=help_epilog,
+        # This formatter is required to make the epilog respect newlines
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False # We'll add our own flexible --help
+    )
+    
+    # We use parse_known_args to "steal" our own args
+    # and leave the rest (the query) as 'remaining_args'.
+    
+    # --- YUPS-specific arguments ---
+    parser.add_argument(
+        '-h', '--help',
+        action='store_true',
+        help="show this help message and exit"
+    )
+    parser.add_argument(
+        '--auto-config',
+        action='store_true',
+        help="Regenerate the system configuration cache."
+    )
+    
+    # This is the core of our "PM command vs. Log Query" logic
+    args, remaining_args = parser.parse_known_args()
+    
+    # --- Route to Handlers ---
+    if args.help:
+        parser.print_help()
+        sys.exit(0)
+        
+    if args.auto_config:
+        run_auto_config()
+        sys.exit(0)
+        
+    # --- Route to PM or Log Query ---
+    config = get_config_cache()
+    
+    if not remaining_args:
+        # No args given, just show help
+        parser.print_help()
+        sys.exit(0)
+
+    action = remaining_args[0].lower()
+    packages = remaining_args[1:]
+    
+    # Check if it's a known PM command or alias
+    if action in PM_COMMANDS or action in PM_ALIASES:
+        handle_pm_command(action, packages, config)
+        
+    else:
+        # --- Fallback: Log Query ---
+        query_string = " ".join(remaining_args)
+        log_async("query", query_string)
+        
+        print(f"\n--- YUPS (Query Log Mode) ---")
+        print(f"Detected: {config.get('distro_pretty')} (PM: {config.get('pm')})")
+        print(f"Logged: '{query_string}'")
+        print(f"Logs in: {LOG_DIR}")
+        print("-------------------------------")
 
 if __name__ == "__main__":
     main()
