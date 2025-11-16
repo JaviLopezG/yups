@@ -15,7 +15,7 @@ if [ "$EUID" -eq 0 ]; then
   if [[ "$choice" == "n" || "$choice" == "N" ]]; then
       exit 1
   fi
-  $SUDO=""
+  SUDO=""
 fi
 
 echo "Uninstalling YUPS..."
