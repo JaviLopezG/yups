@@ -6,7 +6,7 @@
 INSTALL_PATH="/usr/local/bin/yups"
 BASHRC_FILE=~/.bashrc
 CONFIG_DIR=~/.yups
-
+SUDO=sudo
 # --- 1. Root Check ---
 if [ "$EUID" -eq 0 ]; then
   echo "WARNING: Do not run this script as root."
@@ -15,6 +15,7 @@ if [ "$EUID" -eq 0 ]; then
   if [[ "$choice" == "n" || "$choice" == "N" ]]; then
       exit 1
   fi
+  $SUDO=""
 fi
 
 echo "Uninstalling YUPS..."
@@ -22,7 +23,7 @@ echo "Uninstalling YUPS..."
 # --- 2. Remove Executable ---
 echo "Removing executable ($INSTALL_PATH)..."
 if [ -f "$INSTALL_PATH" ]; then
-    if ! sudo rm -f "$INSTALL_PATH"; then
+    if ! $SUDO rm -f "$INSTALL_PATH"; then
         echo "ERROR: Could not remove executable. Did 'sudo' fail?"
         # Don't stop, still try to clean up bashrc
     else

@@ -6,7 +6,7 @@
 YUPS_EXECUTABLE="yups"
 INSTALL_PATH="/usr/local/bin/yups"
 BASHRC_FILE=~/.bashrc
-
+SUDO=sudo
 # --- Bash Hooks Text Block (minimal) ---
 # We use 'heredoc' to define the text block
 read -r -d '' BASH_HOOKS <<'EOF'
@@ -57,6 +57,7 @@ if [ "$EUID" -eq 0 ]; then
   if [[ "$choice" == "n" || "$choice" == "N" ]]; then
       exit 1
   fi
+  $SUDO=""
 fi
 
 # --- 2. Check for Executable ---
@@ -70,13 +71,13 @@ echo "Installing YUPS..."
 
 # --- 3. Copy Executable ---
 echo "Copying '$YUPS_EXECUTABLE' to '$INSTALL_PATH'..."
-if ! sudo cp "$YUPS_EXECUTABLE" "$INSTALL_PATH"; then
+if ! $SUDO cp "$YUPS_EXECUTABLE" "$INSTALL_PATH"; then
     echo "ERROR: Could not copy file. Did 'sudo' fail?"
     exit 1
 fi
 
 echo "Setting execute permissions..."
-if ! sudo chmod +x "$INSTALL_PATH"; then
+if ! $SUDO chmod +x "$INSTALL_PATH"; then
     echo "ERROR: Could not set execute permissions."
     exit 1
 fi
