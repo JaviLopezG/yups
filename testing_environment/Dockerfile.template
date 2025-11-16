@@ -1,0 +1,32 @@
+# This is a generic template Dockerfile.
+# It expects two build arguments:
+# 1. BASE_IMAGE: The official image to use (e.g., "ubuntu:latest")
+# 2. PM_SETUP_COMMAND: The shell command to install 'git'
+
+# 1. Define the build arguments
+ARG BASE_IMAGE 
+
+# 2. Start from the specified base image
+FROM ${BASE_IMAGE}
+
+# 3. Run the unique setup command to install git
+#    This command is passed in from the docker-compose.yml
+ARG PM_SETUP_COMMAND
+RUN /bin/sh -c "${PM_SETUP_COMMAND}"
+
+# 4. Set the working directory
+WORKDIR /
+
+# 5. Clone the YUPS repository
+RUN git clone https://github.com/JaviLopezG/yups.git /yups
+
+# 6. Set the final working directory
+WORKDIR /yups
+
+# 7. Set permissions
+RUN chmod +x *.sh yups
+
+# 8. The "stay waiting" command.
+#    This starts a shell, and combined with 'tty: true'
+#    in the docker-compose, keeps the container running.
+CMD ["bash"]

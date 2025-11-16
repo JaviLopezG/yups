@@ -1,0 +1,64 @@
+# Docker Compose file to build and run 4 test environments
+# for the 4 main package manager families.
+#
+# To build: docker compose build
+# To run:   docker compose up -d
+# To exec:  docker exec -it yups_apt bash
+#
+
+services:
+  # 1. 'apt' family (Ubuntu)
+  apt:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        # We pass the base image and setup command as arguments
+        BASE_IMAGE: "ubuntu:latest"
+        PM_SETUP_COMMAND: "apt-get update && apt-get install -y git"
+    container_name: yups_apt
+    working_dir: /yups
+    # These two lines keep the container running ("quedarse esperando")
+    tty: true
+    stdin_open: true
+
+  # 2. 'dnf' family (RockyLinux, successor to CentOS)
+  dnf:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        BASE_IMAGE: "rockylinux/rockylinux:latest"
+        # dnf doesn't require a separate update command
+        PM_SETUP_COMMAND: "dnf install -y git"
+    container_name: yups_dnf
+    working_dir: /yups
+    tty: true
+    stdin_open: true
+
+  # 3. 'pacman' family (Arch Linux)
+  pacman:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        BASE_IMAGE: "archlinux:latest"
+        # -Syu updates and installs. --noconfirm is for non-interactive
+        PM_SETUP_COMMAND: "pacman -Syu --noconfirm git"
+    container_name: yups_pacman
+    working_dir: /yups
+    tty: true
+    stdin_open: true
+
+  # 4. 'zypper' family (openSUSE)
+  zypper:
+    build:
+      context: .
+      dockerfile: Dockerfile.template
+      args:
+        BASE_IMAGE: "opensuse/leap:latest"
+        PM_SETUP_COMMAND: "zypper install -y git"
+    container_name: yups_zypper
+    working_dir: /yups
+    tty: true
+    stdin_open: true
