@@ -17,8 +17,8 @@ RUN /bin/sh -c "${PM_SETUP_COMMAND}"
 # 4. Set the working directory
 WORKDIR /
 
-# 5. Clone the YUPS repository
-RUN git clone https://github.com/JaviLopezG/yups.git /yups
+# 5. Clone the YUPS repository, increment the version if you want fresh code
+RUN git clone https://github.com/JaviLopezG/yups.git /yups && echo "v2"
 
 # 6. Set the final working directory
 WORKDIR /yups
