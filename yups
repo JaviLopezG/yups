@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+YUPS - Core Executable
+
+This script implements the core logic via subcommands:
+- (default): Logs a user query (formerly Objective 3)
+- --cnf-handle: Handles "Command Not Found" (formerly Objective 1)
+- --ce-handle: Handles "Command Error" (formerly Objective 2)
+- --auto-config: (Re)generates the configuration cache
+"""
+
+import sys
+import os
+import platform
+import datetime
+import json
+import shutil
+import subprocess
+
+# --- Configuration ---
+YUPS_DIR = os.path.expanduser("~/.yups")
+LOG_FILE = os.path.join(YUPS_DIR, "yups.log")
+CONFIG_FILE = os.path.join(YUPS_DIR, "config.json")
+
+# List of package managers we monitor
+KNOWN_PMS = ["apt", "apt-get", "dnf", "yum", "pacman", "zypper"]
+
+# --- 1. Config and Detection Logic ("Memory") ---
+
+def detect_os_details():
+    """Detects OS, Distribution, and Version."""
+    os_name = platform.system() # "Linux", "Darwin", "Windows"
+    distro_info = {
+        "id": "unknown",
+        "version_id": "unknown",
+        "pretty_name": f"{os_name} (Unknown Distro)"
+    }
+    
+    if os_name == "Linux" and os.path.exists("/etc/os-release"):
+        try:
+            with open("/etc/os-release", 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        value = value.strip('"')
+                        if key == "ID":
+                            distro_info["id"] = value
+                        elif key == "VERSION_ID":
+                            distro_info["version_id"] = value
+                        elif key == "PRETTY_NAME":
+                            distro_info["pretty_name"] = value
+        except Exception:
+            # If parsing fails, we stick with 'unknown'
+            pass 
+    
+    return os_name, distro_info
+
+def detect_pm():
+    """Detects the available package manager."""
+    for pm_name in KNOWN_PMS:
+        if shutil.which(pm_name):
+            return pm_name
+    return "unknown"
+
+def run_auto_config():
+    """
+    (Re)generates and saves the configuration cache.
+    This is the '--auto-config' command.
+    """
+    os.makedirs(YUPS_DIR, exist_ok=True)
+    os_name, distro_info = detect_os_details()
+    pm_name = detect_pm()
+    
+    config = {
+        "os": os_name,
+        "pm": pm_name,
+        "distro_id": distro_info.get("id"),
+        "distro_version": distro_info.get("version_id"),
+        "distro_pretty": distro_info.get("pretty_name"),
+    }
+    
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+        print(f"YUPS: Configuration saved to {CONFIG_FILE}")
+        return config
+    except Exception as e:
+        print(f"YUPS_ERROR: Could not write config file: {e}", file=sys.stderr)
+        return config # Return config even if saving failed
+
+def get_config_cache():
+    """
+    Retrieves config from cache. If cache doesn't exist, creates it.
+    This is the automatic "memory".
+    """
+    if not os.path.exists(CONFIG_FILE):
+        return run_auto_config()
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        # File is corrupt, regenerate it
+        return run_auto_config()
+
+# --- 2. Handler Logic ---
+# TODO: check if a known pm is in args and search the command in the packages an offer to install
+def handle_cnf(args):
+    """
+    Handles the 'command_not_found_handle' logic.
+    args is a list: ['failed_command', 'arg1', 'arg2', ...]
+    """
+    if not args:
+        return 127 # Should not happen
+    
+    failed_cmd = args[0]
+    failed_args = args[1:]
+    config = get_config_cache()
+    host_pm = config.get("pm")
+
+    # 1. Check if the command is a known PM
+    if failed_cmd in KNOWN_PMS:
+        # 2. Check if it's *not* our system's PM
+        if failed_cmd != host_pm and host_pm != "unknown":
+            # 3. Make recommendation
+            print(f"YUPS: Command '{failed_cmd}' not found.", file=sys.stderr)
+            print(f"YUPS: Maybe you meant '{host_pm}'?", file=sys.stderr)
+            print(f"YUPS: Try 'yups {failed_cmd} {' '.join(failed_args)}'", file=sys.stderr)
+            return 126 # Appropriate error code
+    
+    # If we're not interested, pass control to the default handler
+    default_handlers = [
+        "/usr/lib/command-not-found",
+        "/usr/share/command-not-found/command-not-found",
+        "/usr/libexec/pk-command-not-found"
+    ]
+    for handler in default_handlers:
+        if os.path.exists(handler):
+            try:
+                result = subprocess.run([handler] + args, check=False)
+                return result.returncode
+            except Exception:
+                pass
+                
+    # Fallback if no default handler is found
+    return 127
+
+def handle_ce(args):
+    """
+    Handles the 'command_error_handle' logic.
+    args is a list: ['exit_code', 'last_command_string']
+    """
+    if len(args) != 2:
+        return # Do nothing if args are wrong
+    
+    exit_code_str, last_command = args[0], args[1]
+
+    # --- Simplified MVP Logic ---
+    # "if the command string contains one of the PM commands"
+    
+    found_pm_in_cmd = False
+    # Pad with spaces to avoid matching substrings (e.g., "myapt")
+    command_with_padding = f" {last_command} "
+    
+    for pm in KNOWN_PMS:
+        if f" {pm} " in command_with_padding:
+            found_pm_in_cmd = True
+            break
+
+    if found_pm_in_cmd:
+        # The command failed and contained a PM!
+        print(f"---", file=sys.stderr)
+        print(f"YUPS: The command '{last_command.strip()}' failed (Code: {exit_code_str}).", file=sys.stderr)
+        
+        # Basic error interpretation
+        if ' instal ' in last_command:
+            print(f"YUPS: Did you mean 'install'?", file=sys.stderr)
+        elif ' delete ' in last_command:
+            print(f"YUPS: Did you mean 'remove' or 'autoremove'?", file=sys.stderr)
+
+        # Offer recommendation
+        print(f"YUPS: Try 'yups {last_command.strip()}'", file=sys.stderr)
+        print(f"---", file=sys.stderr)
+    
+    # This handler returns nothing; it just prints to stderr
+
+def handle_log_call(args):
+    """
+    Default 'yups' logic: log the query.
+    args is a list: ['how', 'do', 'i', 'install', 'nano']
+    """
+    query_string = " ".join(args)
+    if not query_string:
+        print("YUPS: Hello. Type 'yups <your question>' to log it.")
+        print("Usage: yups --auto-config (to refresh system cache)")
+        return
+
+    # Ensure log dir exists
+    os.makedirs(YUPS_DIR, exist_ok=True)
+    config = get_config_cache()
+    
+    log_entry = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "query": query_string,
+        "os": config.get("os"),
+        "pm_detected": config.get("pm"),
+        "distro_id": config.get("distro_id"),
+        "distro_version": config.get("distro_version")
+    }
+    
+    try:
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_entry) + "\n")
+    except Exception as e:
+        print(f"YUPS_ERROR: Could not write to log file: {e}", file=sys.stderr)
+
+    print(f"\n--- YUPS (Log Mode) ---")
+    print(f"Detected: {config.get('distro_pretty')} (PM: {config.get('pm')})")
+    print(f"Logged: '{query_string}'")
+    print(f"Log file: {LOG_FILE}")
+    print("-------------------------")
+
+
+# --- 3. Main Argument Routing ---
+
+def main():
+    # We use simple manual parsing for speed
+    # and to avoid conflicts with --cnf-handle args
+    
+    if len(sys.argv) > 1:
+        if sys.argv[1] == '--cnf-handle':
+            # cnf-handle needs the args passed straight through
+            args = sys.argv[2:]
+            exit_code = handle_cnf(args)
+            sys.exit(exit_code)
+            
+        elif sys.argv[1] == '--ce-handle':
+            args = sys.argv[2:]
+            handle_ce(args)
+            sys.exit(0) # CE handler should never fail the shell
+            
+        elif sys.argv[1] == '--auto-config':
+            run_auto_config()
+            sys.exit(0)
+    
+    # If no subcommand matched, treat it as a log query
+    handle_log_call(sys.argv[1:])
+
+if __name__ == "__main__":
+    main()
