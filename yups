@@ -318,6 +318,9 @@ def handle_pm_command(action, packages, config):
 
     final_command = command_template.format(packages=package_string)
     
+    if os.geteuid() == 0 and final_command.startswith("sudo "):
+        final_command = final_command.replace("sudo ", "", 1)
+
     log_async("action", f"user: 'yups {action} {package_string}', host_pm: {host_pm}, exec: '{final_command}'")
     
     print(f"YUPS: Detected {host_pm}. Running:")
