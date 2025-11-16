@@ -22,7 +22,6 @@ command_not_found_handle() {
         return $?
     else
         # Fallback if the yups script fails
-        echo "bash: $1: command not found" >&2
         return 127
     fi
 }

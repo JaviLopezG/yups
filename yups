@@ -16,6 +16,7 @@ import platform
 import datetime
 import json
 import shutil
+import shlex
 import subprocess
 import argparse
 import threading
@@ -327,7 +328,7 @@ def handle_pm_command(action, packages, config):
         print("YUPS_WARN: This Pacman command is complex. Executing with shell=True.")
         subprocess.run(final_command, shell=True, check=False)
     else:
-        subprocess.run(shutil.split(final_command), check=False)
+        subprocess.run(shlex.split(final_command), check=False)
 
 
 # --- 4. Main Argument Parsing & Routing ---
