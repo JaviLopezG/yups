@@ -360,7 +360,6 @@ def build_help_epilog():
 
 def main():
     """Main entry point with argparse."""
-    
     # --- Fast Path for Handlers (before argparse) ---
     # This is crucial for shell performance. We don't want to
     # launch the full argparse for every single prompt.
