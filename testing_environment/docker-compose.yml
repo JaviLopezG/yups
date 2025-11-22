@@ -21,6 +21,8 @@ services:
     # These two lines keep the container running ("quedarse esperando")
     tty: true
     stdin_open: true
+    volumes:
+      - ../:/yups
 
   # 2. 'dnf' family (RockyLinux, successor to CentOS)
   dnf:
@@ -35,6 +37,8 @@ services:
     working_dir: /yups
     tty: true
     stdin_open: true
+    volumes:
+      - ../:/yups
 
   # 3. 'pacman' family (Arch Linux)
   pacman:
@@ -49,6 +53,8 @@ services:
     working_dir: /yups
     tty: true
     stdin_open: true
+    volumes:
+      - ../:/yups
 
   # 4. 'zypper' family (openSUSE)
   zypper:
@@ -62,3 +68,5 @@ services:
     working_dir: /yups
     tty: true
     stdin_open: true
+    volumes:
+      - ../:/yups

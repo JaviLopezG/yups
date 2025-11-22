@@ -17,19 +17,13 @@ RUN /bin/sh -c "${PM_SETUP_COMMAND}"
 # 4. Set the working directory
 WORKDIR /
 
-# 5. Clone the YUPS repository, increment the version if you want fresh code
-RUN git clone https://github.com/JaviLopezG/yups.git /yups 
+# 5. Create yups directory that its mounted from the host ..
+RUN mkdir -p /yups
 
 # 6. Set the final working directory
 WORKDIR /yups
 
-# 7. Set permissions
-RUN chmod +x *.sh yups
-
-# 8. Update the code
-RUN echo -e '\n# --- YUPS Auto-Pull ---\n(cd /yups && git pull)\n' >> /root/.bashrc
-
-# 9. The "stay waiting" command.
+# 7. The "stay waiting" command.
 #    This starts a shell, and combined with 'tty: true'
 #    in the docker-compose, keeps the container running.
 CMD ["bash"]
