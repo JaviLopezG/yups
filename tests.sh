@@ -1,5 +1,16 @@
 #!/bin/bash
 
+_test_command_not_found_handle() {
+    local command=$1
+    # Call the Python brain
+    if "/usr/local/bin/yups" --cnf-handle $command; then
+        return $?
+    else
+        # Fallback if the yups script fails
+        return 127
+    fi
+}
+
 _test_ce_handle() {
     local exit_code=$?
     local command=$1
@@ -32,12 +43,18 @@ read
 yups provides nano
 echo "Let's test command not found handler. Press intro key"
 read
-nano
+if command -v apt >/dev/null 2>&1; then
+    nano
+    _test_command_not_found_handle "nano"
+else
+    nano
+fi
 echo "Let's test specific distro commands."
 if command -v apt >/dev/null 2>&1; then
     echo "Let's test command not found handler another native pm. Press intro key"
     read
     dnf install nano
+    _test_command_not_found_handle "dnf install nano"
     echo "Let's test command error. Press intro key"
     read
 	apt instal nano;_test_ce_handle "apt instal nano"
