@@ -20,6 +20,8 @@ import shlex
 import subprocess
 import argparse
 import threading
+from ollama import chat
+from ollama import ChatResponse
 
 # --- Configuration ---
 YUPS_DIR = os.path.expanduser("~/.yups")
@@ -443,6 +445,25 @@ def main():
         query_string = " ".join(remaining_args)
         log_async("query", query_string)
         
+        config['query'] = query_string
+        config_json = json.dumps(config)  
+        print(config_json)
+        response: ChatResponse = chat(model='gemma3:12b-it-qat',
+            format="json", 
+            stream=False,
+            options={"temperature": 0.1}, 
+            messages=[
+                {
+                    'role': 'system',
+                    'content': "You are an expert in linux package management. You must understand the user's intentionality and translate it to a package management command with correct arguments and flags. You never can make up a fake package name, if you don't know a correct answer you should return an error message. You can't use another package manager than the one available. You will receive the distro and the package manager available with the user's query and must answer with a json that contains the command field. The user might be used to another distro or package manager or he might be doing copy paste from a random internet tutorial, but you must translate it to the user's package manager sintaxis with correct package names if needed. For instance: In Fedora 'edit on nano' -> 'dnf install nano'; In Ubuntu 'zypper install nano' -> 'apt-get install nano'; ... You may add a field with a short sentence (10 words max.) 'explanation' about for what is the package/s chosen.",
+                },{
+                    'role': 'user',
+                    'content': config_json,
+                },
+            ])
+
+        print(response.message.content)
+
         print(f"\n--- YUPS (Query Log Mode) ---")
         print(f"Detected: {config.get('distro_pretty')} (PM: {config.get('pm')})")
         print(f"Logged: '{query_string}'")
