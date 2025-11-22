@@ -121,8 +121,14 @@ PM_ALIASES = {
     "find": "search",
     "clean": "autoremove",
     "upgrade-all": "upgrade",
+    "upgradeall": "upgrade",
+    "updaterepos": "update",
     "update-repos": "update",
     "what-provides": "provides",
+    "where": "provides",
+    "where-is": "provides",
+    "whereis": "provides",
+    "which": "provides",
 }
 
 # --- 1. Asynchronous Logging ---
