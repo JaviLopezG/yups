@@ -33,17 +33,36 @@ yups provides nano
 echo "Let's test command not found handler. Press intro key"
 read
 nano
-echo "Let's test command error handler. Press intro key"
-read
+echo "Let's test specific distro commands."
 if command -v apt >/dev/null 2>&1; then
+    echo "Let's test command not found handler another native pm. Press intro key"
+    read
+    dnf install nano
+    echo "Let's test command error. Press intro key"
+    read
 	apt instal nano;_test_ce_handle "apt instal nano"
 fi
 if command -v dnf >/dev/null 2>&1; then
+    echo "Let's test command not found handler another native pm. Press intro key"
+    read
+    apt install nano
+    echo "Let's test command error. Press intro key"
+    read
 	dnf instal nano;_test_ce_handle "dnf instal nano"
 fi
 if command -v pacman >/dev/null 2>&1; then
-	pacman instal nano;_test_ce_handle "pacman instal nano"
+	echo "Let's test command not found handler another native pm. Press intro key"
+    read
+    dnf install nano
+    echo "Let's test command error. Press intro key"
+    read
+    pacman instal nano;_test_ce_handle "pacman instal nano"
 fi
 if command -v zypper >/dev/null 2>&1; then
-	zypper instal nano;_test_ce_handle "zypper instal nano"
+	echo "Let's test command not found handler another native pm. Press intro key"
+    read
+    dnf install nano
+    echo "Let's test command error. Press intro key"
+    read
+    zypper instal nano;_test_ce_handle "zypper instal nano"
 fi
