@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 
 """
-YUPS - Core Executable (v5)
+YUPS - Core Executable (v7)
 
-Implements:
-- Full argparse help text for PM commands via the 'epilog'.
-- A single-source-of-truth PM_COMMANDS dictionary.
-- Smarter 'handle_pm_command' logic.
+Changes:
+- Refactored LLM interaction into 'fetch_llm_suggestion' function.
+- Context now includes 'is_root' status for the LLM.
+- Added safety guard to strip 'sudo' if running as root, even if LLM suggests it.
+- Main loop is cleaner and decoupled from API specifics.
 """
 
 import sys
@@ -36,9 +37,7 @@ LOG_FILES = {
 
 KNOWN_PMS = ["apt", "apt-get", "dnf", "yum", "pacman", "zypper"]
 
-# --- PM Abstraction Matrix (Single Source of Truth) ---
-# Now includes 'help' and 'takes_packages' for automated
-# help generation and logic.
+# --- PM Abstraction Matrix ---
 PM_COMMANDS = {
     "install": {
         "help": "Install one or more packages.",
@@ -135,7 +134,6 @@ PM_ALIASES = {
 # --- 1. Asynchronous Logging ---
 
 def _log_to_file_sync(log_file, message):
-    """(Internal) Synchronous I/O function. Runs in a thread."""
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
         timestamp = datetime.datetime.now().isoformat()
@@ -146,7 +144,6 @@ def _log_to_file_sync(log_file, message):
         pass
 
 def log_async(log_type, message):
-    """Spawns a daemon thread to write the log message."""
     log_file = LOG_FILES.get(log_type)
     if not log_file:
         return
@@ -160,7 +157,6 @@ def log_async(log_type, message):
 # --- 2. Config and Detection Logic ---
 
 def detect_os_details():
-    """Detects OS, Distribution, and Version."""
     os_name = platform.system()
     distro_info = {
         "id": "unknown",
@@ -186,7 +182,6 @@ def detect_os_details():
     return os_name, distro_info
 
 def detect_pm():
-    """Detects the available package manager."""
     for pm_name in KNOWN_PMS:
         if shutil.which(pm_name):
             if pm_name == "apt-get":
@@ -199,7 +194,6 @@ def detect_pm():
     return "unknown"
 
 def run_auto_config():
-    """(Re)generates and saves the configuration cache."""
     os.makedirs(YUPS_DIR, exist_ok=True)
     os_name, distro_info = detect_os_details()
     pm_name = detect_pm()
@@ -220,7 +214,6 @@ def run_auto_config():
         return config
 
 def get_config_cache():
-    """Retrieves config from cache or creates it."""
     if not os.path.exists(CONFIG_FILE):
         return run_auto_config()
     try:
@@ -232,7 +225,6 @@ def get_config_cache():
 # --- 3. Handler Logic ---
 
 def handle_cnf(args):
-    """Handles the 'command_not_found_handle' logic."""
     log_async("cnf", f"raw_args: {args}")
     if not args:
         return 127
@@ -267,7 +259,6 @@ def handle_cnf(args):
     return 127
 
 def handle_ce(args):
-    """Handles the 'command_error_handle' logic."""
     if len(args) != 2:
         return
     
@@ -292,7 +283,6 @@ def handle_ce(args):
         print(f"---", file=sys.stderr)
 
 def handle_pm_command(action, packages, config):
-    """Handles the PM Abstraction ("Straw Boss") logic."""
     host_pm = config.get("pm")
     if host_pm == "unknown":
         print(f"YUPS_ERROR: Could not detect a known package manager.", file=sys.stderr)
@@ -313,7 +303,6 @@ def handle_pm_command(action, packages, config):
         
     package_string = " ".join(packages)
 
-    # New logic to validate arguments
     if not pm_config["takes_packages"] and packages:
         print(f"YUPS_WARN: Action '{action}' does not take package arguments. Ignoring '{package_string}'.")
         package_string = ""
@@ -325,6 +314,7 @@ def handle_pm_command(action, packages, config):
 
     final_command = command_template.format(packages=package_string)
     
+    # Simple sudo removal if running as root
     if os.geteuid() == 0 and final_command.startswith("sudo "):
         final_command = final_command.replace("sudo ", "", 1)
 
@@ -333,27 +323,88 @@ def handle_pm_command(action, packages, config):
     print(f"YUPS: Detected {host_pm}. Running:")
     print(f"+ {final_command}\n")
     
-    # Special case for complex pacman autoremove
-    if "pacman -Qdtq" in final_command:
-        print("YUPS_WARN: This Pacman command is complex. Executing with shell=True.")
-        subprocess.run(final_command, shell=True, check=False)
+    subprocess.run(final_command, shell=True, check=False)
+
+# --- 4. API & Intelligence Layer ---
+
+def parse_llm_response(message):
+    """Parses JSON content from the LLM response."""
+    content = ""
+    if hasattr(message, 'content'):
+        content = message.content
+    elif isinstance(message, str):
+        content = message
     else:
-        subprocess.run(shlex.split(final_command), check=False)
+        try:
+            content = str(message)
+        except Exception:
+            return {"error": "Could not parse message content."}
 
+    # Extract JSON code blocks
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0].strip()
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0].strip()
+    
+    try:
+        data = json.loads(content)
+        return data
+    except json.JSONDecodeError:
+        return {"error": "LLM response was not valid JSON.", "raw": content}
 
-# --- 4. Main Argument Parsing & Routing ---
+def fetch_llm_suggestion(query_string, config):
+    """
+    Encapsulates all interaction with the AI backend.
+    In the future, this function can be replaced to point to a custom API
+    instead of calling Hugging Face directly.
+    """
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        return {"error": "Missing HF_TOKEN environment variable."}
+
+    # Prepare context
+    config_json = json.dumps(config)
+    
+    # Client Initialization
+    client = InferenceClient(api_key=token)
+
+    try:
+        completion = client.chat.completions.create(
+            model="google/gemma-3-27b-it:nebius",
+            stream=False,
+            temperature=0.1, 
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            'type': 'text',
+                            'text': "You are an expert in linux package management. You must understand the user's intentionality and translate it to a package management command. "
+                                    "You CAN return complex chained commands (e.g., 'zypper refresh && zypper update'). "
+                                    "The context provides 'is_root' (boolean). "
+                                    "If is_root is FALSE, ensure 'sudo' is applied to EACH subcommand that needs it (e.g., 'sudo apt update && sudo apt upgrade'). "
+                                    "If is_root is TRUE, do NOT include 'sudo' in the commands. "
+                                    "Return ONLY a JSON with fields: 'command' (string), 'explanation' (string), 'error' (string or null). "
+                                    "Explain your election of packages with max. 10 words."
+                                    "Context: " + config_json
+                        }
+                    ]
+                }
+            ],
+        )
+        return parse_llm_response(completion.choices[0].message)
+
+    except Exception as e:
+        return {"error": f"Failed to query LLM: {str(e)}"}
+
+# --- 5. Main Argument Parsing & Routing ---
 
 def build_help_epilog():
-    """Dynamically builds the help text from the dictionaries."""
-    
-    # 1. Build Commands text
     pm_help = "\nPackage Manager Commands:\n"
     for action, config in PM_COMMANDS.items():
         pm_help += f"  {action:<12} {config['help']}\n"
         
-    # 2. Build Aliases text
     alias_help = "\nCommand Aliases:\n"
-    # Invert the alias dictionary for easier display
     inverted_aliases = {}
     for alias, target in PM_ALIASES.items():
         inverted_aliases.setdefault(target, []).append(alias)
@@ -369,10 +420,6 @@ def build_help_epilog():
     return final_epilog
 
 def main():
-    """Main entry point with argparse."""
-    # --- Fast Path for Handlers (before argparse) ---
-    # This is crucial for shell performance. We don't want to
-    # launch the full argparse for every single prompt.
     if len(sys.argv) > 1:
         if sys.argv[1] == '--cnf-handle':
             args = sys.argv[2:]
@@ -384,38 +431,20 @@ def main():
             handle_ce(args)
             sys.exit(0)
     
-    # --- Full argparse parsing (for user-facing commands) ---
-    
-    # Build the dynamic help text
     help_epilog = build_help_epilog()
     
     parser = argparse.ArgumentParser(
         description="YUPS: A Shell Helper and Package Manager wrapper.",
         epilog=help_epilog,
-        # This formatter is required to make the epilog respect newlines
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        add_help=False # We'll add our own flexible --help
+        add_help=False
     )
     
-    # We use parse_known_args to "steal" our own args
-    # and leave the rest (the query) as 'remaining_args'.
+    parser.add_argument('-h', '--help', action='store_true', help="show this help message and exit")
+    parser.add_argument('--auto-config', action='store_true', help="Regenerate the system configuration cache.")
     
-    # --- YUPS-specific arguments ---
-    parser.add_argument(
-        '-h', '--help',
-        action='store_true',
-        help="show this help message and exit"
-    )
-    parser.add_argument(
-        '--auto-config',
-        action='store_true',
-        help="Regenerate the system configuration cache."
-    )
-    
-    # This is the core of our "PM command vs. Log Query" logic
     args, remaining_args = parser.parse_known_args()
     
-    # --- Route to Handlers ---
     if args.help:
         parser.print_help()
         sys.exit(0)
@@ -424,18 +453,15 @@ def main():
         run_auto_config()
         sys.exit(0)
         
-    # --- Route to PM or Log Query ---
     config = get_config_cache()
     
     if not remaining_args:
-        # No args given, just show help
         parser.print_help()
         sys.exit(0)
 
     action = remaining_args[0].lower()
     packages = remaining_args[1:]
     
-    # Check if it's a known PM command or alias
     if action in PM_COMMANDS or action in PM_ALIASES:
         handle_pm_command(action, packages, config)
         
@@ -443,97 +469,47 @@ def main():
         # --- Fallback: Smart action ---
         query_string = " ".join(remaining_args)
         
+        # 1. Update Context with Query and Root status
         config['query'] = query_string
-        config_json = json.dumps(config)  
+        config['is_root'] = (os.geteuid() == 0)
 
-        client = InferenceClient(
-            api_key=os.environ["HF_TOKEN"],
-        )
-
-        completion = client.chat.completions.create(
-            model="google/gemma-3-27b-it:nebius",
-            stream=False,
-            temperature=0.1, 
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            'type': 'text',
-                            'text': "You are an expert in linux package management. You must understand the user's intentionality and translate it to a package management command with correct arguments and flags. You never can make up a fake package name, if you don't know a correct answer you should return an 'error' message in the json. You can't use another package manager than the one available. You will receive the distro and the package manager available with the user's query and must answer with a json that contains the command field. The user might be used to another distro or package manager or he might be doing copy paste from a random internet tutorial, but you must translate it to the user's package manager sintaxis with correct package names if needed. For instance: In Fedora 'edit on nano' -> 'dnf install nano'; In Ubuntu 'zypper install nano' -> 'apt-get install nano'; ... You may add a field with a short sentence (10 words max.) 'explanation' about for what is the package/s chosen.",
-                        },
-                        {
-                            'type': 'text',
-                            'text': config_json 
-                        }
-                    ]
-                }
-            ],
-        )
-
-        parsed = parse_llm_response(completion.choices[0].message)
+        # 2. Call the encapsulated Intelligence Layer
+        parsed = fetch_llm_suggestion(query_string, config)
         
-        if parsed.get("error") :
+        # 3. Handle Errors/Feedback
+        if parsed.get("error"):
             print(f"YUPS_ERROR: {parsed['error']}", file=sys.stderr)
         
         if parsed.get("explanation"):
             print(f"YUPS: {parsed['explanation']}")
             
         cmd = parsed.get("command")
-        if cmd:
-            if cmd != "error":
-                print(f"Suggested command: {cmd}")
-                # Use /dev/tty for input if stdin is not a tty (e.g. piped)
-                # But standard input() should work for interactive usage.
-                try:
-                    confirm = input("Execute this command? [y/N] ").strip().lower()
-                    if confirm == 'y':
-                        if "sudo" in cmd or os.geteuid() == 0 :
-                            subprocess.run(shlex.split(cmd), check=False)
-                        else:
-                            subprocess.run(shlex.split("sudo " + cmd), check=False)
-                    else:
-                        print("Aborted.")
-                except EOFError:
-                    pass
-            else:
-                print(f"YUPS_ERROR: aborting...", file=sys.stderr)
+        if cmd and cmd != "error":
+            
+            # --- Safety Guard: Redundant Sudo Strip ---
+            # Even if LLM is smart, we explicitly strip sudo if we are root.
+            # Only strips if it's the very first word (handling "sudo apt ...").
+            # For complex chains like "sudo apt update && sudo apt upgrade",
+            # replacing just the first one is tricky without parsing.
+            # However, prompt instruction tells LLM to not add it if is_root is True.
+            # This is a fallback for the simplest/most common case.
+            if config['is_root'] and cmd.strip().startswith("sudo "):
+                 cmd = cmd.strip().replace("sudo ", "", 1)
 
+            print(f"Suggested command: {cmd}")
+            try:
+                confirm = input("Execute this command? [y/N] ").strip().lower()
+                if confirm == 'y':
+                    subprocess.run(cmd, shell=True, check=False)
+                else:
+                    print("Aborted.")
+            except EOFError:
+                pass
+        else:
+             if not parsed.get("error"):
+                 print("YUPS_ERROR: No command suggested.", file=sys.stderr)
 
         log_async("query", f"{query_string} -> {json.dumps(parsed)}")
-def parse_llm_response(message):
-    """
-    Parses the LLM response object or string to extract JSON content.
-    Returns a dict with keys: 'command', 'explanation', 'error'.
-    """
-    content = ""
-    
-    # Handle the case where message is an object with a 'content' attribute
-    if hasattr(message, 'content'):
-        content = message.content
-    elif isinstance(message, str):
-        content = message
-    else:
-        # Fallback if it's a dict or something else
-        try:
-            content = str(message)
-        except Exception:
-            return {"error": "Could not parse message content."}
-
-    # Strip markdown code blocks if present
-    if "```json" in content:
-        content = content.split("```json")[1].split("```")[0].strip()
-    elif "```" in content:
-        content = content.split("```")[1].split("```")[0].strip()
-    
-    try:
-        data = json.loads(content)
-        return data
-    except json.JSONDecodeError:
-        # If it's not valid JSON, return the raw text as an error or just fail
-        return {"error": "LLM response was not valid JSON.", "raw": content}
-
 
 if __name__ == "__main__":
     main()
-
