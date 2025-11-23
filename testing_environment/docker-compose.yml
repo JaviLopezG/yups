@@ -15,7 +15,7 @@ services:
       args:
         # We pass the base image and setup command as arguments
         BASE_IMAGE: "ubuntu:latest"
-        PM_SETUP_COMMAND: "apt-get update && apt-get install -y git python3"
+        PM_SETUP_COMMAND: "apt-get update && apt-get install -y git python3 pip"
     container_name: yups_apt
     working_dir: /yups
     # These two lines keep the container running ("quedarse esperando")
@@ -32,7 +32,7 @@ services:
       args:
         BASE_IMAGE: "rockylinux/rockylinux:latest"
         # dnf doesn't require a separate update command
-        PM_SETUP_COMMAND: "dnf install -y git python3"
+        PM_SETUP_COMMAND: "dnf install -y git python39 python3-pip"
     container_name: yups_dnf
     working_dir: /yups
     tty: true
@@ -48,7 +48,7 @@ services:
       args:
         BASE_IMAGE: "archlinux:latest"
         # -Syu updates and installs. --noconfirm is for non-interactive
-        PM_SETUP_COMMAND: "pacman -Syu --noconfirm git python3"
+        PM_SETUP_COMMAND: "pacman -Syu --noconfirm git python3 python-pip"
     container_name: yups_pacman
     working_dir: /yups
     tty: true
@@ -63,7 +63,7 @@ services:
       dockerfile: Dockerfile.template
       args:
         BASE_IMAGE: "opensuse/leap:latest"
-        PM_SETUP_COMMAND: "zypper install -y git python3"
+        PM_SETUP_COMMAND: "zypper install -y git python39 python3-pip"
     container_name: yups_zypper
     working_dir: /yups
     tty: true

@@ -10,7 +10,7 @@ This MVP (Minimum Viable Product) focuses on capturing:
 
 ## **Requirements**
 
-* python3  
+* python3 (3.7 or higher)  
 * bash (with a \~/.bashrc file)  
 * sudo (to install the script to /usr/local/bin)  
 * sed (for safely modifying .bashrc)

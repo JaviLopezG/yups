@@ -20,8 +20,7 @@ import shlex
 import subprocess
 import argparse
 import threading
-from ollama import chat
-from ollama import ChatResponse
+from huggingface_hub import InferenceClient
 
 # --- Configuration ---
 YUPS_DIR = os.path.expanduser("~/.yups")
@@ -441,34 +440,100 @@ def main():
         handle_pm_command(action, packages, config)
         
     else:
-        # --- Fallback: Log Query ---
+        # --- Fallback: Smart action ---
         query_string = " ".join(remaining_args)
-        log_async("query", query_string)
         
         config['query'] = query_string
         config_json = json.dumps(config)  
-        print(config_json)
-        response: ChatResponse = chat(model='gemma3:12b-it-qat',
-            format="json", 
+
+        client = InferenceClient(
+            api_key=os.environ["HF_TOKEN"],
+        )
+
+        completion = client.chat.completions.create(
+            model="google/gemma-3-27b-it:nebius",
             stream=False,
-            options={"temperature": 0.1}, 
+            temperature=0.1, 
             messages=[
                 {
-                    'role': 'system',
-                    'content': "You are an expert in linux package management. You must understand the user's intentionality and translate it to a package management command with correct arguments and flags. You never can make up a fake package name, if you don't know a correct answer you should return an error message. You can't use another package manager than the one available. You will receive the distro and the package manager available with the user's query and must answer with a json that contains the command field. The user might be used to another distro or package manager or he might be doing copy paste from a random internet tutorial, but you must translate it to the user's package manager sintaxis with correct package names if needed. For instance: In Fedora 'edit on nano' -> 'dnf install nano'; In Ubuntu 'zypper install nano' -> 'apt-get install nano'; ... You may add a field with a short sentence (10 words max.) 'explanation' about for what is the package/s chosen.",
-                },{
-                    'role': 'user',
-                    'content': config_json,
-                },
-            ])
+                    "role": "user",
+                    "content": [
+                        {
+                            'type': 'text',
+                            'text': "You are an expert in linux package management. You must understand the user's intentionality and translate it to a package management command with correct arguments and flags. You never can make up a fake package name, if you don't know a correct answer you should return an 'error' message in the json. You can't use another package manager than the one available. You will receive the distro and the package manager available with the user's query and must answer with a json that contains the command field. The user might be used to another distro or package manager or he might be doing copy paste from a random internet tutorial, but you must translate it to the user's package manager sintaxis with correct package names if needed. For instance: In Fedora 'edit on nano' -> 'dnf install nano'; In Ubuntu 'zypper install nano' -> 'apt-get install nano'; ... You may add a field with a short sentence (10 words max.) 'explanation' about for what is the package/s chosen.",
+                        },
+                        {
+                            'type': 'text',
+                            'text': config_json 
+                        }
+                    ]
+                }
+            ],
+        )
 
-        print(response.message.content)
+        parsed = parse_llm_response(completion.choices[0].message)
+        
+        if parsed.get("error") :
+            print(f"YUPS_ERROR: {parsed['error']}", file=sys.stderr)
+        
+        if parsed.get("explanation"):
+            print(f"YUPS: {parsed['explanation']}")
+            
+        cmd = parsed.get("command")
+        if cmd:
+            if cmd != "error":
+                print(f"Suggested command: {cmd}")
+                # Use /dev/tty for input if stdin is not a tty (e.g. piped)
+                # But standard input() should work for interactive usage.
+                try:
+                    confirm = input("Execute this command? [y/N] ").strip().lower()
+                    if confirm == 'y':
+                        if "sudo" in cmd or os.geteuid() == 0 :
+                            subprocess.run(shlex.split(cmd), check=False)
+                        else:
+                            subprocess.run(shlex.split("sudo " + cmd), check=False)
+                    else:
+                        print("Aborted.")
+                except EOFError:
+                    pass
+            else:
+                print(f"YUPS_ERROR: aborting...", file=sys.stderr)
 
-        print(f"\n--- YUPS (Query Log Mode) ---")
-        print(f"Detected: {config.get('distro_pretty')} (PM: {config.get('pm')})")
-        print(f"Logged: '{query_string}'")
-        print(f"Logs in: {LOG_DIR}")
-        print("-------------------------------")
+
+        log_async("query", f"{query_string} -> {json.dumps(parsed)}")
+def parse_llm_response(message):
+    """
+    Parses the LLM response object or string to extract JSON content.
+    Returns a dict with keys: 'command', 'explanation', 'error'.
+    """
+    content = ""
+    
+    # Handle the case where message is an object with a 'content' attribute
+    if hasattr(message, 'content'):
+        content = message.content
+    elif isinstance(message, str):
+        content = message
+    else:
+        # Fallback if it's a dict or something else
+        try:
+            content = str(message)
+        except Exception:
+            return {"error": "Could not parse message content."}
+
+    # Strip markdown code blocks if present
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0].strip()
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0].strip()
+    
+    try:
+        data = json.loads(content)
+        return data
+    except json.JSONDecodeError:
+        # If it's not valid JSON, return the raw text as an error or just fail
+        return {"error": "LLM response was not valid JSON.", "raw": content}
+
 
 if __name__ == "__main__":
     main()
+
