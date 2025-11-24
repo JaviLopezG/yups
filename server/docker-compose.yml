@@ -3,17 +3,30 @@ services:
     build: .
     container_name: yups_api
     restart: always
-    ports:
-      - "8080:5000" # Exponemos en el puerto 8080 del VPS
+    expose:
+      - "5000" 
     environment:
-      # --- PON AQUÍ TU TOKEN DE HUGGING FACE ---
-      - HF_TOKEN=hf_TU_TOKEN_AQUI_XXXXXXXXXXXXXXXXX
-      
-      # El modelo a usar (Gemma 3 cuando salga, mientras Gemma 2 o Mistral)
-      - HF_MODEL_ID=google/gemma-2-27b-it
-      
-      # Seguridad
+      - HF_TOKEN=${HF_TOKEN} 
+      - HF_MODEL_ID=google/gemma-3-27b-it:nebius
       - YUPS_CLIENT_HEADER=X-Yups-Client-Auth
       - YUPS_CLIENT_SECRET=yups-secret-v1-camaleon
     volumes:
-      - ./logs:/app/logs # Para ver los logs desde fuera si quieres
+      - ./logs:/app/logs
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: yups_caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - yups-api
+
+volumes:
+  caddy_data:
+  caddy_config:

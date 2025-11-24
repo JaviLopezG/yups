@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 
 """
-YUPS - Core Executable (v7)
+YUPS - Core Executable (v8 - Client/Server Edition)
 
 Changes:
-- Refactored LLM interaction into 'fetch_llm_suggestion' function.
-- Context now includes 'is_root' status for the LLM.
-- Added safety guard to strip 'sudo' if running as root, even if LLM suggests it.
-- Main loop is cleaner and decoupled from API specifics.
+- REMOVED: Direct dependency on 'huggingface_hub.InferenceClient'.
+- ADDED: Logic to call our custom YUPS API (yups-server).
+- CONFIG: Now requires YUPS_API_URL pointing to the VPS.
+- CLEANUP: Simplified auth (no HF_TOKEN needed on client).
 """
 
 import sys
@@ -21,9 +21,12 @@ import shlex
 import subprocess
 import argparse
 import threading
-from huggingface_hub import InferenceClient
+import requests # We rely on requests now (installed via venv)
 
 # --- Configuration ---
+YUPS_API_URL = "https://yups.io" 
+YUPS_CLIENT_SECRET = "yups-secret-v1-camaleon"
+
 YUPS_DIR = os.path.expanduser("~/.yups")
 CONFIG_FILE = os.path.join(YUPS_DIR, "config.json")
 LOG_DIR = os.path.join(YUPS_DIR, "logs")
@@ -325,77 +328,48 @@ def handle_pm_command(action, packages, config):
     
     subprocess.run(final_command, shell=True, check=False)
 
-# --- 4. API & Intelligence Layer ---
+# --- 4. API & Intelligence Layer (Server-Side) ---
 
-def parse_llm_response(message):
-    """Parses JSON content from the LLM response."""
-    content = ""
-    if hasattr(message, 'content'):
-        content = message.content
-    elif isinstance(message, str):
-        content = message
-    else:
-        try:
-            content = str(message)
-        except Exception:
-            return {"error": "Could not parse message content."}
+def fetch_llm_suggestion( query, config):
+    """
+    Calls the YUPS API Server.
+    Authentication is done via Client Secret Header, no user token needed.
+    """
+    # Construct endpoint URL
+    endpoint = f"{YUPS_API_URL}/yups/v1/chat"
+    
+    headers = {
+        "Content-Type": "application/json",
+        "X-Yups-Client-Auth": YUPS_CLIENT_SECRET
+    }
 
-    # Extract JSON code blocks
-    if "```json" in content:
-        content = content.split("```json")[1].split("```")[0].strip()
-    elif "```" in content:
-        content = content.split("```")[1].split("```")[0].strip()
+    payload = {
+        "query": query,
+        "config": config  
+    }
     
     try:
-        data = json.loads(content)
-        return data
-    except json.JSONDecodeError:
-        return {"error": "LLM response was not valid JSON.", "raw": content}
+        # Using a timeout to prevent hanging if server is down
+        response = requests.post(endpoint, data=json.dumps(payload), headers=headers, timeout=30)
+        
+        if response.status_code == 429:
+            return {"error": "You are sending requests too fast. Please wait."}
+        
+        if not response.ok:
+            return {"error": f"Server Error ({response.status_code}): {response.text}"}
+            
+        data = response.json()
+        
+        # The server returns { "result": {...}, "meta": {...} }
+        # We only care about "result"
+        return data.get("result", {"error": "Empty response from server"})
 
-def fetch_llm_suggestion(query_string, config):
-    """
-    Encapsulates all interaction with the AI backend.
-    In the future, this function can be replaced to point to a custom API
-    instead of calling Hugging Face directly.
-    """
-    token = os.environ.get("HF_TOKEN")
-    if not token:
-        return {"error": "Missing HF_TOKEN environment variable."}
-
-    # Prepare context
-    config_json = json.dumps(config)
-    
-    # Client Initialization
-    client = InferenceClient(api_key=token)
-
-    try:
-        completion = client.chat.completions.create(
-            model="google/gemma-3-27b-it:nebius",
-            stream=False,
-            temperature=0.1, 
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            'type': 'text',
-                            'text': "You are an expert in linux package management. You must understand the user's intentionality and translate it to a package management command. "
-                                    "You CAN return complex chained commands (e.g., 'zypper refresh && zypper update'). "
-                                    "The context provides 'is_root' (boolean). "
-                                    "If is_root is FALSE, ensure 'sudo' is applied to EACH subcommand that needs it (e.g., 'sudo apt update && sudo apt upgrade'). "
-                                    "If is_root is TRUE, do NOT include 'sudo' in the commands. "
-                                    "Return ONLY a JSON with fields: 'command' (string), 'explanation' (string), 'error' (string or null). "
-                                    "Explain your election of packages with max. 10 words."
-                                    "Context: " + config_json
-                        }
-                    ]
-                }
-            ],
-        )
-        return parse_llm_response(completion.choices[0].message)
-
+    except requests.exceptions.ConnectionError:
+        return {"error": "Could not connect to YUPS Server. Check your internet connection."}
+    except requests.exceptions.Timeout:
+        return {"error": "YUPS Server timed out."}
     except Exception as e:
-        return {"error": f"Failed to query LLM: {str(e)}"}
+        return {"error": f"Client Error: {str(e)}"}
 
 # --- 5. Main Argument Parsing & Routing ---
 
@@ -469,12 +443,12 @@ def main():
         # --- Fallback: Smart action ---
         query_string = " ".join(remaining_args)
         
-        # 1. Update Context with Query and Root status
-        config['query'] = query_string
+        # 1. Update Context
         config['is_root'] = (os.geteuid() == 0)
 
-        # 2. Call the encapsulated Intelligence Layer
-        parsed = fetch_llm_suggestion(query_string, config)
+        # 2. Call the API Layer
+        print("☁️  Asking YUPS Cloud...")
+        parsed = fetch_llm_suggestion(query_string,config)
         
         # 3. Handle Errors/Feedback
         if parsed.get("error"):
@@ -486,13 +460,7 @@ def main():
         cmd = parsed.get("command")
         if cmd and cmd != "error":
             
-            # --- Safety Guard: Redundant Sudo Strip ---
-            # Even if LLM is smart, we explicitly strip sudo if we are root.
-            # Only strips if it's the very first word (handling "sudo apt ...").
-            # For complex chains like "sudo apt update && sudo apt upgrade",
-            # replacing just the first one is tricky without parsing.
-            # However, prompt instruction tells LLM to not add it if is_root is True.
-            # This is a fallback for the simplest/most common case.
+            # --- Safety Guard ---
             if config['is_root'] and cmd.strip().startswith("sudo "):
                  cmd = cmd.strip().replace("sudo ", "", 1)
 

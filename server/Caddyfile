@@ -1,0 +1,3 @@
+yups.io {
+    reverse_proxy yups-api:5000
+}
