@@ -1,7 +1,11 @@
 #!/bin/bash
 
-# YUPS Installation Script (Architecture v5: Semantic Versioning Fix)
-# Philosophy: We don't fix the OS. We expect a valid environment.
+# YUPS Installation Script (v6 - Lean & Mean)
+# Changes:
+# - Removed huggingface_hub dependency (we use the API now).
+# - Added auto-installation of 'apt-file' and 'pkgfile' for native 'provides' support.
+# - Forces update of file databases (apt-file update / pkgfile -u).
+
 
 # --- Configuration ---
 INSTALL_PATH="/usr/local/bin/yups"
@@ -56,14 +60,11 @@ EOF
 # --- Helper Functions ---
 
 get_python_version_str() {
-    # Just for display logging
     $1 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null
 }
 
 check_python_meets_requirements() {
-    # $1: The python executable
-    # We ask Python directly using tuple comparison which handles 3.13 > 3.7 correctly
-    # (Unlike bash/awk which thinks 3.13 < 3.7 because math)
+    # YUPS v10 only needs requests, so 3.7+ is fine, even 3.6 might work but let's stick to 3.7 standard
     $1 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 7) else 1)' 2>/dev/null
 }
 
@@ -76,61 +77,79 @@ fi
 echo "🚀 Starting YUPS Installation..."
 
 # --- 2. Environment Validation ---
-echo "🐍 Validating Python Environment (Requirement: >= 3.7)..."
+echo "🐍 Validating Python Environment..."
 
 CHOSEN_PYTHON=""
-# We check standard python3 first, then try to find explicit newer versions if system default is old
 CANDIDATES=("python3" "python3.13" "python3.12" "python3.11" "python3.10" "python3.9" "python3.8")
 
 for candidate in "${CANDIDATES[@]}"; do
     if command -v $candidate &> /dev/null; then
         ver=$(get_python_version_str $candidate)
-        
-        # New robust check using python itself
         if check_python_meets_requirements "$candidate"; then
             echo "   -> Found '$candidate' (v$ver) - OK."
             CHOSEN_PYTHON=$(command -v $candidate)
             break
-        else
-            echo "   -> Found '$candidate' (v$ver) - Too old."
         fi
     fi
 done
 
 if [[ -z "$CHOSEN_PYTHON" ]]; then
-    echo ""
     echo "❌ ERROR: YUPS requires Python 3.7 or newer."
-    echo "   Your system default is too old and no alternative was found."
-    echo "   ACTION REQUIRED: Please install 'python3.9' or newer using your package manager."
-    echo "   (e.g., 'dnf install python39' on RHEL/Rocky 8)"
-    exit 1
+    # Try to help Rocky Linux users
+    if grep -qi "rocky\|rhel\|centos" /etc/os-release; then
+         echo "   -> Detected RHEL-based system. Trying to install python39..."
+         if $SUDO dnf install -y python39; then
+             CHOSEN_PYTHON=$(command -v python3.9)
+         fi
+    fi
+    
+    if [[ -z "$CHOSEN_PYTHON" ]]; then
+        echo "   Please install a newer python manually."
+        exit 1
+    fi
 fi
 
 echo "✅ Selected Interpreter: $CHOSEN_PYTHON"
 
-# --- 3. Create Isolated Environment ---
+# --- 3. Install Helper Tools (apt-file / pkgfile) ---
+echo "🛠️  Checking for 'provides' helper tools..."
+
+if command -v apt-get &> /dev/null; then
+    if ! command -v apt-file &> /dev/null; then
+        echo "   -> installing 'apt-file' for advanced search..."
+        $SUDO apt-get update && $SUDO apt-get install -y apt-file
+        echo "   -> updating apt-file cache (this may take a moment)..."
+        $SUDO apt-file update
+    else
+        echo "   -> 'apt-file' is already installed."
+    fi
+elif command -v pacman &> /dev/null; then
+    if ! command -v pkgfile &> /dev/null; then
+        echo "   -> installing 'pkgfile' for advanced search..."
+        $SUDO pacman -S --noconfirm pkgfile
+        echo "   -> updating pkgfile database..."
+        $SUDO pkgfile --update
+    else
+        echo "   -> 'pkgfile' is already installed."
+    fi
+fi
+
+# --- 4. Create Isolated Environment ---
 echo "📦 Setting up isolated Python environment in $VENV_PATH..."
 
-# Security check: If existing venv has a different python version, nuke it
-if [ -d "$VENV_PATH" ]; then
-    # We use the full path to avoid ambiguity
-    if [ -f "$VENV_PATH/bin/python3" ]; then
-        VENV_VER=$("$VENV_PATH/bin/python3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)
-        CHOSEN_VER=$($CHOSEN_PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-        
-        if [[ "$VENV_VER" != "$CHOSEN_VER" ]]; then
-            echo "   -> Venv version mismatch ($VENV_VER vs $CHOSEN_VER). Recreating..."
-            $SUDO rm -rf "$VENV_PATH"
-        fi
-    else
-        # Broken venv dir
+# Security check for venv python version match
+if [ -d "$VENV_PATH" ] && [ -f "$VENV_PATH/bin/python3" ]; then
+    VENV_VER=$("$VENV_PATH/bin/python3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)
+    CHOSEN_VER=$($CHOSEN_PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    if [[ "$VENV_VER" != "$CHOSEN_VER" ]]; then
+        echo "   -> Version mismatch. Recreating venv..."
         $SUDO rm -rf "$VENV_PATH"
     fi
 fi
 
 $SUDO mkdir -p "$(dirname "$VENV_PATH")"
 
-# Ubuntu/Debian Helper (Only specifically for the venv module)
+# Ubuntu/Debian specific fix
 if grep -qi "ubuntu\|debian" /etc/os-release; then
     if ! dpkg -s python3-venv &> /dev/null; then
         echo "   -> Installing python3-venv package..."
@@ -140,26 +159,18 @@ fi
 
 if [ ! -d "$VENV_PATH" ]; then
     $SUDO "$CHOSEN_PYTHON" -m venv "$VENV_PATH"
-    if [ $? -ne 0 ]; then
-        echo "❌ ERROR: Failed to create virtual environment."
-        exit 1
-    fi
-    echo "   -> Virtual environment created."
-else
-    echo "   -> Virtual environment already exists."
 fi
 
-# --- 4. Install Dependencies ---
-echo "📚 Installing dependencies..."
-if ! $SUDO "$VENV_PATH/bin/pip" install --upgrade pip huggingface_hub > /dev/null; then
-    echo "❌ ERROR: Failed to install Python dependencies via pip."
+# --- 5. Install Dependencies ---
+echo "📚 Installing dependencies (requests)..."
+# We ONLY need requests now, huggingface_hub is gone!
+if ! $SUDO "$VENV_PATH/bin/pip" install --upgrade pip requests > /dev/null; then
+    echo "❌ ERROR: Failed to install Python dependencies."
     exit 1
 fi
-echo "   -> Dependencies installed successfully."
 
-# --- 5. Install Executable & Rewrite Shebang ---
+# --- 6. Install Executable & Rewrite Shebang ---
 echo "🔧 Installing executable to $INSTALL_PATH..."
-
 $SUDO cp "$SOURCE_FILE" "$INSTALL_PATH"
 
 echo "   -> Linking executable to isolated environment..."
@@ -169,9 +180,8 @@ $SUDO cp "$TMP_FILE" "$INSTALL_PATH"
 rm "$TMP_FILE"
 
 $SUDO chmod +x "$INSTALL_PATH"
-echo "✓ Executable installed and linked."
 
-# --- 6. User Configuration (Bashrc) ---
+# --- 7. User Configuration (Bashrc) ---
 echo "🎣 Injecting hooks into $BASHRC_FILE..."
 if grep -q "# --- YUPS_HOOK_START ---" "$BASHRC_FILE"; then
     echo "   -> Hooks block already detected. Skipping."
@@ -180,23 +190,10 @@ else
     echo "✓ Bash hooks installed."
 fi
 
-# --- 7. HF Token Check ---
-if [[ -z "$HF_TOKEN" ]]; then
-    if grep -q "HF_TOKEN" "$BASHRC_FILE"; then
-        echo "✓ HF_TOKEN found in .bashrc"
-    else
-        echo "🔑 HF_TOKEN environment variable is not set."
-        read -p "Please enter your Hugging Face Token: " token_input
-        if [[ -n "$token_input" ]]; then
-            echo -e "\nexport HF_TOKEN=\"$token_input\"" >> "$BASHRC_FILE"
-            export HF_TOKEN="$token_input"
-        else
-            echo "⚠️ WARNING: No token provided. Smart features will fail."
-        fi
-    fi
-fi
+# --- 8. HF Token Check (No longer needed strictly, but kept for legacy or custom use) ---
+# We skip the mandatory check since the server handles auth now.
 
-# --- 8. Initialize ---
+# --- 9. Initialize ---
 echo "⚙️  Initializing YUPS config..."
 "$INSTALL_PATH" --auto-config
 
