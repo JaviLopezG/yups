@@ -1,3 +1,18 @@
+api.yups.io {
+    reverse_proxy yups-prod:5000
+}
+
+dev.yups.io {
+    reverse_proxy yups-dev:5000
+}
+
 yups.io {
-    reverse_proxy yups-api:5000
+    handle_path /yups/* {
+        rewrite * /yups{uri}
+        reverse_proxy yups-prod:5000
+    }
+
+    handle {
+        redir https://www.yups.io{uri} permanent
+    }
 }

@@ -1,15 +1,22 @@
 services:
-  yups-api:
-    build: .
-    container_name: yups_api
+  yups-prod:
+    image: yups-server:v0.1
+    container_name: yups_prod
     restart: always
     expose:
-      - "5000" 
-    environment:
-      - HF_TOKEN=${HF_TOKEN} 
-      - HF_MODEL_ID=google/gemma-3-27b-it:nebius
-      - YUPS_CLIENT_HEADER=X-Yups-Client-Auth
-      - YUPS_CLIENT_SECRET=yups-secret-v1-camaleon
+      - "5000"
+    env_file: .env
+    volumes:
+      - ./logs:/app/logs
+
+  yups-dev:
+    build: .
+    image: yups-server:latest
+    container_name: yups_dev
+    restart: always
+    expose:
+      - "5000"
+    env_file: .env
     volumes:
       - ./logs:/app/logs
 
@@ -25,7 +32,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - yups-api
+      - yups-prod
+      - yups-dev
 
 volumes:
   caddy_data:

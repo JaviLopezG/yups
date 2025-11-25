@@ -19,6 +19,7 @@ RUN chown -R yupsuser:yupsuser /app
 USER yupsuser
 
 # Environment variables
+ENV PYTHONBUFFERED=1
 ENV FLASK_APP=app.py
 
 # Expose port
