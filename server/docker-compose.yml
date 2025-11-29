@@ -1,6 +1,6 @@
 services:
   yups-prod:
-    image: yups-server:v0.1
+    image: yups-server:v0.3
     container_name: yups_prod
     restart: always
     expose:
