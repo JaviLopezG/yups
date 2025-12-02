@@ -52,7 +52,7 @@ gantt
 *Goal: Robustness, speed, and data sovereignty.*
 
 * \[ \] **Operation Marvin (Local LLM):**  
-  * \[ \] Deploy Ollama on local server (Marvin).  
+  * \[x\] Deploy Ollama on local server (Marvin).  
   * \[ \] Configure Trillian API to prioritize Marvin with HF fallback.  
 * \[ \] **The Great Rewrite (Go):**  
   * \[ \] Migrate client from Python to Go for fast, static binaries.  
@@ -91,19 +91,6 @@ gantt
   * \[ \] Background daemon to capture real `stderr` and output without re-execution.  
 * \[ \] **YUPS Shell (Meta-Shell):**  
   * \[ \] Terminal wrapper for predictive AI autocomplete and real-time correction.
-
-```mermaid
-chart-line
-id: progress
-title: Monthly Progress
-height: 300
-Month,Tasks,Goals
-Jan,85,80
-Feb,92,85
-Mar,78,90
-Apr,94,95
-May,105,100
-```
 
 
 ## **💻 Requirements (Phase 1 / Python Version)**
