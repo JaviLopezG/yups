@@ -47,6 +47,8 @@ gantt
 * \[x\] **Basic Backend:** API on Trillian using Hugging Face (Gemma 3 27b).  
 * \[x\] **Functionality:** Package suggestions and manager translation (apt, dnf, pacman, zypper).
 
+Built with AI Assistance: Parts of this code were generated or refactored using LLMs (Gemmini 3) to accelerate development and learning.
+
 ### **🚀 Phase 2: Infrastructure & Speed (Current Focus)**
 
 *Goal: Robustness, speed, and data sovereignty.*
