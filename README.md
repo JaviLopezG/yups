@@ -12,7 +12,7 @@ This MVP (Minimum Viable Product) currently focuses on capturing:
 
 ## **🗺️ Roadmap & Project Status**
 
-This project is developed under the "Spoon Theory" philosophy: we advance as energy permits, prioritizing "Quick Wins" and learning over immediate perfection.
+This project is developed during weekends under the Spoon Theory philosophy: we advance as energy permits, prioritizing 'Quick Wins' and learning over immediate perfection. If you notice the roadmap is advancing at a cruising speed rather than warp speed, please bear with us. Feature merges are not accomplished by magic, but rest assured they are coming.
 
 ```mermaid
 gantt  
@@ -119,6 +119,8 @@ Built with AI Assistance: Parts of this code were generated or refactored using 
    source \~/.bashrc
    ```
    *(Or simply open a new terminal).*
+
+YUPS (Yet Universal Prompt Straw-Boss) is designed to be your personal CLI Foreman. Its only job is to get its hands dirty and execute the tedious tasks. Think of yourself as the System Architect; give YUPS a high-level command and let it handle the errors, dependencies, and obscure syntax. You can remain relaxed, worry-free (and don't forget to pack your towel). YUPS will only ever do what you explicitly ask, with no surprises
 
 ## **🧪 Testing the Features**
 
