@@ -124,7 +124,7 @@ def chat_handler():
 
         hf_response_raw = call_huggingface(json.dumps(context_config), user_query)
         
-        # logger.info(f"🤖 Raw AI: {json.dumps(hf_response_raw)}")
+        logger.info(f"🤖 Raw AI: {json.dumps(hf_response_raw)}")
 
         ai_text = ""
         if "choices" in hf_response_raw and hf_response_raw["choices"]:
