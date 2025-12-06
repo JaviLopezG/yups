@@ -42,7 +42,7 @@ command_not_found_handle() {
 # 2: Command Error Hook
 _yups_ce_handle() {
     local exit_code=$?
-    if [[ $exit_code -eq 0 ]] || [[ $exit_code -eq 127 ]]; then
+    if [[ $exit_code -eq 0 ]] || [[ $exit_code -eq 127 ]] || [[ $exit_code -eq 130]]; then
         return
     fi
     local last_command_text=$(history 1 | sed 's/^[ ]*[0-9]\+[ ]\+//')
