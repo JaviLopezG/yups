@@ -9,27 +9,22 @@
     <link rel="shortcut icon" href="/img/favicon.ico" />
     <link rel="apple-touch-icon" sizes="180x180" href="/img/apple-touch-icon.png" />
     <link rel="manifest" href="/img/site.webmanifest" />
-    <title>YUPS - Your Universal Package Straw-boss</title>
+    
+    <title>YUPS - The Universal Prompt Straw-Boss</title>
     <style>
         /* --- COLOR VARIABLES (Your Palette) --- */
         :root {
-            --bg-color: #fbf7eb;
-            /* Your cream background */
-            --logo-gold: #e6b117;
-            /* Your egg yellow */
+            --bg-color: #fbf7eb; /* Cream */
+            --logo-gold: #e6b117; /* Egg Yellow */
             --text-dark: #2c2c2c;
-            /* Dark text for contrast */
             --terminal-bg: #1e1e1e;
-            /* Terminal background */
             --link-blue: #0066cc;
+            --danger-red: #ff5f56;
+            --safe-green: #27c93f;
         }
 
         /* Reset and Base Styles */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
@@ -38,74 +33,40 @@
             line-height: 1.6;
         }
 
-        a {
-            text-decoration: none;
-            color: var(--link-blue);
-            font-weight: 600;
-            transition: opacity 0.2s;
-        }
+        a { text-decoration: none; color: var(--link-blue); font-weight: 600; transition: opacity 0.2s; }
+        a:hover { opacity: 0.8; text-decoration: underline; }
 
-        a:hover {
-            opacity: 0.8;
-            text-decoration: underline;
-        }
-
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
+        .container { max-width: 1000px; margin: 0 auto; padding: 2rem; }
 
         /* Header & Logo */
-        header {
-            text-align: center;
-            padding: 4rem 0 2rem;
-        }
+        header { text-align: center; padding: 4rem 0 2rem; }
 
         .logo-img {
-            /* Adjust size but NOT background, so it blends with the page */
             width: 180px;
             height: auto;
             display: block;
             margin: 0 auto 1rem;
             border-radius: 12px;
-            /* A soft touch in case the JPG has borders */
             mix-blend-mode: multiply;
-            /* CSS Trick: makes the white/cream of the JPG transparent */
         }
 
-        h1 {
-            font-size: 3rem;
-            font-weight: 800;
-            color: var(--text-dark);
-            margin-bottom: 0.5rem;
-        }
+        h1 { font-size: 3rem; font-weight: 800; color: var(--text-dark); margin-bottom: 0.5rem; }
 
-        .tagline {
-            font-size: 1.4rem;
-            color: #666;
-            font-weight: 300;
-        }
+        .tagline { font-size: 1.5rem; color: #555; font-weight: 300; font-style: italic; }
 
         /* Hero Section */
-        .hero {
-            text-align: center;
-            padding: 1rem 0 3rem;
-        }
+        .hero { text-align: center; padding: 1rem 0 3rem; }
 
         .hero p {
-            font-size: 1.2rem;
-            max-width: 700px;
+            font-size: 1.25rem;
+            max-width: 750px;
             margin: 0 auto 2rem;
             color: #444;
         }
 
-        .cta-buttons {
-            display: flex;
-            gap: 1rem;
-            justify-content: center;
-            margin-bottom: 2rem;
-        }
+        .highlight { color: var(--logo-gold); font-weight: 700; }
+
+        .cta-buttons { display: flex; gap: 1rem; justify-content: center; margin-bottom: 2rem; }
 
         .btn {
             display: inline-block;
@@ -115,6 +76,7 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
             transition: transform 0.2s ease, box-shadow 0.2s ease;
+            cursor: pointer;
         }
 
         .btn-primary {
@@ -126,8 +88,6 @@
 
         .btn-primary:hover {
             background-color: #d4a00f;
-            color: #fff;
-            text-decoration: none;
             transform: translateY(-2px);
         }
 
@@ -140,7 +100,6 @@
         .btn-secondary:hover {
             background-color: var(--text-dark);
             color: #fff;
-            text-decoration: none;
             transform: translateY(-2px);
         }
 
@@ -154,6 +113,7 @@
             margin: 0 auto 3rem;
             text-align: left;
             position: relative;
+            box-shadow: 0 10px 25px rgba(230, 177, 23, 0.15);
         }
 
         .install-title {
@@ -168,25 +128,22 @@
         .code-snippet {
             font-family: 'Fira Code', 'Source Code Pro', monospace;
             background-color: #f4f4f4;
-            padding: 0.8rem;
+            padding: 1rem;
             border-radius: 4px;
             color: #333;
-            font-size: 0.95rem;
+            font-size: 1rem;
             display: block;
             word-break: break-all;
             border-left: 4px solid var(--logo-gold);
         }
 
         /* Terminal Demo Section */
-        .terminal-wrapper {
-            margin: 3rem auto;
-            max-width: 850px;
-        }
+        .terminal-wrapper { margin: 3rem auto; max-width: 850px; }
 
         .terminal-window {
             background-color: var(--terminal-bg);
             border-radius: 10px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
             overflow: hidden;
             font-family: 'Fira Code', 'Courier New', monospace;
             text-align: left;
@@ -199,34 +156,12 @@
             align-items: center;
         }
 
-        .window-controls {
-            display: flex;
-            gap: 8px;
-        }
-
-        .control {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-        }
-
-        .close {
-            background-color: #ff5f56;
-        }
-
-        .min {
-            background-color: #ffbd2e;
-        }
-
-        .max {
-            background-color: #27c93f;
-        }
-
-        .window-title {
-            margin-left: 1rem;
-            color: #999;
-            font-size: 0.85rem;
-        }
+        .window-controls { display: flex; gap: 8px; }
+        .control { width: 12px; height: 12px; border-radius: 50%; }
+        .close { background-color: #ff5f56; }
+        .min { background-color: #ffbd2e; }
+        .max { background-color: #27c93f; }
+        .window-title { margin-left: 1rem; color: #999; font-size: 0.85rem; }
 
         .terminal-body {
             padding: 1.5rem;
@@ -235,60 +170,23 @@
             line-height: 1.5;
         }
 
-        /* Terminal Colors */
-        .prompt-user {
-            color: #27c93f;
-            font-weight: bold;
-        }
-
-        .prompt-path {
-            color: #4dabf7;
-            font-weight: bold;
-        }
-
-        .cmd {
-            color: #fff;
-        }
-
-        .output {
-            color: #aaa;
-        }
-
-        .yups-sys {
-            color: var(--logo-gold);
-            font-weight: bold;
-        }
-
-        .yups-sugg {
-            color: #27c93f;
-            font-weight: bold;
-        }
-
-        .yups-err {
-            color: #ff5f56;
-            font-weight: bold;
-        }
+        /* Terminal Internal Colors */
+        .prompt-user { color: var(--safe-green); font-weight: bold; }
+        .prompt-path { color: #4dabf7; font-weight: bold; }
+        .cmd { color: #fff; }
+        .output { color: #aaa; }
+        
+        .yups-sys { color: var(--logo-gold); font-weight: bold; }
+        .yups-sugg { color: var(--safe-green); font-weight: bold; }
+        .yups-warn { color: #ffbd2e; font-weight: bold; } /* Yellow for dry run */
+        .yups-err { color: var(--danger-red); font-weight: bold; }
 
         .cursor {
             display: inline-block;
-            width: 8px;
-            height: 18px;
-            background: #ccc;
-            animation: blink 1s infinite;
-            vertical-align: middle;
+            width: 8px; height: 18px; background: #ccc;
+            animation: blink 1s infinite; vertical-align: middle;
         }
-
-        @keyframes blink {
-
-            0%,
-            100% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0;
-            }
-        }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
         /* Features Grid */
         .features {
@@ -301,7 +199,7 @@
 
         .feature-card {
             background: #fff;
-            padding: 2rem;
+            padding: 2.5rem 2rem;
             border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
             transition: transform 0.3s ease;
@@ -314,21 +212,10 @@
             border-bottom-color: var(--logo-gold);
         }
 
-        .emoji {
-            font-size: 2.5rem;
-            margin-bottom: 1rem;
-            display: block;
-        }
+        .emoji { font-size: 3rem; margin-bottom: 1rem; display: block; }
 
-        .feature-card h3 {
-            margin-bottom: 0.5rem;
-            color: var(--text-dark);
-        }
-
-        .feature-card p {
-            color: #666;
-            font-size: 0.95rem;
-        }
+        .feature-card h3 { margin-bottom: 0.5rem; color: var(--text-dark); font-size: 1.4rem; }
+        .feature-card p { color: #666; font-size: 1rem; }
 
         /* Footer */
         footer {
@@ -339,10 +226,6 @@
             color: #666;
             font-size: 0.9rem;
         }
-
-        .contact-info {
-            margin-top: 1rem;
-        }
     </style>
 </head>
 
@@ -350,26 +233,27 @@
 
     <div class="container">
         <header>
-            <!-- 
-                The mix-blend-mode: multiply will help so that if the JPG 
-                is not EXACTLY the same as the background, the white border is disguised 
-            -->
             <img src="img/logo_trans.png" alt="YUPS Logo" class="logo-img">
             <h1>YUPS</h1>
-            <p class="tagline">Your Universal Package Straw-boss</p>
+            <p class="tagline">Your Universal Prompt Straw-Boss</p>
         </header>
 
         <section class="hero">
-            <p>No more package frustration. YUPS is the intelligent assistant that brings AI to your command line,
-                understanding what you want to install and translating it for your system.</p>
+            <p>
+                You are the Manager. YUPS is the Foreman. <br>
+                Stop memorizing flags and worrying about syntax. Let YUPS <span class="highlight">get its hands dirty</span> 
+                fixing typos, translating commands, and dry-running dangerous ops so you can keep yours clean.
+            </p>
+            <p style="font-size: 1rem; margin-top: -1rem; color: #888;">
+                (Don't panic. Carry a towel. Install YUPS.)
+            </p>
 
             <div class="cta-buttons">
-                <a href="https://github.com/javilopezg/yups" class="btn btn-primary">View on GitHub</a>
-                <a href="#install" class="btn btn-secondary">Install Now</a>
+                <a href="https://github.com/javilopezg/yups" class="btn btn-primary">See the Code</a>
+                <a href="#install" class="btn btn-secondary">Hire the Foreman</a>
             </div>
         </section>
-
-        <!-- INSTALLATION SECTION -->
+        
         <section id="install" class="install-block">
             <span class="install-title">Quick Install (Linux)</span>
             <div class="code-snippet">
@@ -383,7 +267,16 @@
             </p>
         </section>
 
-        <!-- TERMINAL DEMO -->
+        <!--<section id="install" class="install-block">
+            <span class="install-title">Quick Install (One Binary to Rule Them All)</span>
+            <div class="code-snippet">
+                curl -sL https://get.yups.dev | bash
+            </div>
+            <p style="margin-top: 0.8rem; font-size: 0.85rem; color: #666;">
+                * No dependencies. No complex configs. Just pure Go efficiency.
+            </p>
+        </section>-->
+
         <section class="terminal-wrapper">
             <div class="terminal-window">
                 <div class="terminal-header">
@@ -392,81 +285,61 @@
                         <div class="control min"></div>
                         <div class="control max"></div>
                     </div>
-                    <span class="window-title">javi@fedora:~/projects</span>
+                    <span class="window-title">javi@trillian:~/workspace</span>
                 </div>
                 <div class="terminal-body">
-                    <!-- Example 1: Command Not Found Handler -->
+                    
                     <div>
-                        <span class="prompt-user">javi@fedora</span>:<span class="prompt-path">~</span>$ <span
-                            class="cmd">apt install nano</span><br>
-                        <span class="yups-sys">YUPS: Command 'apt' not found. Maybe you meant 'dnf'?</span><br>
-                        <span class="yups-sys">YUPS: Try 'yups apt install nano'</span><br>
+                        <span class="prompt-user">javi@trillian</span>:<span class="prompt-path">~</span>$ <span class="cmd">yups convert this video to mp4 but make it lightweight for web</span><br>
+                        <span class="yups-sys">👷 STRAW-BOSS: On it, boss. Parsing requirements...</span><br>
+                        <span class="yups-sugg">Suggested Command: ffmpeg -i input.mov -vcodec h264 -acodec mp2 input.mp4</span><br>
+                        <span class="yups-sys">Run this? [Y/n]</span> <span class="cmd">y</span><br>
+                        <span class="output">[ffmpeg output stream...] Done.</span><br>
                         <br>
                     </div>
 
-                    <!-- Example 2: Typo Fixer -->
                     <div>
-                        <span class="prompt-user">javi@fedora</span>:<span class="prompt-path">~</span>$ <span
-                            class="cmd">dnf instal nano</span><br>
-                        <span class="output">No such command: instal. Please use /usr/bin/dnf --help...</span><br>
-                        <span class="yups-sys">---</span><br>
-                        <span class="yups-err">YUPS: The command 'dnf instal nano' failed (Code: 1).</span><br>
-                        <span class="yups-sys">YUPS: Did you mean 'install'?</span><br>
-                        <span class="yups-sys">YUPS: Try 'yups dnf instal nano'</span><br>
-                        <span class="yups-sys">---</span><br>
-                        <br>
+                        <span class="prompt-user">javi@trillian</span>:<span class="prompt-path">~</span>$ <span class="cmd">rm -rf /usr/local/bin/legacy_app</span><br>
+                        <span class="yups-warn">🚧 WHOA THERE! Safety Interlock Active.</span><br>
+                        <span class="yups-sys">STRAW-BOSS: That command looks destructive (Risk: RED).</span><br>
+                        <span class="yups-sys">Running in DRY-RUN mode first to check impact...</span><br>
+                        <span class="output">Simulating deletion... 45 files would be affected.</span><br>
+                        <span class="yups-sys">Are you absolutely sure, Manager? [y/N]</span> <span class="cursor"></span>
                     </div>
 
-                    <!-- Example 3: Natural Language AI -->
-                    <div>
-                        <span class="prompt-user">javi@fedora</span>:<span class="prompt-path">~</span>$ <span
-                            class="cmd">yups I want to install a professional video editor</span><br>
-                        <span class="yups-sys">☁️ Asking YUPS Cloud...</span><br>
-                        <span class="yups-sys">YUPS: Kdenlive is a robust choice for Linux video editing.</span><br>
-                        <span class="yups-sugg">Suggested command: sudo dnf install kdenlive</span><br>
-                        Execute this command? [y/N] <span class="cursor"></span>
-                    </div>
                 </div>
             </div>
         </section>
 
-        <!-- FEATURES -->
         <section class="features">
             <div class="feature-card">
-                <span class="emoji">🧠</span>
-                <h3>AI Powered</h3>
-                <p>Uses advanced LLMs to understand natural language. Ask for what you need in English or Spanish and
-                    YUPS will find the package.</p>
+                <span class="emoji">👷</span>
+                <h3>The Dirty Work</h3>
+                <p>You have big ideas; YUPS handles the boring details. From missing dependencies to forgotten flags, the Straw-Boss fixes the mess so you never break your flow.</p>
             </div>
             <div class="feature-card">
-                <span class="emoji">🐧</span>
-                <h3>Distro Agnostic</h3>
-                <p>Do you use Fedora, Ubuntu, Arch, or openSUSE? YUPS detects your system and translates your intentions
-                    into the correct commands for <code>dnf</code>, <code>apt</code>, <code>pacman</code>, or
-                    <code>zypper</code>.
-                </p>
+                <span class="emoji">🦺</span>
+                <h3>Safety First</h3>
+                <p>With its built-in <b>Dry-Run Protocol</b>, YUPS tests dangerous commands before they execute. It's like having a safety harness for your terminal.</p>
             </div>
             <div class="feature-card">
-                <span class="emoji">🛡️</span>
-                <h3>Guardian</h3>
-                <p>Intercepts "command not found" errors and typos before you get frustrated, offering immediate
-                    suggestions.</p>
+                <span class="emoji">🌍</span>
+                <h3>Polyglot Worker</h3>
+                <p>Fedora? Ubuntu? Arch? YUPS doesn't care. It speaks every package manager dialect fluently, translating your intent into the correct syntax instantly.</p>
             </div>
         </section>
 
         <footer>
-            <p>&copy; 2025 YUPS Project.</p>
+            <p>&copy; 2025 YUPS Project. <em>Don't Panic.</em></p>
             <div class="contact-info">
-                <p>Questions or suggestions?</p>
                 <p>
                     <a href="mailto:mail@javilopezg.com">mail@javilopezg.com</a>
                     &nbsp;|&nbsp;
-                    <a href="https://github.com/javilopezg/yups/issues">Report an Issue on GitHub</a>
+                    <a href="https://github.com/javilopezg/yups/issues">GitHub Issues</a>
                 </p>
             </div>
         </footer>
     </div>
 
 </body>
-
 </html>
