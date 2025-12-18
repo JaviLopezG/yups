@@ -81,14 +81,15 @@ def call_llm(context_json, user_query):
             "model": "gemma3:27b-it-qat", 
             "messages": [{"role": "system", "content": system_content}, {"role": "user", "content": user_query}],
             "max_tokens": 500, "temperature": 0.1, "stream": False
-            }
-        
+    }
+    
+    try:
         # Timeout: 3s for connection, 60s to answer
         response = requests.post(ONPREMISE_URL, json=payload, timeout=(3, 60))
+        if not response.ok:
+            logger.error(f"ON PREMISE API Error Body: {response.text}")
         response.raise_for_status()
-        
-        data = response.json()
-        return data['message']['content']
+        return response.json()
 
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
         print(f"⚠️ Marvin not responding ({e}). Fallback to HF...")
@@ -102,7 +103,7 @@ def call_llm(context_json, user_query):
     except Exception as e:
         return f"Panic: Marvin and HF are not responding. ({e})"
 
-def call_hf(system_content, user_query)
+def call_hf(system_content, user_query):
     headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": "application/json"}
 
     payload = {
@@ -158,6 +159,8 @@ def chat_handler():
         ai_text = ""
         if "choices" in hf_response_raw and hf_response_raw["choices"]:
             ai_text = hf_response_raw["choices"][0]["message"].get("content", "")
+        elif "message" in hf_response_raw:
+            ai_text = hf_response_raw["message"].get("content", "")
         elif "error" in hf_response_raw:
             return jsonify({"error": hf_response_raw["error"]}), 502
         

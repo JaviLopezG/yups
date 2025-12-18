@@ -24,8 +24,8 @@ gantt
     Python Client           :done,    des1, 2025-11-15, 2025-11-30
     Basic Backend           :done,    des1, 2025-11-21, 2025-11-30
     section Phase 2: Infrastructure  
-    Marvin Integration (Local LLM) :active,  des2, 2025-12-01, 15d  
-    Client Rewrite (Go)            :         des3, 2025-12-15, 45d  
+    Marvin Integration (Local LLM) :done,  des2, 2025-12-01, 15d  
+    Client Rewrite (Go)            :active,  des3, 2025-12-15, 45d  
     Fuzzy Matching                 :         des4, after des3, 15d  
     section Phase 3: Intelligence  
     Project Babel Fish (RAG)       :         des5, 2026-01-15, 60d  
@@ -53,9 +53,9 @@ Built with AI Assistance: Parts of this code were generated or refactored using 
 
 *Goal: Robustness, speed, and data sovereignty.*
 
-* \[ \] **Operation Marvin (Local LLM):**  
+* \[x\] **Operation Marvin (Local LLM):**  
   * \[x\] Deploy Ollama on local server (Marvin).  
-  * \[ \] Configure Trillian API to prioritize Marvin with HF fallback.  
+  * \[x\] Configure Trillian API to prioritize Marvin with HF fallback.  
 * \[ \] **The Great Rewrite (Go):**  
   * \[ \] Migrate client from Python to Go for fast, static binaries.  
   * \[ \] Implement auto-update system.  
