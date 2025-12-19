@@ -23,12 +23,34 @@ by querying an online LLM.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		setupLogger(debug)
 	},
+	Run: func(cmd *cobra.Command, args []string) {
+		if cnfMode {
+			handleCNF(args)
+			return
+		}
+		if ceMode {
+			handleCE(args)
+			return
+		}
+		if acMode {
+			handleAC()
+			return
+		}
+		if len(args) == 0 {
+			cmd.Help()
+			return
+		}
+		processQuery(args)
+		return
+	},
+}
+
+func processQuery(args []string) {
+	//TODO process user query
 }
 
 func Execute() {
-	if debug {
-		fmt.Println("Executing root command...")
-	}
+	slog.Debug("Executing yups")
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -40,13 +62,14 @@ func init() {
 
 	rootCmd.PersistentFlags().
 		StringVar(&cfgFile, "config", "",
-			"configuration file (default: $HOME/.yups/config.toml)")
+			"Configuration file (default: $HOME/.yups/config.toml)")
 	rootCmd.PersistentFlags().
 		BoolVarP(&debug, "debug", "d",
 			false, "set the log level to debug")
 
 	viper.BindPFlag("debug",
 		rootCmd.PersistentFlags().Lookup("debug"))
+
 }
 
 func initConfig() {
@@ -55,7 +78,7 @@ func initConfig() {
 	} else {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			fmt.Println(err)
+			slog.Error("Error getting home directory.", "Error", err)
 			os.Exit(1)
 		}
 
@@ -66,8 +89,11 @@ func initConfig() {
 
 	viper.AutomaticEnv()
 
-	if err := viper.ReadInConfig(); err == nil && debug {
-		fmt.Println("📄 Setting config file:", viper.ConfigFileUsed())
+	err := viper.ReadInConfig()
+	slog.Debug("Setting config file.", "ConfigFileUsed", viper.ConfigFileUsed())
+
+	if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+		handleAC()
 	}
 }
 
