@@ -40,20 +40,17 @@ func (h *YupsHandler) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// 1. Recolectamos los Atributos (key=val)
 	attrs := ""
 	r.Attrs(func(a slog.Attr) bool {
 		attrs += fmt.Sprintf(" %s=%v", a.Key, a.Value)
 		return true // continuar iterando
 	})
 
-	// 2. Formato para el ARCHIVO (con todos los extras)
 	if h.fileWriter != nil {
 		fmt.Fprintf(h.fileWriter, "[%s] [%s] %s%s\n",
 			r.Time.Format(time.RFC3339), r.Level, r.Message, attrs)
 	}
 
-	// 3. Formato para la CONSOLA
 	var out io.Writer = os.Stdout
 	var color string
 	var levelLabel string
@@ -74,7 +71,6 @@ func (h *YupsHandler) Handle(_ context.Context, r slog.Record) error {
 		out = os.Stderr
 	}
 
-	// En consola, ponemos los atributos al final con un color más tenue si quieres (ej. Gris)
 	fmt.Fprintf(out, "%s%s%s%s%s%s\n", color, levelLabel, r.Message, colorReset, colorWhite, attrs)
 	return nil
 }
