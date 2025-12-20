@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -35,6 +36,10 @@ by querying an online LLM.`,
 		}
 		if acMode {
 			handleAC()
+			return
+		}
+		if arMode {
+			handleAR()
 			return
 		}
 		if len(args) == 0 {
@@ -103,7 +108,9 @@ func setupLogger(isDebug bool) {
 		slog.Error("Error getting home directory.", "Error", err)
 		os.Exit(1)
 	}
-	logFile, err := os.OpenFile(home+"/.yups/log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	folder := filepath.Join(home, ".yups")
+	os.MkdirAll(folder, 0755)
+	logFile, err := os.OpenFile(folder+"/log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	level := slog.LevelInfo
 
 	if isDebug {

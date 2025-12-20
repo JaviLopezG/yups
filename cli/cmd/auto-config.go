@@ -13,16 +13,28 @@ import (
 )
 
 var acMode bool
+var arMode bool
+var sudoRunner = actualSudoRunner
+var yupsPath = "/usr/local/bin/yups"
 
 const (
 	hookStart = "# --- YUPS_HOOK_START ---"
 	hookEnd   = "# --- YUPS_HOOK_END ---"
-	yupsPath  = "/usr/local/bin/yups"
 )
 
 func init() {
 	rootCmd.Flags().BoolVar(&acMode, "auto-config",
 		false, "Set configuration to default values.")
+
+	rootCmd.Flags().BoolVar(&arMode, "auto-remove",
+		false, "Remove configuration and binaries.")
+}
+
+func handleAR() {
+	home, _ := os.UserHomeDir()
+	os.RemoveAll(filepath.Join(home, ".yups"))
+	updateBashrc(false)
+	runSudoCommand("rm", yupsPath)
 }
 
 func handleAC() {
@@ -41,7 +53,7 @@ func handleAC() {
 		viper.SafeWriteConfig()
 	}
 
-	if err := updateBashrc(); err != nil {
+	if err := updateBashrc(true); err != nil {
 		slog.Error("Failed to update .bashrc", "error", err)
 	} else {
 		slog.Info(".bashrc hooks updated successfully")
@@ -52,7 +64,7 @@ func handleAC() {
 	//TODO manage other shell different of bash
 }
 
-func updateBashrc() error {
+func updateBashrc(insert bool) error {
 	home, _ := os.UserHomeDir()
 	bashrcPath := filepath.Join(home, ".bashrc")
 
@@ -114,7 +126,12 @@ _yups_save_last_cmd() {
 trap '_yups_save_last_cmd' DEBUG
 %s`, hookStart, yupsPath, yupsPath, hookEnd)
 
-	finalContent := strings.TrimSpace(strings.Join(newLines, "\n")) + "\n" + bashHooks + "\n"
+	var finalContent string
+	if insert {
+		finalContent = strings.TrimSpace(strings.Join(newLines, "\n")) + "\n" + bashHooks + "\n"
+	} else {
+		finalContent = strings.TrimSpace(strings.Join(newLines, "\n"))
+	}
 	return os.WriteFile(bashrcPath, []byte(finalContent), 0644)
 }
 
@@ -138,14 +155,6 @@ func installProvidesHelper() {
 	}
 }
 
-func runSudoCommand(name string, args ...string) error {
-	allArgs := append([]string{name}, args...)
-	cmd := exec.Command("sudo", allArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
 func copyExecutableToPath() {
 	targetPath := yupsPath
 	currentPath, err := os.Executable()
@@ -166,4 +175,30 @@ func copyExecutableToPath() {
 	}
 
 	runSudoCommand("chmod", "+x", targetPath)
+}
+
+func runSudoCommand(name string, args ...string) error {
+	return sudoRunner(name, args...)
+}
+
+func actualSudoRunner(name string, args ...string) error {
+	if !isInteractive() && os.Geteuid() != 0 {
+		return fmt.Errorf("non-interactive terminal: sudo requires a TTY or root privileges")
+	}
+
+	allArgs := append([]string{name}, args...)
+	cmd := exec.Command("sudo", allArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
+func isInteractive() bool {
+	fileInfo, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fileInfo.Mode() & os.ModeCharDevice) != 0
 }
