@@ -25,4 +25,9 @@ func TestHandleAC(t *testing.T) {
 	err = viper.ReadInConfig()
 	assert.NoError(t, err)
 	assert.Equal(t, "info", viper.GetString("log_level"))
+	assert.Equal(t, "Linux", viper.GetString("os"))
+	assert.NotNil(t, viper.Get("pm"))
+	assert.NotNil(t, viper.Get("distro_id"))
+	assert.NotNil(t, viper.Get("distro_version"))
+	assert.NotNil(t, viper.Get("distro_pretty"))
 }
