@@ -177,6 +177,7 @@ func copyExecutableToPath() {
 	runSudoCommand("chmod", "+x", targetPath)
 }
 
+// TODO refactor to sys cmd executor
 func runSudoCommand(name string, args ...string) error {
 	return sudoRunner(name, args...)
 }
