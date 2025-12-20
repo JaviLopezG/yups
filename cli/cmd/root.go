@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/tu-usuario/yups/cli/internal/sys"
 )
 
 var (
@@ -50,7 +51,6 @@ func processQuery(args []string) {
 }
 
 func Execute() {
-	slog.Debug("Executing yups")
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -98,12 +98,21 @@ func initConfig() {
 }
 
 func setupLogger(isDebug bool) {
-	opts := &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+	home, err := os.UserHomeDir()
+	if err != nil {
+		slog.Error("Error getting home directory.", "Error", err)
+		os.Exit(1)
 	}
+	logFile, err := os.OpenFile(home+"/.yups/log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	level := slog.LevelInfo
+
 	if isDebug {
-		opts.Level = slog.LevelDebug
+		level = slog.LevelDebug
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, opts))
+	handler := sys.NewYupsHandler(logFile, level)
+	logger := slog.New(handler)
 	slog.SetDefault(logger)
+	if err != nil {
+		slog.Error("Error setting file log", "Error", err)
+	}
 }
