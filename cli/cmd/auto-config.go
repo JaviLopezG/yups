@@ -14,7 +14,6 @@ import (
 
 var acMode bool
 var arMode bool
-var sudoRunner = actualSudoRunner
 var yupsPath = "/usr/local/bin/yups"
 
 const (
@@ -34,7 +33,7 @@ func handleAR() {
 	home, _ := os.UserHomeDir()
 	os.RemoveAll(filepath.Join(home, ".yups"))
 	updateBashrc(false)
-	runSudoCommand("rm", yupsPath)
+	sys.RunSudoCommand("rm", yupsPath)
 }
 
 func handleAC() {
@@ -142,15 +141,15 @@ func installProvidesHelper() {
 	case "apt":
 		if _, err := exec.LookPath("apt-file"); err != nil {
 			slog.Info("Installing apt-file for advanced search...")
-			runSudoCommand("apt-get", "update")
-			runSudoCommand("apt-get", "install", "-y", "apt-file")
-			runSudoCommand("apt-file", "update")
+			sys.RunSudoCommand("apt-get", "update")
+			sys.RunSudoCommand("apt-get", "install", "-y", "apt-file")
+			sys.RunSudoCommand("apt-file", "update")
 		}
 	case "pacman":
 		if _, err := exec.LookPath("pkgfile"); err != nil {
 			slog.Info("Installing pkgfile for advanced search...")
-			runSudoCommand("pacman", "-S", "--noconfirm", "pkgfile")
-			runSudoCommand("pkgfile", "--update")
+			sys.RunSudoCommand("pacman", "-S", "--noconfirm", "pkgfile")
+			sys.RunSudoCommand("pkgfile", "--update")
 		}
 	}
 }
@@ -169,37 +168,10 @@ func copyExecutableToPath() {
 
 	slog.Info("Ensuring yups is in /usr/local/bin...", "from", currentPath)
 
-	if err := runSudoCommand("cp", currentPath, targetPath); err != nil {
+	if err := sys.RunSudoCommand("cp", currentPath, targetPath); err != nil {
 		slog.Error("Failed to copy executable to path", "error", err)
 		return
 	}
 
-	runSudoCommand("chmod", "+x", targetPath)
-}
-
-// TODO refactor to sys cmd executor
-func runSudoCommand(name string, args ...string) error {
-	return sudoRunner(name, args...)
-}
-
-func actualSudoRunner(name string, args ...string) error {
-	if !isInteractive() && os.Geteuid() != 0 {
-		return fmt.Errorf("non-interactive terminal: sudo requires a TTY or root privileges")
-	}
-
-	allArgs := append([]string{name}, args...)
-	cmd := exec.Command("sudo", allArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
-}
-
-func isInteractive() bool {
-	fileInfo, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fileInfo.Mode() & os.ModeCharDevice) != 0
+	sys.RunSudoCommand("chmod", "+x", targetPath)
 }

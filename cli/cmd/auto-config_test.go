@@ -8,18 +8,19 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/tu-usuario/yups/cli/internal/sys"
 )
 
 func TestMain(m *testing.M) {
-	originalRunner := sudoRunner
-	sudoRunner = func(name string, args ...string) error {
+	originalRunner := sys.SudoRunner
+	sys.SudoRunner = func(name string, args ...string) error {
 		fmt.Printf("Mock Sudo: %s %v\n", name, args)
 		return nil
 	}
 
 	code := m.Run()
 
-	sudoRunner = originalRunner
+	sys.SudoRunner = originalRunner
 	os.Exit(code)
 }
 

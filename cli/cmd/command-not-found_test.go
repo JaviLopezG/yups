@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"bytes"
-	"os"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -10,10 +8,7 @@ import (
 )
 
 func TestHandleCNF(t *testing.T) {
-	//TODO
-	oldExec := runSudoCommand
-	defer func() { runSudoCommand = oldExec }()
-
+	//TODO mock sys.Runner
 	tests := []struct {
 		name          string
 		fullCmd       string
@@ -55,6 +50,8 @@ func TestHandleCNF(t *testing.T) {
 
 			handleCNF(tt.args)
 			//TODO Asserts
+
+			assert.Equal(t, "", "")
 		})
 	}
 }

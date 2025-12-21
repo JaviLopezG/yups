@@ -61,8 +61,7 @@ func parseOsRelease(info *Info) {
 }
 
 func detectPM() string {
-	pms := []string{"dnf", "apt-get", "pacman", "zypper", "yum"}
-	for _, pm := range pms {
+	for _, pm := range PMTypes {
 		if _, err := exec.LookPath(pm); err == nil {
 			if pm == "apt-get" {
 				return "apt"
