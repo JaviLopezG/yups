@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,6 +17,7 @@ const (
 	colorRed    = "\033[31m"
 	colorGreen  = "\033[32m"
 	colorYellow = "\033[33m"
+	colorCyan   = "\033[36m"
 	colorWhite  = "\033[37m"
 )
 
@@ -77,6 +79,24 @@ func (h *YupsHandler) Handle(_ context.Context, r slog.Record) error {
 
 func Prompt(message string) {
 	fmt.Printf("%s%s %s[Y/n]:%s ", colorWhite, message, colorYellow, colorReset)
+}
+
+func Step(step int, steps int, message string) {
+	fmt.Printf("%s[%d/%d]%s %s...\n", colorCyan, step, step, colorReset, message)
+}
+
+type ProgressWriter struct {
+	Total, Current uint64
+	Message        string
+}
+
+func (pw *ProgressWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	pw.Current += uint64(n)
+	percentage := float64(pw.Current) / float64(pw.Total) * 100
+	fmt.Printf("\r\t📥 %s: [%-50s] %.1f%%", pw.Message,
+		strings.Repeat("=", int(percentage/2)), percentage)
+	return n, nil
 }
 
 func (h *YupsHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }

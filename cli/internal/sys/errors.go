@@ -18,8 +18,8 @@ type YupsError struct {
 	Err     error
 }
 
-func (e *YupsError) Error() string {
+func (e YupsError) Error() string {
 	return fmt.Sprintf("Yups error (code %d): %s \n Inner: %v", e.Code, e.Message, e.Err)
 }
 
-func (e *YupsError) Unwrap() error { return e.Err }
+func (e YupsError) Unwrap() error { return e.Err }

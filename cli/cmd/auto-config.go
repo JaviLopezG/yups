@@ -1,20 +1,29 @@
 package cmd
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tu-usuario/yups/cli/internal/sys"
+	"golang.org/x/sync/errgroup"
 )
 
 var acMode bool
 var arMode bool
 var yupsPath = "/usr/local/bin/yups"
+var modelUri = "https://huggingface.co/bartowski/google_functiongemma-270m-it-GGUF/resolve/main/google_functiongemma-270m-it-Q8_0.gguf"
+var modelHash = "f50fbac8552d090863d5fefa983d24ac1ca37df23b1c77e3bbbd80aeb3b208c4"
 
 const (
 	hookStart = "# --- YUPS_HOOK_START ---"
@@ -38,8 +47,48 @@ func handleAR() {
 
 func handleAC() {
 	slog.Info("Straw-boss (AC Mode).")
+	start := time.Now()
+	const steps = 6
 
+	sys.Step(1, steps, "Getting system info")
 	info := sys.GetSystemInfo()
+	sys.Step(2, steps, "Saving config file")
+	saveConfigFile(info)
+
+	sys.Step(3, steps, "Setting bash integration")
+	if err := updateBashrc(true); err != nil {
+		slog.Error("Failed to update .bashrc",
+			"error", err)
+		slog.Warn("Yups will work with limited functionality.")
+	} else {
+		slog.Info(".bashrc hooks updated successfully")
+	}
+
+	g, ctx := errgroup.WithContext(context.Background())
+	g.Go(func() error {
+		sys.Step(4, steps, "Installing 'provides' helper")
+		installProvidesHelper()
+		return nil
+	})
+	g.Go(func() error {
+		sys.Step(5, steps, "Installing yups")
+		copyExecutableToPath()
+		return nil
+	})
+	g.Go(func() error {
+		sys.Step(6, steps, "Downloading model")
+		return downloadModel(ctx)
+	})
+
+	if err := g.Wait(); err != nil {
+		slog.Error("Error config yups", "internal", err)
+		os.Exit(1)
+	}
+
+	slog.Info("Yups configuration completed in ", time.Since(start).Round(time.Second))
+}
+
+func saveConfigFile(info sys.Info) {
 	viper.Set("os", info.OS)
 	viper.Set("pm", info.PM)
 	viper.Set("distro_id", info.DistroID)
@@ -51,16 +100,6 @@ func handleAC() {
 		os.MkdirAll(filepath.Dir(viper.ConfigFileUsed()), 0755)
 		viper.SafeWriteConfig()
 	}
-
-	if err := updateBashrc(true); err != nil {
-		slog.Error("Failed to update .bashrc", "error", err)
-	} else {
-		slog.Info(".bashrc hooks updated successfully")
-	}
-
-	installProvidesHelper()
-	copyExecutableToPath()
-	//TODO manage other shell different of bash
 }
 
 func updateBashrc(insert bool) error {
@@ -174,4 +213,42 @@ func copyExecutableToPath() {
 	}
 
 	sys.RunSudoCommand("chmod", "+x", targetPath)
+}
+
+func downloadModel(ctx context.Context) error {
+	home, _ := os.UserHomeDir()
+	path := filepath.Join(home, ".yups/models/gemma-3-270m.gguf")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+
+	os.MkdirAll(filepath.Dir(path), 0755)
+	resp, err := http.Get(modelUri)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	out, _ := os.Create(path + ".tmp")
+	defer out.Close()
+
+	counter := &sys.ProgressWriter{Total: uint64(resp.ContentLength), Message: "Downloading model"}
+	_, _ = io.Copy(out, io.TeeReader(resp.Body, counter))
+
+	fmt.Print("\n")
+
+	os.Rename(path+".tmp", path)
+
+	if !verifyChecksum(path, modelHash) {
+		return sys.YupsError{Message: "Checksum verification failed"}
+	}
+	return nil
+}
+
+func verifyChecksum(path, expected string) bool {
+	f, _ := os.Open(path)
+	defer f.Close()
+	h := sha256.New()
+	_, _ = io.Copy(h, f)
+	return hex.EncodeToString(h.Sum(nil)) == expected
 }
