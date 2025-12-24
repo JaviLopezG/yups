@@ -22,8 +22,10 @@ var rootCmd = &cobra.Command{
 	Long: `The YUPS CLI handles your command not found and other
 prompt errors. It can solve any situation or requirement 
 by querying an online LLM.`,
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		setupLogger(debug)
+
+		return checkConfig()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		if cnfMode {
@@ -51,14 +53,41 @@ by querying an online LLM.`,
 	},
 }
 
+func checkConfig() error {
+	err := viper.ReadInConfig()
+	if err == nil {
+		return nil
+	}
+
+	if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+		slog.Warn("Configuration file not found.")
+
+		answer, _ := sys.PromptConfirmReplacement("yups --auto-config")
+
+		if answer {
+			return nil
+		}
+	}
+
+	return sys.YupsError{
+		"Yups needs to be configured before execution. Try 'yups --auto-config'.",
+		sys.ExitUsage, err,
+	}
+}
+
 func processQuery(args []string) {
 	//TODO process user query
 }
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		yErr, ok := err.(sys.YupsError)
+		if !ok {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		fmt.Println(yErr.Message)
+		os.Exit(yErr.Code)
 	}
 }
 
@@ -94,12 +123,8 @@ func initConfig() {
 
 	viper.AutomaticEnv()
 
-	err := viper.ReadInConfig()
+	viper.ReadInConfig()
 	slog.Debug("Setting config file.", "ConfigFileUsed", viper.ConfigFileUsed())
-
-	if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-		handleAC()
-	}
 }
 
 func setupLogger(isDebug bool) {

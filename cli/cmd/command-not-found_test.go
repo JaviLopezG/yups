@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/tu-usuario/yups/cli/internal/sys"
 )
 
 func TestHandleCNF(t *testing.T) {
@@ -54,4 +56,23 @@ func TestHandleCNF(t *testing.T) {
 			assert.Equal(t, "", "")
 		})
 	}
+}
+
+func TestHandleCNF_Mocked(t *testing.T) {
+	oldRunner := sys.Runner
+	defer func() { sys.Runner = oldRunner }()
+
+	sys.Runner = func(provides string, args ...string) (string, error) {
+		if strings.Contains(provides, "provides") {
+			return "nano-8.5-2.fc43.x86_64", nil
+		}
+		return "", nil
+	}
+
+	viper.Set("pm", "dnf")
+	viper.Set("YUPS_LAST_CMD", "nano")
+
+	handleCNF([]string{"nano"})
+
+	//TODO Agrega aserciones aquí
 }

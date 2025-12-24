@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -23,11 +24,22 @@ func handleCNF(args []string) {
 		"query", query)
 
 	lastCommand := viper.GetString("YUPS_LAST_CMD")
+	slog.Debug("Last command: ", lastCommand)
 	command, _ := parser.ExtractEffectiveCommand(lastCommand)
 	//TODO if command is in sys.PMTypes analyze and replace
+	if slices.Contains(sys.PMTypes, command) {
+		//TODO identify the subcommand
+		//TODO identify the packages
+		//TODO suggest correct command Y/n
+		//TODO if not suggest yups query for deep analysis Y/n
+		return
+	}
 	//TODO if command is similar to one in scanned suggest
+	//TODO is command in currentCommands with fuzzy search
+	//TODO suggest correct command Y/n
+	//TODO if not suggest yups query for deep analysis Y/n
 	//TODO execute provides, parse output and suggest install
-	replacer := strings.NewReplacer(sys.PackagesString, command)
+	replacer := strings.NewReplacer(sys.ArgumentString, command)
 	provides := replacer.Replace(
 		sys.PMCommands["provides"].Commands[viper.GetString("pm")])
 	output, err := sys.RunCommand(provides)

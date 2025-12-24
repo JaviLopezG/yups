@@ -3,8 +3,11 @@ package sys
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 
 	"golang.org/x/term"
 )
@@ -58,4 +61,37 @@ func actualRunner(provides string, args ...string) (string, error) {
 		err = errors.New(errb.String())
 	}
 	return outb.String(), err
+}
+
+func PromptConfirmReplacement(command string) (bool, error) {
+	if !isInteractive() {
+		return false, nil
+	}
+
+	Prompt("Suggestion: " + command)
+
+	var response string
+	_, err := fmt.Scanln(&response)
+	if err != nil && err.Error() != "unexpected newline" {
+		return false, err
+	}
+
+	response = strings.ToLower(strings.TrimSpace(response))
+	if response == "" || response == "y" || response == "yes" {
+		slog.Info("User accepted command execution", "command", command)
+
+		subs := strings.Split(command, " ")
+		return true, actualRunnerReplacement(subs[0], subs[1:]...)
+	}
+	slog.Info("User rejected command execution", "command", command)
+	return false, nil
+}
+
+func actualRunnerReplacement(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
 }

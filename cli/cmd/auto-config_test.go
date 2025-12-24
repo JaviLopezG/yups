@@ -46,3 +46,17 @@ func TestHandleAC(t *testing.T) {
 	assert.NotNil(t, viper.Get("distro_version"))
 	assert.NotNil(t, viper.Get("distro_pretty"))
 }
+
+func TestHandleAR(t *testing.T) {
+	tmpDir := t.TempDir()
+	viper.SetConfigFile(filepath.Join(tmpDir, "config.toml"))
+
+	home, _ := os.UserHomeDir()
+	yupsDir := filepath.Join(home, ".yups")
+	os.MkdirAll(yupsDir, 0755)
+
+	handleAR()
+
+	_, err := os.Stat(yupsDir)
+	assert.True(t, os.IsNotExist(err), "La carpeta .yups debería haber sido eliminada")
+}

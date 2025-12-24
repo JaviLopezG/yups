@@ -2,52 +2,52 @@ package sys
 
 type PMAction struct {
 	Help          string
-	TakesPackages bool
+	TakesArgument bool
 	RequiresSudo  bool
 	Commands      map[string]string
 }
 
 var PMTypes = []string{"dnf", "apt-get", "apt", "pacman", "zypper", "yum"}
 
-const PackagesString = "{packages}"
+const ArgumentString = "{value}"
 
 var PMCommands = map[string]PMAction{
 	"install": {
 		Help:          "Install one or more packages.",
-		TakesPackages: true,
+		TakesArgument: true,
 		RequiresSudo:  true,
 		Commands: map[string]string{
-			"apt":    "apt install {packages}",
-			"dnf":    "dnf install {packages}",
-			"pacman": "pacman -S {packages}",
-			"zypper": "zypper install {packages}",
+			"apt":    "apt install {value}",
+			"dnf":    "dnf install {value}",
+			"pacman": "pacman -S {value}",
+			"zypper": "zypper install {value}",
 		},
 	},
 	"remove": {
 		Help:          "Remove one or more packages.",
-		TakesPackages: true,
+		TakesArgument: true,
 		RequiresSudo:  true,
 		Commands: map[string]string{
-			"apt":    "apt remove {packages}",
-			"dnf":    "dnf remove {packages}",
-			"pacman": "pacman -R {packages}",
-			"zypper": "zypper remove {packages}",
+			"apt":    "apt remove {value}",
+			"dnf":    "dnf remove {value}",
+			"pacman": "pacman -R {value}",
+			"zypper": "zypper remove {value}",
 		},
 	},
 	"search": {
 		Help:          "Search for available packages.",
-		TakesPackages: true,
+		TakesArgument: true,
 		RequiresSudo:  false,
 		Commands: map[string]string{
-			"apt":    "apt search {packages}",
-			"dnf":    "dnf search -C {packages}",
-			"pacman": "pacman -Ss {packages}",
-			"zypper": "zypper --no-refresh search {packages}",
+			"apt":    "apt search {value}",
+			"dnf":    "dnf search -C {value}",
+			"pacman": "pacman -Ss {value}",
+			"zypper": "zypper --no-refresh search {value}",
 		},
 	},
 	"autoremove": {
 		Help:          "Remove unused packages (cleanup).",
-		TakesPackages: false,
+		TakesArgument: false,
 		RequiresSudo:  true,
 		Commands: map[string]string{
 			"apt":    "apt autoremove",
@@ -58,7 +58,7 @@ var PMCommands = map[string]PMAction{
 	},
 	"upgrade": {
 		Help:          "Upgrade all installed packages.",
-		TakesPackages: false,
+		TakesArgument: false,
 		RequiresSudo:  true,
 		Commands: map[string]string{
 			"apt":    "apt upgrade",
@@ -69,7 +69,7 @@ var PMCommands = map[string]PMAction{
 	},
 	"update": {
 		Help:          "Refresh package repository information.",
-		TakesPackages: false,
+		TakesArgument: false,
 		RequiresSudo:  true,
 		Commands: map[string]string{
 			"apt":    "apt update",
@@ -80,13 +80,13 @@ var PMCommands = map[string]PMAction{
 	},
 	"provides": {
 		Help:          "Find which package provides a file or command.",
-		TakesPackages: true,
+		TakesArgument: true,
 		RequiresSudo:  false,
 		Commands: map[string]string{
-			"apt":    "apt-file search {packages}",
-			"dnf":    "dnf provides -C {packages}",
-			"pacman": "pacman -F {packages}",
-			"zypper": "zypper --no-refresh what-provides {packages}",
+			"apt":    "apt-file  search --regexp \"^/.*bin/{value}$\"",
+			"dnf":    "dnf provides -C {value}",
+			"pacman": "pacman -F {value}",
+			"zypper": "zypper --no-refresh what-provides {value}",
 		},
 	},
 }

@@ -75,5 +75,9 @@ func (h *YupsHandler) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 
+func Prompt(message string) {
+	fmt.Printf("%s%s %s[Y/n]:%s ", colorWhite, message, colorYellow, colorReset)
+}
+
 func (h *YupsHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
 func (h *YupsHandler) WithGroup(name string) slog.Handler       { return h }
