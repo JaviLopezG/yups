@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/img/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/img/favicon.svg" />
+    <link rel="shortcut icon" href="/img/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/img/apple-touch-icon.png" />
+    <link rel="manifest" href="/img/site.webmanifest" />
+    <title>YUPS - Your Universal Package Straw-boss</title>
+    <style>
+        /* --- COLOR VARIABLES (Your Palette) --- */
+        :root {
+            --bg-color: #fbf7eb;
+            /* Your cream background */
+            --logo-gold: #e6b117;
+            /* Your egg yellow */
+            --text-dark: #2c2c2c;
+            /* Dark text for contrast */
+            --terminal-bg: #1e1e1e;
+            /* Terminal background */
+            --link-blue: #0066cc;
+        }
+
+        /* Reset and Base Styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-dark);
+            line-height: 1.6;
+        }
+
+        a {
+            text-decoration: none;
+            color: var(--link-blue);
+            font-weight: 600;
+            transition: opacity 0.2s;
+        }
+
+        a:hover {
+            opacity: 0.8;
+            text-decoration: underline;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Header & Logo */
+        header {
+            text-align: center;
+            padding: 4rem 0 2rem;
+        }
+
+        .logo-img {
+            /* Adjust size but NOT background, so it blends with the page */
+            width: 180px;
+            height: auto;
+            display: block;
+            margin: 0 auto 1rem;
+            border-radius: 12px;
+            /* A soft touch in case the JPG has borders */
+            mix-blend-mode: multiply;
+            /* CSS Trick: makes the white/cream of the JPG transparent */
+        }
+
+        h1 {
+            font-size: 3rem;
+            font-weight: 800;
+            color: var(--text-dark);
+            margin-bottom: 0.5rem;
+        }
+
+        .tagline {
+            font-size: 1.4rem;
+            color: #666;
+            font-weight: 300;
+        }
+
+        /* Hero Section */
+        .hero {
+            text-align: center;
+            padding: 1rem 0 3rem;
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            max-width: 700px;
+            margin: 0 auto 2rem;
+            color: #444;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin-bottom: 2rem;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 0.8rem 1.8rem;
+            border-radius: 8px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .btn-primary {
+            background-color: var(--logo-gold);
+            color: #fff;
+            box-shadow: 0 4px 6px rgba(230, 177, 23, 0.3);
+            border: none;
+        }
+
+        .btn-primary:hover {
+            background-color: #d4a00f;
+            color: #fff;
+            text-decoration: none;
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            color: var(--text-dark);
+            border: 2px solid var(--text-dark);
+        }
+
+        .btn-secondary:hover {
+            background-color: var(--text-dark);
+            color: #fff;
+            text-decoration: none;
+            transform: translateY(-2px);
+        }
+
+        /* Install Block */
+        .install-block {
+            background-color: #fff;
+            border: 2px solid var(--logo-gold);
+            border-radius: 8px;
+            padding: 1.5rem;
+            max-width: 600px;
+            margin: 0 auto 3rem;
+            text-align: left;
+            position: relative;
+        }
+
+        .install-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            color: #888;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+
+        .code-snippet {
+            font-family: 'Fira Code', 'Source Code Pro', monospace;
+            background-color: #f4f4f4;
+            padding: 0.8rem;
+            border-radius: 4px;
+            color: #333;
+            font-size: 0.95rem;
+            display: block;
+            word-break: break-all;
+            border-left: 4px solid var(--logo-gold);
+        }
+
+        /* Terminal Demo Section */
+        .terminal-wrapper {
+            margin: 3rem auto;
+            max-width: 850px;
+        }
+
+        .terminal-window {
+            background-color: var(--terminal-bg);
+            border-radius: 10px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+            font-family: 'Fira Code', 'Courier New', monospace;
+            text-align: left;
+        }
+
+        .terminal-header {
+            background-color: #2d2d2d;
+            padding: 0.8rem 1rem;
+            display: flex;
+            align-items: center;
+        }
+
+        .window-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .control {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .close {
+            background-color: #ff5f56;
+        }
+
+        .min {
+            background-color: #ffbd2e;
+        }
+
+        .max {
+            background-color: #27c93f;
+        }
+
+        .window-title {
+            margin-left: 1rem;
+            color: #999;
+            font-size: 0.85rem;
+        }
+
+        .terminal-body {
+            padding: 1.5rem;
+            color: #f0f0f0;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        /* Terminal Colors */
+        .prompt-user {
+            color: #27c93f;
+            font-weight: bold;
+        }
+
+        .prompt-path {
+            color: #4dabf7;
+            font-weight: bold;
+        }
+
+        .cmd {
+            color: #fff;
+        }
+
+        .output {
+            color: #aaa;
+        }
+
+        .yups-sys {
+            color: var(--logo-gold);
+            font-weight: bold;
+        }
+
+        .yups-sugg {
+            color: #27c93f;
+            font-weight: bold;
+        }
+
+        .yups-err {
+            color: #ff5f56;
+            font-weight: bold;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 8px;
+            height: 18px;
+            background: #ccc;
+            animation: blink 1s infinite;
+            vertical-align: middle;
+        }
+
+        @keyframes blink {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0;
+            }
+        }
+
+        /* Features Grid */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            padding: 2rem 0;
+            margin-bottom: 4rem;
+        }
+
+        .feature-card {
+            background: #fff;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+            transition: transform 0.3s ease;
+            text-align: center;
+            border-bottom: 4px solid transparent;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-bottom-color: var(--logo-gold);
+        }
+
+        .emoji {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            display: block;
+        }
+
+        .feature-card h3 {
+            margin-bottom: 0.5rem;
+            color: var(--text-dark);
+        }
+
+        .feature-card p {
+            color: #666;
+            font-size: 0.95rem;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 3rem 0;
+            border-top: 1px solid #e0e0e0;
+            margin-top: 2rem;
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .contact-info {
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <header>
+            <!-- 
+                The mix-blend-mode: multiply will help so that if the JPG 
+                is not EXACTLY the same as the background, the white border is disguised 
+            -->
+            <img src="img/logo_trans.png" alt="YUPS Logo" class="logo-img">
+            <h1>YUPS</h1>
+            <p class="tagline">Your Universal Package Straw-boss</p>
+        </header>
+
+        <section class="hero">
+            <p>No more package frustration. YUPS is the intelligent assistant that brings AI to your command line,
+                understanding what you want to install and translating it for your system.</p>
+
+            <div class="cta-buttons">
+                <a href="https://github.com/javilopezg/yups" class="btn btn-primary">View on GitHub</a>
+                <a href="#install" class="btn btn-secondary">Install Now</a>
+            </div>
+        </section>
+
+        <!-- INSTALLATION SECTION -->
+        <section id="install" class="install-block">
+            <span class="install-title">Quick Install (Linux)</span>
+            <div class="code-snippet">
+                git clone https://github.com/javilopezg/yups.git<br>
+                cd yups<br>
+                ./install.sh
+            </div>
+            <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;">
+                * Requires Python 3.7+ <a href="https://github.com/javilopezg/yups/blob/main/README.md">View full
+                    README.</a>
+            </p>
+        </section>
+
+        <!-- TERMINAL DEMO -->
+        <section class="terminal-wrapper">
+            <div class="terminal-window">
+                <div class="terminal-header">
+                    <div class="window-controls">
+                        <div class="control close"></div>
+                        <div class="control min"></div>
+                        <div class="control max"></div>
+                    </div>
+                    <span class="window-title">javi@fedora:~/projects</span>
+                </div>
+                <div class="terminal-body">
+                    <!-- Example 1: Command Not Found Handler -->
+                    <div>
+                        <span class="prompt-user">javi@fedora</span>:<span class="prompt-path">~</span>$ <span
+                            class="cmd">apt install nano</span><br>
+                        <span class="yups-sys">YUPS: Command 'apt' not found. Maybe you meant 'dnf'?</span><br>
+                        <span class="yups-sys">YUPS: Try 'yups apt install nano'</span><br>
+                        <br>
+                    </div>
+
+                    <!-- Example 2: Typo Fixer -->
+                    <div>
+                        <span class="prompt-user">javi@fedora</span>:<span class="prompt-path">~</span>$ <span
+                            class="cmd">dnf instal nano</span><br>
+                        <span class="output">No such command: instal. Please use /usr/bin/dnf --help...</span><br>
+                        <span class="yups-sys">---</span><br>
+                        <span class="yups-err">YUPS: The command 'dnf instal nano' failed (Code: 1).</span><br>
+                        <span class="yups-sys">YUPS: Did you mean 'install'?</span><br>
+                        <span class="yups-sys">YUPS: Try 'yups dnf instal nano'</span><br>
+                        <span class="yups-sys">---</span><br>
+                        <br>
+                    </div>
+
+                    <!-- Example 3: Natural Language AI -->
+                    <div>
+                        <span class="prompt-user">javi@fedora</span>:<span class="prompt-path">~</span>$ <span
+                            class="cmd">yups I want to install a professional video editor</span><br>
+                        <span class="yups-sys">☁️ Asking YUPS Cloud...</span><br>
+                        <span class="yups-sys">YUPS: Kdenlive is a robust choice for Linux video editing.</span><br>
+                        <span class="yups-sugg">Suggested command: sudo dnf install kdenlive</span><br>
+                        Execute this command? [y/N] <span class="cursor"></span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- FEATURES -->
+        <section class="features">
+            <div class="feature-card">
+                <span class="emoji">🧠</span>
+                <h3>AI Powered</h3>
+                <p>Uses advanced LLMs to understand natural language. Ask for what you need in English or Spanish and
+                    YUPS will find the package.</p>
+            </div>
+            <div class="feature-card">
+                <span class="emoji">🐧</span>
+                <h3>Distro Agnostic</h3>
+                <p>Do you use Fedora, Ubuntu, Arch, or openSUSE? YUPS detects your system and translates your intentions
+                    into the correct commands for <code>dnf</code>, <code>apt</code>, <code>pacman</code>, or
+                    <code>zypper</code>.
+                </p>
+            </div>
+            <div class="feature-card">
+                <span class="emoji">🛡️</span>
+                <h3>Guardian</h3>
+                <p>Intercepts "command not found" errors and typos before you get frustrated, offering immediate
+                    suggestions.</p>
+            </div>
+        </section>
+
+        <footer>
+            <p>&copy; 2025 YUPS Project.</p>
+            <div class="contact-info">
+                <p>Questions or suggestions?</p>
+                <p>
+                    <a href="mailto:mail@javilopezg.com">mail@javilopezg.com</a>
+                    &nbsp;|&nbsp;
+                    <a href="https://github.com/javilopezg/yups/issues">Report an Issue on GitHub</a>
+                </p>
+            </div>
+        </footer>
+    </div>
+
+</body>
+
+</html>

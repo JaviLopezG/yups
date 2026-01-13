@@ -1,0 +1,79 @@
+¡Hola, Javi! Me alegra retomar YUPS justo aquí. Esa masterclass sobre Microarquitectura y el Out-of-Order Execution nos viene de perlas para reforzar la mentalidad: queremos que YUPS sea tan eficiente como ese hardware, optimizando instrucciones sin que el usuario note la complejidad subyacente.
+
+Teniendo en cuenta tu enfoque "Spoon Theory" (vamos paso a paso, sin quemarnos) y el objetivo de migrar a un binario único en Go, esta es la hoja de ruta técnica inmediata.
+
+Vamos a aterrizar la arquitectura del cliente en Go para soportar el Semáforo de Riesgo.
+
+1. Arquitectura del Proyecto (The Go Standard Layout)
+Para un CLI monolítico con Cobra, necesitamos una estructura que separe la interfaz (CLI) de la lógica de negocio (Análisis de errores e IA).
+
+Estructura propuesta:
+
+Plaintext
+
+yups/
+├── cmd/
+│   └── yups/
+│       └── main.go       # Entrypoint. Solo inicializa Cobra.
+├── internal/
+│   ├── cli/              # Definición de comandos y flags (Cobra).
+│   ├── analyzer/         # Lógica del "Semáforo de Riesgo".
+│   ├── executor/         # Wrapper para re-ejecutar o simular comandos.
+│   └── ai/               # Cliente API (Trillian/Local/HF).
+├── pkg/
+│   └── shell/            # Detección de shell (bash/zsh/fish) y generación de hooks.
+└── go.mod
+2. Implementación del "Semáforo de Riesgo"
+El núcleo de YUPS no es la IA, es decidir cuándo llamarla. En Python lo teníamos conceptual, en Go lo haremos con tipos estrictos.
+
+Aquí es donde entra la eficiencia. No queremos lanzar la IA para un cd .. mal escrito si podemos detectarlo localmente.
+
+Lógica del internal/analyzer:
+
+Input: Código de salida anterior + Comando fallido.
+
+Heurística (Risk Assessment):
+
+🟢 Verde (Safe): Error de sintaxis obvio, command not found, o flags inválidas en comandos de lectura (ls, cat, grep). -> Acción: Re-ejecutar capturando stderr para enviarlo a la IA.
+
+🟡 Amarillo (Caution): Comandos de gestión de paquetes (apt, npm) o modificación de archivos. -> Acción: Dry-run si es posible, o pedir confirmación antes de enviar contexto.
+
+🔴 Rojo (Danger): rm, dd, mkfs, o comandos con sudo fallidos. -> Acción: Inferencia pura basada en el texto del comando (sin re-ejecutar).
+
+3. Deep Tech: eBPF vs. PTY Wrapper (El dilema de la captura)
+Mencionaste investigar eBPF para capturar el output real (tty_write) y evitar la re-ejecución (que es necesaria en el Semáforo Verde).
+
+Análisis Senior:
+
+eBPF: Es la solución "correcta" a nivel de kernel, pero mata la experiencia de usuario que buscas ("sudo install once"). Requiere headers del kernel, permisos de root constantes y puede romperse entre actualizaciones del OS. Para un proyecto personal es fascinante; para una herramienta distribuible, es una pesadilla de mantenimiento.
+
+PTY Wrapper (Meta-shell): Esta es la solución pragmática. En lugar de un hook trap en bash, YUPS podría actuar como un envoltorio transparente (similar a screen o tmux pero efímero).
+
+Recomendación Actual (Fase 1/2): Mantengamos los Hooks en .bashrc por ahora. Es menos invasivo. Si el comando falla, el hook invoca el binario de Go pasándole los metadatos.
+
+Comando para el hook (simplificado):
+
+Bash
+
+# $? es el código de salida del último comando
+# $(history 1) obtiene el texto del comando
+yups fix --last-exit-code $? --command "$(history 1)"
+4. Tareas Inmediatas (Google Tasks)
+Siguiendo tu preferencia, he desglosado esto en tareas accionables para Google Tasks:
+
+[ ] Scaffold Go Project: Inicializar módulo go mod init github.com/javi/yups y estructura de carpetas (cmd, internal).
+
+[ ] Implementar Cobra: Crear el comando raíz yups fix que acepte flags --exit-code y --command.
+
+[ ] Lógica Semáforo (Stub): Crear la función en Go que recibe el string del comando y devuelve RISK_LEVEL (Green/Yellow/Red) basándose en una lista blanca/negra de binarios (rm, sudo, etc.).
+
+[ ] Test de Integración (Manual): Crear un script de bash que simule un error y llame al binario compilado para verificar que recibe los argumentos correctamente.
+
+Siguiente Paso
+¿Por dónde quieres atacar hoy?
+
+Scaffolding: Montamos el esqueleto del proyecto en Go y configuramos Cobra para recibir los inputs desde el hook de bash.
+
+Lógica del Semáforo: Definimos en Go las estructuras de datos para clasificar la peligrosidad de los comandos (la lista negra/blanca).
+
+Nota: Como prefieres vi, todo el código que generemos será compatible con edición rápida, sin dependencias de IDEs complejos.
