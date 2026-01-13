@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/javilopezg/yups/cli/internal/sys"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/tu-usuario/yups/cli/internal/sys"
 )
 
 var (

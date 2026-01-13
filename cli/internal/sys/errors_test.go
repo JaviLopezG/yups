@@ -13,7 +13,7 @@ func TestYupsError_Error(t *testing.T) {
 	e := &YupsError{
 		Message: "something went wrong",
 		Code:    ExitUsage,
-		Inner:   inner,
+		Err:     inner,
 	}
 
 	out := e.Error()

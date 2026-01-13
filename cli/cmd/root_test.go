@@ -3,9 +3,9 @@ package cmd
 import (
 	"testing"
 
+	"github.com/javilopezg/yups/cli/internal/sys"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	"github.com/tu-usuario/yups/cli/internal/sys"
 )
 
 func TestCheckConfig_UserResponse(t *testing.T) {

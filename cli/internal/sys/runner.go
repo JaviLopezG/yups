@@ -14,6 +14,7 @@ import (
 
 var SudoRunner = actualSudoRunner
 var Runner = actualRunner
+var PromptConfirmReplacement = actualPromptConfirmReplacement
 
 func RunSudoCommand(name string, args ...string) error {
 	return SudoRunner(name, args...)
@@ -63,7 +64,7 @@ func actualRunner(provides string, args ...string) (string, error) {
 	return outb.String(), err
 }
 
-func PromptConfirmReplacement(command string) (bool, error) {
+func actualPromptConfirmReplacement(command string) (bool, error) {
 	if !isInteractive() {
 		return false, nil
 	}

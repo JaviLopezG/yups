@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/javilopezg/yups/cli/internal/sys"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	"github.com/tu-usuario/yups/cli/internal/sys"
 )
 
 func TestHandleCNF(t *testing.T) {

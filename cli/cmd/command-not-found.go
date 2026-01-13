@@ -5,9 +5,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/javilopezg/yups/cli/internal/parser"
+	"github.com/javilopezg/yups/cli/internal/sys"
 	"github.com/spf13/viper"
-	"github.com/tu-usuario/yups/cli/internal/parser"
-	"github.com/tu-usuario/yups/cli/internal/sys"
 )
 
 var cnfMode bool
@@ -24,7 +24,7 @@ func handleCNF(args []string) {
 		"query", query)
 
 	lastCommand := viper.GetString("YUPS_LAST_CMD")
-	slog.Debug("Last command: ", lastCommand)
+	slog.Debug("Last command: ", "command", lastCommand)
 	command, _ := parser.ExtractEffectiveCommand(lastCommand)
 	//TODO if command is in sys.PMTypes analyze and replace
 	if slices.Contains(sys.PMTypes, command) {

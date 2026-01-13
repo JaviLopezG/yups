@@ -3,7 +3,7 @@ package main
 import (
 	"log/slog"
 
-	"github.com/tu-usuario/yups/cli/cmd"
+	"github.com/javilopezg/yups/cli/cmd"
 )
 
 func main() {

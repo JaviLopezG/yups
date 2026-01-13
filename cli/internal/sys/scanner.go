@@ -1,10 +1,8 @@
 package sys
 
 import (
-	//"io/fs"
 	"os"
 	"path/filepath"
-	//"strings"
 )
 
 // ListAllCommands devuelve un slice con todos los binarios ejecutables en el PATH

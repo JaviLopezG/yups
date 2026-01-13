@@ -14,15 +14,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/javilopezg/yups/cli/internal/sys"
 	"github.com/spf13/viper"
-	"github.com/tu-usuario/yups/cli/internal/sys"
 	"golang.org/x/sync/errgroup"
 )
 
 var acMode bool
 var arMode bool
 var yupsPath = "/usr/local/bin/yups"
-var modelUri = "https://huggingface.co/bartowski/google_functiongemma-270m-it-GGUF/resolve/main/google_functiongemma-270m-it-Q8_0.gguf"
+var modelUri = "https://cas-bridge.xethub.hf.co/xet-bridge-us/69442d64307f9531f19aa7b6/ebc700d1689330e46fa2710c4bc5618ce1d991fe3ad952e56e2b4caedcb18aa2?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=cas%2F20251227%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20251227T085209Z&X-Amz-Expires=3600&X-Amz-Signature=436ba6ecdff7b4c5174bd70f459d373c675f554b0886462b820a8f8bb2bc8ee4&X-Amz-SignedHeaders=host&X-Xet-Cas-Uid=69225844e51f05ecb1b9574a&response-content-disposition=attachment%3B+filename*%3DUTF-8%27%27functiongemma-270m-it-q8_0.gguf%3B+filename%3D%22functiongemma-270m-it-q8_0.gguf%22%3B&x-id=GetObject&Expires=1766829129&Policy=eyJTdGF0ZW1lbnQiOlt7IkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc2NjgyOTEyOX19LCJSZXNvdXJjZSI6Imh0dHBzOi8vY2FzLWJyaWRnZS54ZXRodWIuaGYuY28veGV0LWJyaWRnZS11cy82OTQ0MmQ2NDMwN2Y5NTMxZjE5YWE3YjYvZWJjNzAwZDE2ODkzMzBlNDZmYTI3MTBjNGJjNTYxOGNlMWQ5OTFmZTNhZDk1MmU1NmUyYjRjYWVkY2IxOGFhMioifV19&Signature=iP4sZDQu7QH9SHJnJwyJp2TsdRyBvznjqqqMFXuWYTTzZ2baUI607-YEXMVGN7xMy-otSnxamKrVhAgrElIAz%7EfvwDedRN4gUYJzZLfM9oUzKx7l61moB%7EeoYAO01W3pitcZy6wYm-J0ATpSbaK20Kl5PnnaNPAg6YsllexiD-neHDsnEwYOdIRLRWsLWYnTuF2idI2uCPQ-a0zQrkfn6voNMPLah%7E-aeMqtTJX7Mw6swDmWt1HTL7iU%7ER1CQ%7EMxX7VFFSQlaP2V5Q8sPuOiHtH8E442MWZIbrpUXAFBmZ0RX1TdOqBdm1GGyp0RYyOa3ms%7ES9R0H6gbB2fJV3emTQ__&Key-Pair-Id=K2L8F4GPSG1IFC" //https://huggingface.co/bartowski/google_functiongemma-270m-it-GGUF/resolve/main/google_functiongemma-270m-it-Q8_0.gguf"
 var modelHash = "f50fbac8552d090863d5fefa983d24ac1ca37df23b1c77e3bbbd80aeb3b208c4"
 
 const (
@@ -85,7 +85,7 @@ func handleAC() {
 		os.Exit(1)
 	}
 
-	slog.Info("Yups configuration completed in ", time.Since(start).Round(time.Second))
+	slog.Info("Yups configuration completed in ", "time", time.Since(start).Round(time.Second))
 }
 
 func saveConfigFile(info sys.Info) {
@@ -98,7 +98,11 @@ func saveConfigFile(info sys.Info) {
 
 	if err := viper.WriteConfig(); err != nil {
 		os.MkdirAll(filepath.Dir(viper.ConfigFileUsed()), 0755)
-		viper.SafeWriteConfig()
+		err = viper.WriteConfig()
+
+		if err != nil {
+			slog.Error("Error writing config file", "file", viper.ConfigFileUsed(), "error", err)
+		}
 	}
 }
 
@@ -230,6 +234,7 @@ func downloadModel(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	out, _ := os.Create(path + ".tmp")
+	defer os.Remove(path + ".tmp")
 	defer out.Close()
 
 	counter := &sys.ProgressWriter{Total: uint64(resp.ContentLength), Message: "Downloading model"}

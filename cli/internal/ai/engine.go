@@ -1,81 +1,93 @@
 package ai
 
+/*
+// #cgo: Configuración de compilación para CGO.
+
+// CPPFLAGS: -I (Include).
+// Añadimos tanto la carpeta de cabeceras de llama como la de ggml.
+#cgo CPPFLAGS: -I${SRCDIR}/../../llama.cpp/include -I${SRCDIR}/../../llama.cpp/ggml/include
+
+// LDFLAGS: -L (Library path) y -Wl,-rpath (Runtime search path).
+#cgo LDFLAGS: -L${SRCDIR}/../../llama.cpp/build/bin -lllama -Wl,-rpath,${SRCDIR}/../../llama.cpp/build/bin
+
+#include <stdlib.h>
+#include "llama_bridge.h"
+*/
+import "C"
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-
-	// CGO: Puente que permite a Go ejecutar código C/C++ (necesario para llama.cpp).
-	// Esta librería es un wrapper de llama.cpp, el estándar de facto para inferencia local.
-	llama "github.com/go-skynet/go-llama.cpp"
+	"unsafe"
 )
 
-// Interpretation: Datos estructurados devueltos por la IA tras analizar un comando.
+// Conceptos técnicos:
+// - rpath: Ruta incrustada en el binario para que el cargador del sistema operativo encuentre
+//   las librerías dinámicas (.so) sin configurar variables de entorno globales.
+
 type Interpretation struct {
-	Action   string   `json:"action"`
-	Packages []string `json:"packages"`
+	Action   string
+	Packages []string
 }
 
 type Engine struct {
-	model *llama.Model
+	instance *C.llama_instance
 }
 
-// NewEngine: Carga el modelo GGUF desde el directorio de YUPS.
-// Nota: 'safetensors' debe convertirse a 'GGUF' usando scripts como 'convert_hf_to_gguf.py'
-// o descargando directamente la versión GGUF desde Hugging Face.
-func NewEngine() (*Engine, error) {
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, ".yups/models/gemma-3-270m.gguf")
+// NewEngine inicializa el motor cargando el modelo GGUF.
+func NewEngine(modelPath string) (*Engine, error) {
+	cPath := C.CString(modelPath)
+	defer C.free(unsafe.Pointer(cPath))
 
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, fmt.Errorf("modelo no encontrado en %s. Asegúrate de que sea formato GGUF", path)
+	inst := C.load_model(cPath)
+	if inst == nil {
+		return nil, fmt.Errorf("no se pudo cargar el modelo GGUF desde %s", modelPath)
 	}
 
-	// Cargamos el modelo en memoria.
-	// La inferencia es el proceso de generar una respuesta usando los pesos del modelo.
-	model, err := llama.NewModel(path)
-	if err != nil {
-		return nil, fmt.Errorf("fallo al cargar el modelo: %w", err)
-	}
-
-	return &Engine{model: model}, nil
+	return &Engine{instance: inst}, nil
 }
 
-// InterpretCommand: Usa Function Calling para extraer la acción y paquetes de un string.
+// Close libera la memoria reservada en el lado de C++.
+func (e *Engine) Close() {
+	if e.instance != nil {
+		C.free_model(e.instance)
+	}
+}
+
 func (e *Engine) InterpretCommand(ctx context.Context, input string) (*Interpretation, error) {
-	// Prompt: Texto de instrucción que guía al modelo.
-	// Usamos el formato de turnos de Gemma (<start_of_turn>).
-	prompt := fmt.Sprintf(`<start_of_turn>user
-Analyze the command and extract the action and packages: "%s"
-<end_of_turn>
-<start_of_turn>model
-<start_function_call>extract_command(action="`, input)
+	prompt := fmt.Sprintf("<start_of_turn>user\nAnalyze: %s\n<end_of_turn>\n<start_of_turn>model\n<start_function_call>extract_command(action=\"", input)
 
-	// Inferencia local: Predecimos los tokens (unidades de texto) de la respuesta.
-	out, err := e.model.Predict(ctx, prompt,
-		llama.WithStopWords("<end_function_call>"),
-		llama.WithTemperature(0.1), // Baja temperatura = respuesta más determinista (menos "creativa").
-	)
-	if err != nil {
-		return nil, err
-	}
+	cPrompt := C.CString(prompt)
+	defer C.free(unsafe.Pointer(cPrompt))
 
-	return parseRawOutput(out)
+	cResult := C.infer(e.instance, cPrompt)
+	defer C.free(unsafe.Pointer(cResult))
+
+	res := C.GoString(cResult)
+	return parseRawOutput(res), nil
 }
 
-func parseRawOutput(raw string) (*Interpretation, error) {
-	// Parser para limpiar la respuesta del modelo.
+func (e *Engine) InterpretProvides(ctx context.Context, output string) (string, error) {
+	prompt := fmt.Sprintf("<start_of_turn>user\nIdentify package in: %s\n<end_of_turn>\n<start_of_turn>model\n<start_function_call>extract_provides(package=\"", output)
+
+	cPrompt := C.CString(prompt)
+	defer C.free(unsafe.Pointer(cPrompt))
+
+	cResult := C.infer(e.instance, cPrompt)
+	defer C.free(unsafe.Pointer(cResult))
+
+	res := C.GoString(cResult)
+	return strings.Split(res, `"`)[0], nil
+}
+
+func parseRawOutput(raw string) *Interpretation {
 	action := strings.Split(raw, `"`)[0]
 	pkgs := []string{}
-
 	if strings.Contains(raw, "[") {
 		pkgPart := strings.Split(strings.Split(raw, "[")[1], "]")[0]
 		for _, p := range strings.Split(pkgPart, ",") {
 			pkgs = append(pkgs, strings.Trim(p, ` "`))
 		}
 	}
-
-	return &Interpretation{Action: action, Packages: pkgs}, nil
+	return &Interpretation{Action: action, Packages: pkgs}
 }
