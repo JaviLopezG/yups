@@ -1,0 +1,8 @@
+{
+    "files.exclude": {
+        "cli/llama.cpp": true
+    },
+    "search.exclude": {
+        "cli/llama.cpp": true
+    }
+}
