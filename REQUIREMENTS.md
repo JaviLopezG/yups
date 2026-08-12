@@ -114,6 +114,7 @@ Hay algunos flags que no están pensados para ser usados por un usuario, si no q
 * `--help`: muestra la ayuda inline.
 * `--script`: sirve para pasar un script que haya que explicar o corregir.
 * `--ask-run`: flag del sistema, para permitir a yups preguntar al usuario en diferido si quiere ejecutar algo.
+* `--continue`: flag to continue a previous request. If an ID is not set, the last request will be continued. It is the default option when `yups` is called without any arguments and the last command is also a `yups` command (if it is not, the last line executed is the one processed).
 * `__`: marcador del final de flags, necesario cuando se quiere añadir un comando en la invocación que puede tener sus propios flags.
 
 ### Detalladas
@@ -218,17 +219,22 @@ edit ~/.yups/scripts/2026-08-12-19-31-24.sh && yups --ask-run ~/.yups/scripts/20
 ```
 
 #### Consulta de una línea que no parece un comando
-Cuando `yups` recibe una línea que no parece un comando, se la pasa al motor de inferencia configurado proporcionándole la información de contexto básica, esperando que la salida del modelo pueda cumplir las expectativas del usuario mediante una explicación (y una corrección se fuese precisa).
+Cuando `yups` recibe una línea que no parece un comando, se la pasa al motor de inferencia configurado proporcionándole la información de contexto básica, esperando que la salida del modelo pueda cumplir las expectativas del usuario mediante una explicación (y una corrección si fuese precisa).
 
 #### Consulta de un script
-Cuando `yups` recibe un script se lo pasa al motor de inferencia configurado proporcionándole la información de contexto básica, además de información detallada del script y su contenido, esperando que su salida pueda cumplir las expectativas del usuario mediante una explicación (y una ejecución 
+Cuando `yups` recibe un script, verifica si la sintaxis es correcta, si no lo es le pregunta al usuario si lo quiere editar, si lo es se lo pasa al motor de inferencia configurado proporcionándole la información de contexto básica, además de información detallada del script y su contenido, esperando que su salida pueda cumplir las expectativas del usuario mediante una explicación (y una ejecución o corrección si fuesen precisas).
+```
+# Example
+THE_SHELL=cat script.sh | grep '#!'
+if $($THE_SHELL -n sctipt.sh); then
+	# The script syntaxis is ok so ask LLM
+else
+	# Ask the user if she wants to edit
+fi
+```
 
-#### Recuperación de consultas
-El usuario puede a preguntar sobre alguna cuestión para la que yups haya dado ya una respuesta, ya sea una consulta que se haya llevado al motor o que se haya realizado en local
-
-La mayoría de las veces se querrá retomar la última consulta, por lo que si no se indica nada será la que se recupere.
-
-Para recuperar otra consulta, el usuario podrá listar las últimas consultas. Por defecto se mostrarán las del último mes o 20 (configurable), permitiéndole ampliar si necesita ir más atrás. En la consulta se le mostrará la primera y última líneas de la respuesta final que se le haya dado al usuario.
+#### Continuación de consultas
+Cuando `yups` recibe la orden de continuar un request previo, recupera log de requests y responses de esa consulta y pasa el prompt al motor de inferencia. Si el usuario no fija un modelo específico, se establecerá el modelo avanzado que se tenga configurado.
 
 ### Quick wins
 Este apartado contiene pequeñas funcionalidades que son fáciles de implementar y que pueden mejorar mucho la solución sin ser una parte realmente importante para esta.
@@ -304,7 +310,6 @@ echo -e "\e[38;5;214m#_?\e[0m"
     }
     [, #other functions]
     ]
-    [, "context": # set response context if it is a follow up]
 }
 
 # Example:
@@ -446,7 +451,7 @@ En el proceso de instalación, se preguntará al usuario si la instalación se d
 
 Si en el proceso, el usuario elige configurar la inferencia en otro equipo, habrá que mostrar un aviso recordando el riesgo que puede suponer si no es una máquina de confianza puesto que se envía información recopilada automáticamente sin pedir confirmación.
 
-Para cualquier elección que haya que hacer durante el proceso de instalación se le plantearán al usuario preguntas sencillas ofreciendo siempre valores por defecto. Todo lo que se pueda saber interrogando al sistema, no se le preguntará al usuario.
+Para cualquier elección que haya que hacer durante el proceso de instalación se le plantearán al usuario preguntas sencillas ofreciendo siempre valores por defecto. Todo lo que se pueda saber interrogando al sistema, no se le preguntará al usuario. Ejemplo: antes de preguntar al usuario qué modelo por defecto se debe usar, se debe recuperar de ollama la lista de modelos existentes mediante el endpoint /api/tags y recomendarle cual establecer si hay alguna coincidencia con la lista de modelos testados o evaluando su tamaño o familia, para que el usuario pueda elegir con conocimiento y sin esfuerzo.
 
 Al acabar del proceso se deberá indicar cual es el archivo de configuración resultante.
 
