@@ -19,7 +19,7 @@ Además es proactivo y no espera a que le pidas ayuda. Si cree que la necesitas,
 - El uso de modelos externos (Hugging Face) está por valorar, especialmente en términos de seguridad y velocidad.
 
 ## Datos gestionados
-### Información contextual valorada por yups
+### Información contextual básica valorada por yups
 - El disparador. Si se ha ejecutado a petición propia por detectar un problema o a petición del usuario mediante una pulsación de teclas (F1 o Ctrl+g) o por invocación directa del comando `yups`.
 - Lo que hay en este momento escrito en la línea de comandos.
 - La configuración que haya establecido el usuario.
@@ -38,7 +38,7 @@ Además es proactivo y no espera a que le pidas ayuda. Si cree que la necesitas,
 cat /etc/os-release
 ```
 
-### Información adicional que recupera yups en función del contexto
+### Información adicional que recupera yups en función del disparador
 - La man page del comando.
 - Si existe algún paquete que instale el comando inexistente.
 
@@ -92,7 +92,7 @@ Está por determinar si es mejor hacer las comprobaciones con shell scripting o 
 	```
 	_yups_rep_handle(){
 		# Do a fuzzy comparision of last N commands
-		yups --repetitive-process "$last_command"
+		yups -- "$last_command"
 	}
 	```
 - Se lanza `yups` cuando N de los últimos M (configurable, por defecto 5 de 20) comandos son iguales.
@@ -108,16 +108,123 @@ Está por determinar si es mejor hacer las comprobaciones con shell scripting o 
 Hay algunos flags que no están pensados para ser usados por un usuario, si no que se utilizan desde scripts del sistema o Bash para invocar a `yups` de manera automatizada.
 * `--cnf-handle`: flag del sistema, se usa cundo se ha producido un error 127 (command not found)
 * `--ce-handle`: flag del sistema, se usa condo se ha producido un error indeterminado en la ejecución de un comando.
-* `--explain-current-line`: flag del sistema, que se usa para invocar yups y pedir información sobre lo que se tiene escrito en el prompt actual.
 * `--repetitive-process`: flag del sistema, se lanza cuando se detecta que se podría estar realizando una tarea repetitiva.
 * `--install`: cuando se quiere lanzar el proceso de instalación.
 * `--uninstall`: para lanzar el proceso de desinstalación.
 * `--help`: muestra la ayuda inline.
+* `--script`: sirve para pasar un script que haya que explicar o corregir.
+* `--ask-run`: flag del sistema, para permitir a yups preguntar al usuario en diferido si quiere ejecutar algo.
+* `__`: marcador del final de flags, necesario cuando se quiere añadir un comando en la invocación que puede tener sus propios flags.
 
 ### Detalladas
+#### Consulta de una línea que parece un comando
+`yups` puede explicar una línea con un comando simple o compuesto (oneliner). En caso de que la línea parezca un comando (el primer término contiene el carácter igual (`=`) o está en la lista de comandos del sistema. El programa pre procesa la línea para separarla en componentes y los identifica como asignación de variable (contiene el carácter igual `=`), como un wrapper (si está en una lista), un comando estándar (está en la lista de comandos del sistema) u otra cosa. A partir de tener esos componentes identificados, puede procesarles individualmente para dar una explicación de lo que es (`whatis`) y para qué sirve el comando principal y los flags que están establecidos en el comando en cuestión (`man`).
+```
+# Very basic example
+explain_current_line() {
+    local tokens=($READLINE_LINE) 
+    local wrappers=("sudo" "su" "runuser" "chroot" "doas" "time" "watch" "timeout" "stdbuf" "nohup" "xargs" "exec" "env" "strace" "nice" "runcon" "setpriv" "bash" "sh")
 
-### Recuperación de consultas
-El usuario tiene que poder volver a preguntar sobre alguna cuestión para la que yups haya dado ya una respuesta, ya sea una consulta que se haya llevado al motor o que se haya realizado en local
+    for token in "${tokens[@]}"; do
+        if [[ "$token" == *"="* ]]; then continue; fi
+
+        local is_wrapper=false
+        for w in "${wrappers[@]}"; do
+            [[ "$token" == "$w" ]] && is_wrapper=true && break
+        done
+        
+        if [[ "$is_wrapper" == false ]]; then
+            # --- VISUAL SETUP ---
+            printf "${PS1@P}$READLINE_LINE\n"
+            
+            if [[ ${#token} -ge 2 ]]; then
+		if man -w "$token" >/dev/null 2>&1; then
+		    local token_c=$token
+		else
+                    local token_c=$(compgen -c | grep "^$token" | head -n 1)
+                fi
+
+                if [ -n "$token_c" ]; then
+                    echo "Found: $token_c"
+                    type "$token_c" 2>/dev/null | head -n 1
+                    whatis "$token_c" 2>/dev/null
+
+                    # --- FLAGS ANALYSIS ---
+                    local man_content
+                    if man -w "$token_c" >/dev/null 2>&1; then
+                        man_content=$(man -P cat "$token_c" 2>/dev/null | col -b)
+                    else
+                        echo "No manual entry for $token_c"
+                        READLINE_LINE="$READLINE_LINE" 
+                        return
+                    fi
+
+                    _search_flag_in_man() {
+                        local f="$1"
+                        local escaped_arg=$(printf '%s\n' "$f" | sed 's/[.[\*^$]/\\&/g')
+                        
+                        local help_text=$(echo "$man_content" | sed -n "/^\s\+${escaped_arg}\( \|,\|$\)/,/^\s*$/p")
+                        
+                        if [[ -n "$help_text" ]]; then
+                            echo -e "\033[1;33m$f\033[0m found:"
+                            echo "$help_text" | sed 's/^/  /'
+                        else
+                            echo -e "\033[1;31m$f\033[0m: No description found."
+                        fi
+                    }
+
+                    for arg in "${tokens[@]}"; do
+                        # CASE 1: Long Option (--flag)
+                        if [[ "$arg" == --* ]]; then
+                            _search_flag_in_man "$arg"
+                        
+                        # CASE 2: Short Option Cluster (-xyz)
+                        elif [[ "$arg" == -* ]]; then
+                            local chars="${arg:1}"
+                            
+                            for (( i=0; i<${#chars}; i++ )); do
+                                local char="${chars:$i:1}"
+                                _search_flag_in_man "-$char"
+                            done
+                        fi
+                    done
+                else
+                    echo "No commands found similar to '$token'"
+                fi
+            fi
+            
+            READLINE_LINE="$READLINE_LINE" 
+            return
+        fi
+    done
+}
+bind -x '"\eOP": explain_current_line'
+bind -x '"\C-g": explain_current_line'
+```
+En caso de que no se encuentre la págna de manual, el comando `yups` informa al usuario de este hecho y procede a pedir la explicación (y corrección si fuese precisa) al motor de inferencia que esté configurado proporcionándole la información de contexto básica.
+
+El motor puede pedir a yups de vuelta información adicional conseguida mediante la ejecución de comandos de una whitelist o de procesos ad hoc como la búsqueda en internet.
+
+Una vez se obtiene una respuesta final se le presenta al usuario.
+
+Si en la respuesta hay un texto, se le muestra al usuario.
+
+Si en la respuesta hay un comando, se le propone al usuario ejecutarlo. Si acepta se ejecuta ese comando y se acaba. Si dice que no se acaba dejando en el prompt el texto de la línea analizada.
+
+Si en la respuesta hay un script, se le propone al usuario revisarlo. Si acepta se abre el editor por defecto del sistema con el nuevo script y al salir del script con o sin modificaciones del usuario, se pregunta si ejecutarlo. Si no acepta se acaba y se deja escrito en el prompt la línea analizada.
+```
+# Example
+edit ~/.yups/scripts/2026-08-12-19-31-24.sh && yups --ask-run ~/.yups/scripts/2026-08-12-19-31-24.sh
+```
+
+#### Consulta de una línea que no parece un comando
+Cuando `yups` recibe una línea que no parece un comando, se la pasa al motor de inferencia configurado proporcionándole la información de contexto básica, esperando que la salida del modelo pueda cumplir las expectativas del usuario mediante una explicación (y una corrección se fuese precisa).
+
+#### Consulta de un script
+Cuando `yups` recibe un script se lo pasa al motor de inferencia configurado proporcionándole la información de contexto básica, además de información detallada del script y su contenido, esperando que su salida pueda cumplir las expectativas del usuario mediante una explicación (y una ejecución 
+
+#### Recuperación de consultas
+El usuario puede a preguntar sobre alguna cuestión para la que yups haya dado ya una respuesta, ya sea una consulta que se haya llevado al motor o que se haya realizado en local
 
 La mayoría de las veces se querrá retomar la última consulta, por lo que si no se indica nada será la que se recupere.
 
