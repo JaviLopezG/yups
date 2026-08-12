@@ -265,7 +265,20 @@ echo -e "\e[38;5;214m#_?\e[0m"
 ```
 
 ### Signíficado del acrónimo
-
+1. Your universal prompt solver
+2. Your universal prompt steward
+3. Your universal prompt strategist
+6. Your universal prompt Shadow
+7. Your universal prompt Scout
+8. Your universal prompt Sentinel
+9. Your universal prompt Sidekick
+10. Your universal prompt Synthesizer 
+11. Your universal prompt Safeguard 
+12. Your universal prompt Specialist 
+13. Your universal prompt Substitute 
+14. Your universal prompt Supporter 
+15. Your universal prompt Servant 
+16. Your universal prompt Straw boss
 
 ## Mensajes
 ### Formato de solicitudes a ollama o middleware
