@@ -115,6 +115,7 @@ Hay algunos flags que no están pensados para ser usados por un usuario, si no q
 * `--script`: sirve para pasar un script que haya que explicar o corregir.
 * `--ask-run`: flag del sistema, para permitir a yups preguntar al usuario en diferido si quiere ejecutar algo.
 * `--continue`: flag to continue a previous request. If an ID is not set, the last request will be continued. It is the default option when `yups` is called without any arguments and the last command is also a `yups` command (if it is not, the last line executed is the one processed).
+* `--update`: lanza la auto actualización.
 * `__`: marcador del final de flags, necesario cuando se quiere añadir un comando en la invocación que puede tener sus propios flags.
 
 ### Detalladas
@@ -124,7 +125,7 @@ Hay algunos flags que no están pensados para ser usados por un usuario, si no q
 # Very basic example
 explain_current_line() {
     local tokens=($READLINE_LINE) 
-    local wrappers=("sudo" "su" "runuser" "chroot" "doas" "time" "watch" "timeout" "stdbuf" "nohup" "xargs" "exec" "env" "strace" "nice" "runcon" "setpriv" "bash" "sh")
+    local wrappers=("sudo" "su" "runuser" "chroot" "doas" "time" "watch" "timeout" "stdbuf" "nohup" "xargs" "exec" "env" "strace" "nice" "runcon" "setpriv" "bash" "sh" "pkexec" "sg" "newgrp" "setpriv" "renice" "chrt" "ionice" "taskset" "numactl" "choom" "prlimit" "cset shield" "unshare" "nsenter" "ip netns exec" "bwrap" "aa-exec" "capsh" "tsp" "systemd-run" "start-stop-daemon" "rlwrap" "fakeroot" "catchsegv" "valgrind" "setisid" "disown" "screen" "tmux" "flock")
 
     for token in "${tokens[@]}"; do
         if [[ "$token" == *"="* ]]; then continue; fi
@@ -236,8 +237,32 @@ fi
 #### Continuación de consultas
 Cuando `yups` recibe la orden de continuar un request previo, recupera log de requests y responses de esa consulta y pasa el prompt al motor de inferencia. Si el usuario no fija un modelo específico, se establecerá el modelo avanzado que se tenga configurado.
 
+#### Recomendación de automatización
+Cuando `yups` detecta que se repite un comando o muy parecido, en caso de que no se haya rechazado ya la automatización disparada por un comando similar, se le preguntará al usuario si quiere intentar automatizar lo que está haciendo. En caso de que sí se le pedirá hacerlo al motor de inferencia. En caso de que no, se guardará ese comando para poder compararlo con nuevos comandos repetidos detectados y no volver a molestar al usuario con una recomendación repetida.
+
+#### Búsqueda de los command not found
+Cuando Bash lanza un error de command not found, `yups` realiza una búsqueda difusa sobre la lista de comandos disponibles por si pudiera haberse producido un tipo. Si no encuentra nada, busca entre los manejadores de paquetes disponibles en el sistema si alguno proporciona ese comando. Si tampoco tiene éxito pregunta al motor de inferencia.
+
+#### Investigación de errores de comando
+Cuando un comando da un error se checkea si los flags o subcomandos usados constan en la ayuda o si puede haberse cometido un tipo. Si no se obtiene un resultado concluyente con el procesamiento automático de la ayuda se pregunta al LLM qué ha podido ir mal. 
+
 ### Quick wins
-Este apartado contiene pequeñas funcionalidades que son fáciles de implementar y que pueden mejorar mucho la solución sin ser una parte realmente importante para esta.
+Este apartado contiene pequeñas funcionalidades que son fáciles de implementar y que pueden mejorar mucho la solución sin ser una parte realmente importante para esta. Algunos no son tan quick.
+
+1. Incluir `tldr` como fuente de información.
+2. Inlcuir las cheatsheets de `navi` como fuente de información.
+3. Incluir Arch Wiki como fuente de información.
+4. Adaptar la heurística de `thefuck` para hacer correcciones sin preguntar al motor de inferencia.
+5. Usar eBPF para monitorizar el stderr y tener información precisa de por qué un comando ha fallado el último comando.
+6. Añadir comandos con dry run a la white list (apt, dnf, pip, rsync, make, bash -n, git...).
+7. Integrar mvdan para el analisis sintáctico
+	```
+	# Example
+	import "mvdan.cc/sh/v3/syntax"
+
+	file, _ := syntax.NewParser().Parse(strings.NewReader("ls -l | grep txt"), "")
+	// 'file' is an AST of the command line that can be exmined
+	```
 
 ### Casos de uso
 
@@ -417,6 +442,47 @@ curl http://marvin:11434/api/chat -d '{
 		```
 
 ### White list commands
+- ls
+- pwd
+- stat
+- file
+- du
+- df
+- find
+- locate
+- tree
+- cat
+- less
+- more
+- grep
+- egrep
+- fgrep
+- head
+- tail
+- diff
+- cmp
+- wc
+- md5sum
+- sha256sum
+- ps
+- top
+- htop
+- free
+- uptime
+- lscpu
+- lspci
+- lsusb
+- lshw
+- dmidecode
+- ip addr
+- ip route
+- ss
+- ping
+- traceroute
+- mtr
+- dig
+- nslookup
+- host
 
 ## Miscelanea            
 ### Lenguaje, prioridades y estilo
@@ -472,6 +538,9 @@ El proceso de instalación se podrá volver a lanzar en cualquier momento, si ya
 
 ### Configuración
 Sobre el archivo de configuración y los valores por defecto
+
+### Actualización
+Cuando el programa se ejecute, una vez al día como máximo, debe lanzar en background la comprobación de si hay una actualización y en su caso sugerir al usuario instalarla. Las sugerencias pueden realizarse al iniciar un proceso por el usuario (no en los que arrancan de manera automatizada) o al acabarlo.
 
 ## Sistemas
 ### Arquitectura core
