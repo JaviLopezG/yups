@@ -12,6 +12,8 @@ Si es necesario, YUPS puede hacer uso de tu LLM local de confianza (en tu equipo
 
 Además es proactivo y no espera a que le pidas ayuda. Si cree que la necesitas, símplemente te la sugiere.
 
+Disclaimer: En adelante YUPS se referirá al sistema completo que incluye cosas como el programa ejecutable, los scripts de apoyo o el sistema de inferencia, mientras que `yups` hará referencia al comando ejecutable.
+
 ## Scope
 - Sólo se busca ayudar a los usuarios de interpretes de comandos habituales en Linux.
 - Sólo se prevé apoyarse en modelos abiertos.
@@ -263,19 +265,25 @@ Este apartado contiene pequeñas funcionalidades que son fáciles de implementar
 	file, _ := syntax.NewParser().Parse(strings.NewReader("ls -l | grep txt"), "")
 	// 'file' is an AST of the command line that can be exmined
 	```
+8. Ofrecer al usuario estimaciones del tiempo que va a tener que esperar.
 
 ### Casos de uso
+1. Un usuario escribe mal el nombre de un comando -> YUPS le ofrece automáticamente una corrección de su comando.
+2. Un usuario escribe el nombre de un comando que no tiene instalado en el sistema -> YUPS le ofrece automáticamente instalar el paquete que lo instala.
+3. Un usuario escribe el nombre de un comando que no existe -> YUPS automáticamente analiza el contexto e intenta determinar lo que el usuario esta intentando hacer y le ofrece una corrección.
+4. Un usuario no está seguro de haber escrito los flags y argumentos correctos -> YUPS los comprueba y le ofrece una explicación y en caso de ser necesaria una recomendación o corrección.
+5. Un usuario lanza un comando que produce un error -> YUPS analiza el contexto e intenta comprender el error para dar una explicación del porqué y hacer una recomendación o corrección.
 
 ## Marketing
 ### Propuesta de valor
-Consigue ayuda efectiva para la consola de un modo sencillo y sin cambiar de contexto.
+Consigue ayuda efectiva para la terminal de un modo sencillo y sin cambiar de contexto.
 
 ### Logo
 Se usará como logo la combinación de caracteres `#_?`porque:
 1. Se puede escribir en la consola. 
 1. Son caracteres muy usados en desarrollo y tecnología en general, y por supuesto en Bash.
 1. Por separado la almohadilla (number sign, sharp...) `#` se usa en shell script para indicar los comentarios ignorando el resto de la línea, lo que nos permitirá usar estos símbolos como prompt y que si el usuario copia y pega en otro sitio, no produzca un error.
-2. El guión bajo (low line, underscore...) `_` en algunos lenguajes se usa de variable anónima, algo que matchea con cualquier cosa porque se le puede asignar el valor que se quiera.
+2. El guión bajo (low line, underscore...) `_` en algunos lenguajes se usa de variable anónima, algo que matchea con cualquier cosa porque se le puede asignar el valor que se quiera. También es un clásico en terminales mostrarlo de manera intermitente cuando el prompt espera la entrada del usuario.
 3. La interrogación de cierre (question mark, interrobang...) es un símbolo que se usa para las preguntas en muchas culturas.
 4. Además tiene aire de emoji si se le echa un poco de imaginación, y a la gente le gusta ver cosas que parecen caras. Tendemos a humanizar.
 
@@ -290,9 +298,9 @@ echo -e "\e[38;5;214m#_?\e[0m"
 ```
 
 ### Signíficado del acrónimo
-1. Your universal prompt solver
-2. Your universal prompt steward
-3. Your universal prompt strategist
+1. Your universal prompt Solver
+2. Your universal prompt Steward
+3. Your universal prompt Strategist
 6. Your universal prompt Shadow
 7. Your universal prompt Scout
 8. Your universal prompt Sentinel
@@ -436,7 +444,7 @@ curl http://marvin:11434/api/chat -d '{
 	5. Invocación directa
 		```
 		user_query = f"{prompt}"
-		    o
+		    or
 		user_query = "I'm not happy with what the last command did." # When the user types 
 			`yups`without any prompt
 		```
@@ -516,23 +524,71 @@ Ofrecer una solución completa mínima que permita probar un flujo de ejecución
 
 Las 'Quicks wins' se introducirán tan pronto sea posible siempre que no impliquen modificar el resto de la funcionalidad de la solución implementada hasta el momento.
 
-Cuando la funcionalidad lo permita, se generaran tests de integración automáticos. Si no es de toda la funcionalidad, por la naturaleza interactiva de la solución, de toda la parte automática que se lance tras la interacción del usuario que hace de disparador.
+Cuando la funcionalidad lo permita, se generarán tests de integración automáticos. Si no es de toda la funcionalidad, por la naturaleza interactiva de la solución, de toda la parte automática que se lance tras la interacción del usuario que hace de disparador.
 
 ### Gestión de código
-Se usará git flow, creando features para cada funcionalidad atómica.
+Se usará git flow, creando features para cada funcionalidad atómica y releases por cada versión.
+
+Un cambio de versión será adecuada siempre que se implemente una feature y se responda "sí" a estas preguntas:
+1. ¿Es una versión funcionalmente completa y con sentido para un nuevo usuario que lo descubra sin conocerlo previamente? 
+2. ¿Si no se hiciera nada más sería útil tal cómo está? 
+3. ¿Tiene alguna funcionalidad nueva o mejora de manera significativa una funcionalidad pre existente?
+4. ¿Es estable?
+5. ¿Se ha testeado suficiente?
+
+Para el etiquetado de versiones se seguirá el formato `vX.YY-tag` donde:
+- X: se incrementa cada vez que el cambio en la funcionalidad sea significativo. Resetea el siguiente componente. Comienza en 0.
+- YY: número con formato de dos cifras que se incrementa cada vez que se lanza una nueva release. Empieza en 0 (luego es 00).
+- tag: etiqueta que describe lo que se cambia en la release o en su defecto un codename.
+
+Dado que la versión previa de YUPS que trabajaba con package managers era la v0.5, la próxima release deberá etiquetar con `v1.00-pivot`.
 
 ### Instalación
-El ejecutable debe poder ejecutarse sin ser instalado. En caso de no estar instalado (no estar en un directorio que se encuentre en el PATH o no existir la carpeta ~/.yups) se mostrará un aviso al usurio para advertirle y se le preguntará si quiere realizar el proceso de instalación automática en ese momento o continuar con valores por defecto.
+El ejecutable debe poder ejecutarse sin ser instalado. En caso de no estar instalado (no estar en un directorio que se encuentre en el PATH o no existir la carpeta ~/.yups) se mostrará un aviso al usuario para advertirle de este hecho y que así sólo se puede conseguir una funcionalidad limitada y no se pueden esperar los mejores resultados, y se le preguntará si quiere realizar el proceso de instalación automática en ese momento o continuar con valores por defecto.
 
 Por lo tanto, el ejecutable debe ser autoinstalable.
 
-En el proceso de instalación, se preguntará al usuario si la instalación se debe realizar sólo para él, o para todos los usuarios del sistema (por ejemplo se pueden incluir los scripts para modificar Bash en /etc/profile.d o incrustarlos en el .Bashrc).
+En el proceso de instalación, se preguntará al usuario si la instalación se debe realizar sólo para él, o para todos los usuarios del sistema (por ejemplo se pueden incluir los scripts para modificar Bash en /etc/profile.d o incrustarlos en el .bashrc).
 
 Si en el proceso, el usuario elige configurar la inferencia en otro equipo, habrá que mostrar un aviso recordando el riesgo que puede suponer si no es una máquina de confianza puesto que se envía información recopilada automáticamente sin pedir confirmación.
 
-Para cualquier elección que haya que hacer durante el proceso de instalación se le plantearán al usuario preguntas sencillas ofreciendo siempre valores por defecto. Todo lo que se pueda saber interrogando al sistema, no se le preguntará al usuario. Ejemplo: antes de preguntar al usuario qué modelo por defecto se debe usar, se debe recuperar de ollama la lista de modelos existentes mediante el endpoint /api/tags y recomendarle cual establecer si hay alguna coincidencia con la lista de modelos testados o evaluando su tamaño o familia, para que el usuario pueda elegir con conocimiento y sin esfuerzo.
+Para cualquier elección que haya que hacer durante el proceso de instalación se le plantearán al usuario preguntas sencillas ofreciendo siempre valores por defecto. Todo lo que se pueda saber interrogando al sistema, no se le preguntará al usuario. Ejemplo: antes de preguntar al usuario qué modelo por defecto quiere usar, se debe recuperar de ollama la lista de modelos existentes mediante el endpoint /api/tags y recomendarle cual establecer si hay alguna coincidencia con la lista de modelos testados o evaluando su tamaño o familia, para que el usuario pueda elegir con conocimiento y sin esfuerzo.
 
-Al acabar del proceso se deberá indicar cual es el archivo de configuración resultante.
+Al acabar el proceso, se deberá indicar cual es el archivo de configuración resultante y se le pregtuntará al usuario si lo quiere revisar, abriéndose en el editor por defecto configurado.
+
+Si el proceso de instalación se había lanzado a partir de una pregunta realizada al usuario que había lanzado el comando yups con los argumentos que sean, se volverá a lanzar el mismo comando al acabar.
+```
+# Example (for markdown limitation low line is used to identify emphasis):
+> yups --script my-script.sh -- ¿Ejecutar este script es seguro?
+#_?
+YUPS installation is not correct
+Do you want to _Launch automatic installation process_? (Y/n)
+(Keep in mind that if you don't have a correct installation you can't expect best results)
+>Y # This user interaction launches yups --install process
+#_?
+YUPS Instalation Process
+...
+_Instalation complete_. The result of this process is saved in ~/.yups/conig.ini configuration file.
+Do you want to _review the configuration file_? (y/N)
+>Y # this launches edit ~/.yups/config.ini and after user exit the first command `yups --script my-script.sh -- ¿Ejecutar este script es seguro?` continues
+#_?
+my-script.sh syntaxis is correct
+Asking inference engine at http://marvin:11434
+Expected wating time 9s.
+	- Inference engine ask for ls ./subfolder; head ./file.txt
+	  Expected waiting time 13 s.
+#_?: El script es seguro pero no ofrecerá ningún resultado porque usa la ruta ./subfolder/A y la ruta correcta parece ser ./subfolder/B
+#_?: New script saved as ~/.yups/scripts/2026-08-13-12-32-54.sh
+- 13:	cd ./subfolder/A
++ 13:	cd ./subfolder/B
+Do you want to review the _new script_? (Y/n)
+> Y # this launches edit ~/.yups/scripts/2026-08-13-12-32-54.sh and after user exit the process continues `yups --continue --ask-run ~/.yups/scripts/2026-08-13-12-32-54.sh`
+#_?
+Do you want to run ~/.yups/scripts/2026-08-13-12-32-54.sh? (Y/n)
+>Y # This launches ~/.yups/scripts/2026-08-13-12-32-54.sh
+...
+> _
+```
 
 El proceso de instalación se podrá volver a lanzar en cualquier momento, si ya se realizó con anterioridad o existe un archivo de configuración creado por el usuario o de una instalación previa, se usarán como valores por defecto los de ese archivo, informando siempre al usuario de este hecho.
 
