@@ -1,5 +1,7 @@
 # REQUIREMENTS -- Proyecto YUPS
 
+Documento de definición de funcionalidad
+
 #### Your Universal Prompt Solution
 
 ## ¿Qué es?
@@ -33,6 +35,12 @@ necesitas, simplemente te la sugiere.
 > programa ejecutable, los scripts de apoyo o el sistema de inferencia, mientras
 > que `yups` hará referencia al comando ejecutable.
 
+> [!IMPORTANT]
+> Todos los trozos de código, datos, etc. son ejemplos muy básicos para dar una idea de cómo puede hacerse. No son lo que tiene que hacerse. Este documento define funcionalidad; no detalla qué tiene que hacerse, si no el resultado que debe obtener el usuario.
+
+> [!NOTE]
+> La definición de una funcionalidad no implica que tenga que implementarse a bajo nivel. Siempre que exista una solución implementada o un estándar se preferirá automatizar el uso de esa. Ver las versiones previas de `yups` en este repositorio (tag v0.5) y ramas desechadas (feature/go-client) para hacerse a la idea.
+
 ## Scope
 
 - Sólo se busca ayudar a los **usuarios de interpretes de comandos** habituales
@@ -50,13 +58,7 @@ necesitas, simplemente te la sugiere.
 Los componentes y modo de interaccionar de YUPS son:
 
 - `yups` es el punto central. Se puede ver como un ayudante. Un cliente o gestor
-  de inferencia. Your Universal Prompt Straw boss (capataz), Solver
-  (solucionador), Steward (administrador), Strategist (estratega), Shadow
-  (sombra en el sentido de que está siempre siguiendo tus pasos y pendiente de
-  lo que haces), Scout (explorador), Sentinel (centinela), Sidekick (compañero),
-  Synthesizer (sintetizador -de sintetizar-), Safeguard (protector), Specialist
-  (especialista), Substitute (sustituto), Supporter (partidario), Servant
-  (sirviente).
+  de inferencia. 
 - Se engancha a `bash` [^1] mediante _hooks_ para enterarse cuando surgen
   problemas.
 - Usa variables de entorno y otros comandos (`history`, `pwd`, `ls`...) para
@@ -135,13 +137,15 @@ Los componentes y modo de interaccionar de YUPS son:
 2: 'yups' recupera información del sistema en el que corre mediante comandos y
    llamadas al sistema, que lanza a la infraestructura de inferencia.
 5: La infraestructura de inferencia puede ser o no la misma máquina que en la
-   que corre 'yups', pero la comunicación y la operativano se considera segura  
+   que corre 'yups', pero la comunicación y la operativa no se considera segura  
    por lo que debería ser una máquina de confianza (virtualmente local).
 6: El middleware puede o no estar presente ya que si ollama no se usa para más
    cosas no sería demasiado útil. Si ollama recibe peticiones de otras cosas
    que no sean 'yups' es útil gestionar la elección de distintos modelos y 
    priorizar las requests.
 ```
+> [!NOTE]
+> Es importante resaltar que en esta solución intervienen distintos sistemas con diferentes configuraciones y modos de afectar al resultado. Por ejemplo en la configuración de `yups` (TOML en `config.ini`) se puede establecer el default-model y el advanced-model que debe usar el sistema, que dependiendo del contexto se usarán uno u otro (o ninguno si se establece otro distinto con el flag `--config model=...`) para pasar en el campo model del json que se manda a la api http ya sea de ollama o del middleware que actuarán, también, de manera distinta al respecto de este parámetro.
 
 ### Políticas de seguridad
 
@@ -190,26 +194,25 @@ func main() {
 > transaccionales. En caso de implementar dicha funcionalidad habrá que
 > modificar esta medida de seguridad.
 
-Hay que evitar usar las comillas invertidas en los prompts a ollama, ya que lo
-toma como un comando que tiene que ejecutar e incluir su salida en el prompt y
-eso es un riesgo. Si el usuario escribe un prompt que las usa se cambiarán por
-comillas simples.
-
 > [!IMPORTANT]
 > YUPS nunca mandará información fuera del sistema de confianza del usuario (su
-> propia máquina y en caso de ser otra, la del sistema de inferencia).
+> propia máquina y en caso de ser otra, la del sistema de inferencia) a no ser que el usuario lo solicite expresamente.
 
 #### Riesgos
 
 1. De `yups` hacia el motor de inferencia:
 
    - No generar prompt injections con la recolección de información.
-   - No enviar comandos a ejecutar (texto encerrado entre comillas invertidas
-     '\`').
+   - Separación física del contexto automático en un bloque delimitado y bien diferenciado de la zona de instrucciones.
+   - Salida JSON forzada.
+   - Validación en cliente.
+
+
+
 
 2. Del sistema de inferencia hacia `yups`:
 
-   - No ejecutar ningún comando ni script sin verificación del usuario.
+   - No ejecutar ningún comando (que no esté en la whitelist) ni script sin verificación del usuario.
 
 ### Operaciones
 
@@ -311,6 +314,7 @@ convierten a YUPS en un verdadero ayudante.
   	if [[ $exit_code -eq 0 ]] || [[ $exit_code -eq 127 ]] || [[ $exit_code -eq 130 ]]; then
   	    return
   	fi
+    # This is an example, 'history' shouldn't be used. Instead yups must keep it's own limited history of commands trapped with DEBUG
   	local last_command_text=$(history 1 | sed 's/^[ ]*[0-9]\+[ ]\+//')
   	"/usr/local/bin/yups" --ce-handle "$exit_code" "$last_command_text"
   }
@@ -359,6 +363,10 @@ convierten a YUPS en un verdadero ayudante.
   modificar el script (flag `--transaction`), ejecuta el script mediante `bash`
   y si no se produce ningún error la borra la transacción al acabar.
 
+> [!TIP]
+> Hay soluciones que implementan sistemas de eventos en Bash como [Bash-Preexec](https://github.com/rcaloras/bash-preexec) 
+ que pueden facilitar mucho esta parte.
+
 ### Flags
 
 > [!IMPORTANT]
@@ -368,9 +376,9 @@ convierten a YUPS en un verdadero ayudante.
 
 #### Del sistema
 
-- `--cnf-handle command_name`: flag del sistema, se usa cundo se ha producido un
+- `--cnf-handle command_name`: flag del sistema, se usa cuándo se ha producido un
   error 127 (command not found)
-- `--ce-handle error_code command_name`: flag del sistema, se usa condo se ha
+- `--ce-handle error_code command_name`: flag del sistema, se usa cuándo se ha
   producido un error indeterminado en la ejecución de un comando.
 - `--repetitive-process`: flag del sistema, se lanza cuando se detecta que se
   podría estar realizando una tarea repetitiva.
@@ -401,7 +409,7 @@ convierten a YUPS en un verdadero ayudante.
   valores para campos calculados como `model`.
 - `--advanced`: se usa el modelo avanzado que esté configurado. No tiene efecto
   si se fuerza un modelo con `--config model=elmodelo`. También se usarán todas
-  las fuentes de información disponibles y no sólo la principal.
+  las fuentes de información disponibles (implementadas e instaladas en el sistema) y no sólo la principal.
 - `--query`: pregunta directamente al motor de inferencia lo que está escrito
   sin intentar valorar si es un comando o no.
 - `--logs file1..fileN`: pregunta a la IA el significado de los logs. Si no se
@@ -409,7 +417,7 @@ convierten a YUPS en un verdadero ayudante.
 - `--test command_line`: se le pide al motor de inferencia que intente deducir
   cual sería la salida de ese comando para hacer una especie de --dry-run
   virtual por inferencia. Simula la salida, no la explica.
-- `--transactions script.sh`: pide al motor de inferencia que identifique los
+- `--transaction script.sh`: pide al motor de inferencia que identifique los
   archivos que puedan verse afectados por el script, hace una copia de todos
   esos archivos a /tmp/yups.timestamp y ejecuta el script. Si falla pregunta al
   usuario si quiere recuperar los archivos. Si no, pregunta si quiere borrarlos.
@@ -417,10 +425,10 @@ convierten a YUPS en un verdadero ayudante.
   commando y verificar si hay una nueva versión, y en su caso lo actualiza.
 - `--upgrade`: update de todos los comandos del sistema.
 - `--title-compose`: guía al usuario por un cuestionario de sí/no sobre sus
-  preferencias y hábitos, para crear un title que le resulte útil.
+  preferencias y hábitos, para crear un title para la ventana de la terminal que le resulte útil. Si se usa `yups` en una terminal real, sin entorno gráfico, este flag no hace nada.
 - `--prompt-compose`: guía al usuario por un cuestionario de sí/no sobre sus
-  preferencias y hábitos, para crear un prompt que le resulte útil.
-- `--notify`: sólo cuando se tiene un prompt personalizado con yups, permite
+  preferencias y hábitos, para crear un prompt que le resulte útil (Ver starship o oh-my-posh).
+- `--notify`: sólo cuando se tiene un prompt personalizado con `yups --prompt-compose`, permite
   mostrar una notificación en una línea antes del prompt.
   ```bash
   # Example  
@@ -537,7 +545,7 @@ bind -x '"\C-g": explain_current_line'
 > `yups`, ni la solución que da es efectiva siempre. Por ejemplo, el uso de
 > `compgen` puede resultar lento en sistemas con muchos comandos disponibles.
 
-En caso de que no se encuentre la págna de manual, el comando `yups` informa al
+En caso de que no se encuentre la página de manual, el comando `yups` informa al
 usuario de este hecho y procede a pedir la explicación (y corrección si fuese
 precisa) al motor de inferencia que esté configurado proporcionándole la
 información de contexto básica.
@@ -570,7 +578,7 @@ edit ~/.yups/scripts/2026-08-12-19-31-24.sh && yups --ask-run ~/.yups/scripts/20
 > posteriormente, es preciso mantener sin cambios algunos archivos como los
 > scripts o los mensajes intercambiados con el motor de inferencia. La opción
 > estándar para esto es hacer esos archivos propiedad de un usuario distinto del
-> usuario que ejecuta `yups`. Sin embargo, esto nos probocaría tener que hacer
+> usuario que ejecuta `yups`. Sin embargo, esto nos provocaría tener que hacer
 > una gestión de permisos compleja que está totalmente fuera del scope inicial y
 > que por lo tanto queda descartada, quedando condicionado el correcto
 > funcionamiento de algunas funcionalidades a que el usuario no manipule estos
@@ -599,7 +607,7 @@ una ejecución o corrección si fuesen precisas).
 ```bash
 # Example
 THE_SHELL=cat script.sh | grep '#!'
-if $($THE_SHELL -n sctipt.sh); then
+if $($THE_SHELL -n script.sh); then
 	# The script syntaxis is ok so ask LLM
 else
 	# Ask the user if she wants to edit
@@ -626,14 +634,14 @@ detectados y no volver a molestar al usuario con una recomendación repetida.
 
 Cuando Bash lanza un error de command not found, `yups` realiza una búsqueda
 difusa sobre la lista de comandos disponibles por si pudiera haberse producido
-un tipo. Si no encuentra nada, busca entre los manejadores de paquetes
+un typo. Si no encuentra nada, busca entre los manejadores de paquetes
 disponibles en el sistema si alguno proporciona ese comando. Si tampoco tiene
 éxito pregunta al motor de inferencia.
 
 #### Investigación de errores de comando
 
 Cuando un comando da un error se checkea si los flags o subcomandos usados
-constan en la ayuda o si puede haberse cometido un tipo. Si no se obtiene un
+constan en la ayuda o si puede haberse cometido un typo. Si no se obtiene un
 resultado concluyente con el procesamiento automático de la ayuda se pregunta al
 LLM qué ha podido ir mal.
 
@@ -665,8 +673,8 @@ Cosas que hay que cuidar en todo momento:
   se ha colgado. Por ejemplo, mientras se está esperando al motor de inferencia
   se puede mostrar un byte de 0s y 1s aleatorios que van cambiando, o en los
   procesos de pasos que es más fácil calcular el porcentaje completado, se puede
-  mostrar una barra de progreso braile. Ver
-  [ejemplos](https://unicode.framer.website/) de animaciones con caractéres
+  mostrar una barra de progreso braille. Ver
+  [ejemplos](https://unicode.framer.website/) de animaciones con caracteres
   unicode.
 - Cualquier información que se pueda conseguir de un modo automático no debe
   preguntársele al usuario sin al menos sugerir por defecto la respuesta que se
@@ -682,7 +690,7 @@ esta.
 > Algunos no son tan quick, analizar bien antes de ponerse manos a la obra.
 
 01. Incluir `tldr` como fuente de información.
-02. Inlcuir las cheatsheets de `navi` como fuente de información.
+02. Incluir las cheatsheets de `navi` como fuente de información.
 03. Incluir Arch Wiki como fuente de información.
 04. Adaptar la heurística de `thefuck` para hacer correcciones sin preguntar al
     motor de inferencia.
@@ -699,8 +707,7 @@ esta.
     // 'file' is an AST of the command line that can be exmined
     ```
     > [!TIP]
-    > mvdan es una librería para parsear instrucciones de shell. Es la que usa
-    > Bash.
+    > mvdan es una librería para parsear instrucciones de shell.
 08. Ofrecer al usuario estimaciones del tiempo que va a tener que esperar.
 09. Crear un proceso de onboarding para lanzar justo después de la instalación o
     con el flag --onboarding que simule interacciones reales de hasta 3 ejemplos
@@ -709,8 +716,6 @@ esta.
     de onboarding y dejar al usuario que explore los casos en función de que
     sean de su interés, esto puede funcionar mejor cuando hay muchas funciones
     porque a cada usuario le puede haber llamado la atención una.
-10. Crear un middleware que organice y mejore las solicitudes que se hacen a
-    ollama a través de su servicio web.
 11. Crear funcionalidad de anonimización de logs que permita ocultar de un modo
     reversible las direcciones IP, los correos electrónicos y los nombres de
     usuario del sistema.
@@ -782,7 +787,7 @@ echo -e "\e[38;5;214m#_?\e[0m"
 > códigos (2;R;G;B) y es innecesario para cumplir nuestros objetivos de
 > diferenciación.
 
-### Signíficado del acrónimo
+### Significado del acrónimo
 
 El acrónimo YUPS puede significar muchas cosas. Algunos ejemplos son:
 
@@ -870,6 +875,8 @@ Quizá se puedan usar en algún tipo de campaña publicitaria si se diera el cas
     ]
 }
 ```
+> [!IMPORTANT]
+> El uso de conectores de bash con comandos de la whitelist puede provocar riesgos si no existe una validación de AST profesional, por ejemplo la que se puede hacer con mvdan/sh.
 ```bash
 # Example:
 curl http://marvin:11434/api/chat -d '{
@@ -1150,9 +1157,9 @@ Estimated time: 1 minute if no models need to be installed.
 (Keep in mind that if you don't have a correct installation you can't expect best results)
 >Y # This user interaction launches yups --install process
 #_?
-YUPS Instalation Process
+YUPS Installation Process
 ...
-\e[1;Instalation complete\e[0;. The result of this process is saved in ~/.yups/conig.ini configuration file.
+\e[1;Instalation complete\e[0;. The result of this process is saved in ~/.yups/config.ini configuration file.
 Do you want to \e[1;review the configuration file\e[0;? (y/N)
 >Y # this launches edit ~/.yups/config.ini and after user exit the first command `yups --script my-script.sh -- ¿Ejecutar este script es seguro?` continues
 #_?
@@ -1195,7 +1202,7 @@ flag `--config param1="new value 1" param2=new-value2`.
   más potencia. NOTA: Si no se fuerza un modelo específico, al míddleware se le
   pasa la lista de modelos `[default, advanced]` y se le dice que elija el
   primero cargado (advanced si está cargado, y si no default).
-- `main-source` (man): la fuente principal de conocimiento a ser usada.
+- `main-source` (man): la fuente principal de conocimiento a ser usada. Las opciones dependerán de lo que se llegue a implementar y de lo que tenga instalado el sistema (man, tldr...).
 - `alike-commands` (3): número de comandos los últimos comandos que hay que
   revisar para que si se parecen lanzar la ejecución de tarea repetitiva.
 - `repeated-commands` (5, 20): el número de comandos que se tienen que repetir
@@ -1225,9 +1232,9 @@ acabar cualquier proceso.
     - [ ] `--config`
     - [ ] `--advanced`
   - [ ] Fuente de datos: lo que está escrito en el prompt actualmente
-  - [ ] Fuente de datos: lista de comndos disponible en el sistema
+  - [ ] Fuente de datos: lista de comandos disponible en el sistema
   - [ ] Integración con Bash para disparadores `F1` o `Ctrl+g`
-  - [ ] Tool: web-search
+  - [ ] Tool: web-search con configuración opt in para que el usuario valore si quiere asumir el riesgo de que salgan datos fuera del sistema.
   - [ ] `--ask-run` sólo para command line
   - [ ] `--test`
 - [ ] Readme
@@ -1302,7 +1309,7 @@ acabar cualquier proceso.
 
 ### v1.6.0
 
-- [ ] Procesod de onboarding
+- [ ] Proceso de onboarding
 - [ ] Generación de prompt a medida
 - [ ] Generación de título a medida
 - [ ] Manejo del flag `--notify`
@@ -1333,18 +1340,13 @@ acabar cualquier proceso.
 
 1. YUPS simplifica el trabajo habitual
 
-### v1.9.0
-
-- [ ] Creación de middleware
-- [ ] Soporte para Zsh
-
 #### Criterios de aceptación
 
 1. Las interacciones de `yups` con el motor de inferencia son más rápidas
 2. Los usuarios de Zsh tienen una experiencia de usuario comparable a los de
    Bash
 
-## Gloasario
+## Glosario
 
 - **Hook**: Un _hook_ representa un modo de engancharse a la funcionalidad de
   otro sistema, generalmente a través de la suscripción a eventos,
@@ -1360,8 +1362,9 @@ acabar cualquier proceso.
   de buscar cadenas precisas, busca cadenas similares atendiendo a un grado de
   diferencia, de tal modo que la cadena 'cat' puede ser igual a 'cata' con
   diferencia 1, o a 'cal' con diferencia 2.
+- **AST**: Un Árbol de Sintaxis Abstracta (Abstract Syntax Tree) es una estructura de datos en forma de árbol que representa la estructura jerárquica del código fuente.
 
 [^1]: En el futuro se prevé incluir al menos zsh
 
 [^2]: En el futuro se prevén incluir otros motores de inferencia locales como
-    llama.cpp u openrouter.
+    llama.cpp.
