@@ -95,11 +95,6 @@ Los componentes y modo de interaccionar de YUPS son:
   explicación que decide si ejecutarla (casos 2 y 3) respondiendo Sí, No o
   Editar.
 
-[^1]: En el futuro se prevé incluir al menos zsh
-
-[^2]: En el futuro se prevén incluir otros motores de inferencia locales como
-llama.cpp u openrouter.
-
 ```
 +----------------------+              +---------------------------------------+
 |                      |              |                                       |
@@ -427,6 +422,8 @@ convierten a YUPS en un verdadero ayudante.
   #_? [! Esto es una notificación]  
   usuario@máquina:/home/# _
   ```
+- `--test-models`: ejecuta una batería de tests contra todos los modelos que
+  haya instalados en ollama.
 - `--`: marcador del final de flags, necesario cuando se quiere añadir un
   comando en la invocación que puede tener sus propios flags.
 
@@ -1357,3 +1354,8 @@ acabar cualquier proceso.
   de buscar cadenas precisas, busca cadenas similares atendiendo a un grado de
   diferencia, de tal modo que la cadena 'cat' puede ser igual a 'cata' con
   diferencia 1, o a 'cal' con diferencia 2.
+
+[^1]: En el futuro se prevé incluir al menos zsh
+
+[^2]: En el futuro se prevén incluir otros motores de inferencia locales como
+    llama.cpp u openrouter.
