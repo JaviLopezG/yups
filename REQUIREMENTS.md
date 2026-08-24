@@ -36,10 +36,17 @@ necesitas, simplemente te la sugiere.
 > que `yups` hará referencia al comando ejecutable.
 
 > [!IMPORTANT]
-> Todos los trozos de código, datos, etc. son ejemplos muy básicos para dar una idea de cómo puede hacerse. No son lo que tiene que hacerse. Este documento define funcionalidad; no detalla qué tiene que hacerse, si no el resultado que debe obtener el usuario.
+> Todos los trozos de código, datos, etc. son ejemplos muy básicos para dar una
+> idea de cómo puede hacerse. No son lo que tiene que hacerse. Este documento
+> define funcionalidad; no detalla qué tiene que hacerse, si no el resultado que
+> debe obtener el usuario.
 
 > [!NOTE]
-> La definición de una funcionalidad no implica que tenga que implementarse a bajo nivel. Siempre que exista una solución implementada o un estándar se preferirá automatizar el uso de esa. Ver las versiones previas de `yups` en este repositorio (tag v0.5) y ramas desechadas (feature/go-client) para hacerse a la idea.
+> La definición de una funcionalidad no implica que tenga que implementarse a
+> bajo nivel. Siempre que exista una solución implementada o un estándar se
+> preferirá automatizar el uso de esa. Ver las versiones previas de `yups` en
+> este repositorio (tag v0.5) y ramas desechadas (feature/go-client) para
+> hacerse a la idea.
 
 ## Scope
 
@@ -58,7 +65,7 @@ necesitas, simplemente te la sugiere.
 Los componentes y modo de interaccionar de YUPS son:
 
 - `yups` es el punto central. Se puede ver como un ayudante. Un cliente o gestor
-  de inferencia. 
+  de inferencia.
 - Se engancha a `bash` [^1] mediante _hooks_ para enterarse cuando surgen
   problemas.
 - Usa variables de entorno y otros comandos (`history`, `pwd`, `ls`...) para
@@ -144,8 +151,16 @@ Los componentes y modo de interaccionar de YUPS son:
    que no sean 'yups' es útil gestionar la elección de distintos modelos y 
    priorizar las requests.
 ```
+
 > [!NOTE]
-> Es importante resaltar que en esta solución intervienen distintos sistemas con diferentes configuraciones y modos de afectar al resultado. Por ejemplo en la configuración de `yups` (TOML en `config.ini`) se puede establecer el default-model y el advanced-model que debe usar el sistema, que dependiendo del contexto se usarán uno u otro (o ninguno si se establece otro distinto con el flag `--config model=...`) para pasar en el campo model del json que se manda a la api http ya sea de ollama o del middleware que actuarán, también, de manera distinta al respecto de este parámetro.
+> Es importante resaltar que en esta solución intervienen distintos sistemas con
+> diferentes configuraciones y modos de afectar al resultado. Por ejemplo en la
+> configuración de `yups` (TOML en `config.ini`) se puede establecer el
+> default-model y el advanced-model que debe usar el sistema, que dependiendo
+> del contexto se usarán uno u otro (o ninguno si se establece otro distinto con
+> el flag `--config model=...`) para pasar en el campo model del json que se
+> manda a la api http ya sea de ollama o del middleware que actuarán, también,
+> de manera distinta al respecto de este parámetro.
 
 ### Políticas de seguridad
 
@@ -196,23 +211,23 @@ func main() {
 
 > [!IMPORTANT]
 > YUPS nunca mandará información fuera del sistema de confianza del usuario (su
-> propia máquina y en caso de ser otra, la del sistema de inferencia) a no ser que el usuario lo solicite expresamente.
+> propia máquina y en caso de ser otra, la del sistema de inferencia) a no ser
+> que el usuario lo solicite expresamente.
 
 #### Riesgos
 
 1. De `yups` hacia el motor de inferencia:
 
    - No generar prompt injections con la recolección de información.
-   - Separación física del contexto automático en un bloque delimitado y bien diferenciado de la zona de instrucciones.
+   - Separación física del contexto automático en un bloque delimitado y bien
+     diferenciado de la zona de instrucciones.
    - Salida JSON forzada.
    - Validación en cliente.
 
-
-
-
 2. Del sistema de inferencia hacia `yups`:
 
-   - No ejecutar ningún comando (que no esté en la whitelist) ni script sin verificación del usuario.
+   - No ejecutar ningún comando (que no esté en la whitelist) ni script sin
+     verificación del usuario.
 
 ### Operaciones
 
@@ -288,9 +303,9 @@ convierten a YUPS en un verdadero ayudante.
 > propio ejecutable el que pare la ejecución si el exit code es 0 o 130.
 
 > [!NOTE]
-> Los disparadores requieren que se instale yups, ya que el ejecutable por si sólo
-> no se puede enganchar mágicamente a bash, si no que es necesario crear shell scripts
-> en /etc/profile.d o incrustar código en el .bashrc, por ejemplo.
+> Los disparadores requieren que se instale yups, ya que el ejecutable por si
+> sólo no se puede enganchar mágicamente a bash, si no que es necesario crear
+> shell scripts en /etc/profile.d o incrustar código en el .bashrc, por ejemplo.
 
 - Se lanza `yups` cuando se produce un command not found (error 127) mediante el
   uso del handle `command_not_found_handle`.
@@ -364,8 +379,9 @@ convierten a YUPS en un verdadero ayudante.
   y si no se produce ningún error la borra la transacción al acabar.
 
 > [!TIP]
-> Hay soluciones que implementan sistemas de eventos en Bash como [Bash-Preexec](https://github.com/rcaloras/bash-preexec) 
- que pueden facilitar mucho esta parte.
+> Hay soluciones que implementan sistemas de eventos en Bash como
+> [Bash-Preexec](https://github.com/rcaloras/bash-preexec) que pueden facilitar
+> mucho esta parte.
 
 ### Flags
 
@@ -376,8 +392,8 @@ convierten a YUPS en un verdadero ayudante.
 
 #### Del sistema
 
-- `--cnf-handle command_name`: flag del sistema, se usa cuándo se ha producido un
-  error 127 (command not found)
+- `--cnf-handle command_name`: flag del sistema, se usa cuándo se ha producido
+  un error 127 (command not found)
 - `--ce-handle error_code command_name`: flag del sistema, se usa cuándo se ha
   producido un error indeterminado en la ejecución de un comando.
 - `--repetitive-process`: flag del sistema, se lanza cuando se detecta que se
@@ -409,7 +425,8 @@ convierten a YUPS en un verdadero ayudante.
   valores para campos calculados como `model`.
 - `--advanced`: se usa el modelo avanzado que esté configurado. No tiene efecto
   si se fuerza un modelo con `--config model=elmodelo`. También se usarán todas
-  las fuentes de información disponibles (implementadas e instaladas en el sistema) y no sólo la principal.
+  las fuentes de información disponibles (implementadas e instaladas en el
+  sistema) y no sólo la principal.
 - `--query`: pregunta directamente al motor de inferencia lo que está escrito
   sin intentar valorar si es un comando o no.
 - `--logs file1..fileN`: pregunta a la IA el significado de los logs. Si no se
@@ -425,11 +442,15 @@ convierten a YUPS en un verdadero ayudante.
   commando y verificar si hay una nueva versión, y en su caso lo actualiza.
 - `--upgrade`: update de todos los comandos del sistema.
 - `--title-compose`: guía al usuario por un cuestionario de sí/no sobre sus
-  preferencias y hábitos, para crear un title para la ventana de la terminal que le resulte útil. Si se usa `yups` en una terminal real, sin entorno gráfico, este flag no hace nada.
+  preferencias y hábitos, para crear un title para la ventana de la terminal que
+  le resulte útil. Si se usa `yups` en una terminal real, sin entorno gráfico,
+  este flag no hace nada.
 - `--prompt-compose`: guía al usuario por un cuestionario de sí/no sobre sus
-  preferencias y hábitos, para crear un prompt que le resulte útil (Ver starship o oh-my-posh).
-- `--notify`: sólo cuando se tiene un prompt personalizado con `yups --prompt-compose`, permite
-  mostrar una notificación en una línea antes del prompt.
+  preferencias y hábitos, para crear un prompt que le resulte útil (Ver starship
+  o oh-my-posh).
+- `--notify`: sólo cuando se tiene un prompt personalizado con
+  `yups --prompt-compose`, permite mostrar una notificación en una línea antes
+  del prompt.
   ```bash
   # Example  
   #_? [! Esto es una notificación]  
@@ -716,7 +737,7 @@ esta.
     de onboarding y dejar al usuario que explore los casos en función de que
     sean de su interés, esto puede funcionar mejor cuando hay muchas funciones
     porque a cada usuario le puede haber llamado la atención una.
-11. Crear funcionalidad de anonimización de logs que permita ocultar de un modo
+10. Crear funcionalidad de anonimización de logs que permita ocultar de un modo
     reversible las direcciones IP, los correos electrónicos y los nombres de
     usuario del sistema.
 
@@ -875,8 +896,12 @@ Quizá se puedan usar en algún tipo de campaña publicitaria si se diera el cas
     ]
 }
 ```
+
 > [!IMPORTANT]
-> El uso de conectores de bash con comandos de la whitelist puede provocar riesgos si no existe una validación de AST profesional, por ejemplo la que se puede hacer con mvdan/sh.
+> El uso de conectores de bash con comandos de la whitelist puede provocar
+> riesgos si no existe una validación de AST profesional, por ejemplo la que se
+> puede hacer con mvdan/sh.
+
 ```bash
 # Example:
 curl http://marvin:11434/api/chat -d '{
@@ -1202,7 +1227,9 @@ flag `--config param1="new value 1" param2=new-value2`.
   más potencia. NOTA: Si no se fuerza un modelo específico, al míddleware se le
   pasa la lista de modelos `[default, advanced]` y se le dice que elija el
   primero cargado (advanced si está cargado, y si no default).
-- `main-source` (man): la fuente principal de conocimiento a ser usada. Las opciones dependerán de lo que se llegue a implementar y de lo que tenga instalado el sistema (man, tldr...).
+- `main-source` (man): la fuente principal de conocimiento a ser usada. Las
+  opciones dependerán de lo que se llegue a implementar y de lo que tenga
+  instalado el sistema (man, tldr...).
 - `alike-commands` (3): número de comandos los últimos comandos que hay que
   revisar para que si se parecen lanzar la ejecución de tarea repetitiva.
 - `repeated-commands` (5, 20): el número de comandos que se tienen que repetir
@@ -1234,7 +1261,8 @@ acabar cualquier proceso.
   - [ ] Fuente de datos: lo que está escrito en el prompt actualmente
   - [ ] Fuente de datos: lista de comandos disponible en el sistema
   - [ ] Integración con Bash para disparadores `F1` o `Ctrl+g`
-  - [ ] Tool: web-search con configuración opt in para que el usuario valore si quiere asumir el riesgo de que salgan datos fuera del sistema.
+  - [ ] Tool: web-search con configuración opt in para que el usuario valore si
+    quiere asumir el riesgo de que salgan datos fuera del sistema.
   - [ ] `--ask-run` sólo para command line
   - [ ] `--test`
 - [ ] Readme
@@ -1362,7 +1390,9 @@ acabar cualquier proceso.
   de buscar cadenas precisas, busca cadenas similares atendiendo a un grado de
   diferencia, de tal modo que la cadena 'cat' puede ser igual a 'cata' con
   diferencia 1, o a 'cal' con diferencia 2.
-- **AST**: Un Árbol de Sintaxis Abstracta (Abstract Syntax Tree) es una estructura de datos en forma de árbol que representa la estructura jerárquica del código fuente.
+- **AST**: Un Árbol de Sintaxis Abstracta (Abstract Syntax Tree) es una
+  estructura de datos en forma de árbol que representa la estructura jerárquica
+  del código fuente.
 
 [^1]: En el futuro se prevé incluir al menos zsh
 
