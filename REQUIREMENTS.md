@@ -284,6 +284,11 @@ convierten a YUPS en un verdadero ayudante.
 > `yups --command-executed "$exit_code" "$last_command_text"` y que sea el
 > propio ejecutable el que pare la ejecución si el exit code es 0 o 130.
 
+> [!NOTE]
+> Los disparadores requieren que se instale yups, ya que el ejecutable por si sólo
+> no se puede enganchar mágicamente a bash, si no que es necesario crear shell scripts
+> en /etc/profile.d o incrustar código en el .bashrc, por ejemplo.
+
 - Se lanza `yups` cuando se produce un command not found (error 127) mediante el
   uso del handle `command_not_found_handle`.
   ```bash
@@ -303,7 +308,7 @@ convierten a YUPS en un verdadero ayudante.
   _yups_ce_handle() {
   	local exit_code=$?
   	# 0=OK; 127=Command not fund already managed; 130=SIGINT received (Ctrl+C for instance)
-  	if [[ $exit_code -eq 0 ]] || [[ $exit_code -eq 127 ]] || [[ $exit_code -eq 130]]; then
+  	if [[ $exit_code -eq 0 ]] || [[ $exit_code -eq 127 ]] || [[ $exit_code -eq 130 ]]; then
   	    return
   	fi
   	local last_command_text=$(history 1 | sed 's/^[ ]*[0-9]\+[ ]\+//')
@@ -335,7 +340,7 @@ convierten a YUPS en un verdadero ayudante.
 - Se lanza `yups` cuando los últimos N (configurable, por defecto 3) comandos
   son muy parecidos.
   ```bash
-  _yups_rep_handle(){
+  _yups_repited_command_handle(){
   	# Do a fuzzy comparision of last N commands
   	yups -- "$last_command"
   }
@@ -343,7 +348,7 @@ convierten a YUPS en un verdadero ayudante.
 - Se lanza `yups` cuando N de los últimos M (configurable, por defecto 5 de 20)
   comandos son iguales.
   ```bash
-  _yups_rep_handle(){
+  _yups_frequent_command_handle(){
   	# Count last command ocurrences in last M commands
   	yups --repetitive-process "$last_command"
   }
@@ -446,7 +451,9 @@ establecidos en el comando en cuestión (`man`).
 # Very basic example
 explain_current_line() {
     local tokens=($READLINE_LINE) 
-    local wrappers=("sudo" "su" "runuser" "chroot" "doas" "time" "watch" "timeout" "stdbuf" "nohup" "xargs" "exec" "env" "strace" "nice" "runcon" "setpriv" "bash" "sh" "pkexec" "sg" "newgrp" "setpriv" "renice" "chrt" "ionice" "taskset" "numactl" "choom" "prlimit" "cset shield" "unshare" "nsenter" "ip netns exec" "bwrap" "aa-exec" "capsh" "tsp" "systemd-run" "start-stop-daemon" "rlwrap" "fakeroot" "catchsegv" "valgrind" "setisid" "disown" "screen" "tmux" "flock")
+    # multitoken strings like `ip netns exec` can't match in this example, but it is only
+    # to show the basic idea of what should be done, so doesn't need to be correct.
+    local wrappers=("sudo" "su" "runuser" "chroot" "doas" "time" "watch" "timeout" "stdbuf" "nohup" "xargs" "exec" "env" "strace" "nice" "runcon" "setpriv" "bash" "sh" "pkexec" "sg" "newgrp" "renice" "chrt" "ionice" "taskset" "numactl" "choom" "prlimit" "cset shield" "unshare" "nsenter" "ip netns exec" "bwrap" "aa-exec" "capsh" "tsp" "systemd-run" "start-stop-daemon" "rlwrap" "fakeroot" "catchsegv" "valgrind" "setsid" "disown" "screen" "tmux" "flock")
 
     for token in "${tokens[@]}"; do
         if [[ "$token" == *"="* ]]; then continue; fi
@@ -820,7 +827,7 @@ Quizá se puedan usar en algún tipo de campaña publicitaria si se diera el cas
 > ollama no interprete pero que podría usar un futuro middleware, si bien no es
 > necesario hasta la implementación de este.
 
-```json
+```pseudo-json
 {
     "model": "name-model:specific-flavour",  # default value to be used by ollama or to be used as preferred by the middleware
     "mw_models": ["name-model:specific-flavour", "name-model"], # With a list of accepted models
@@ -862,7 +869,8 @@ Quizá se puedan usar en algún tipo de campaña publicitaria si se diera el cas
     [, #other functions]
     ]
 }
-
+```
+```bash
 # Example:
 curl http://marvin:11434/api/chat -d '{
     "model": "qwen3-coder:latest", 
@@ -870,8 +878,6 @@ curl http://marvin:11434/api/chat -d '{
     "mw_election": "loaded",
     "mw_type": "type",
     "messages": [{"role": "system", "content": "Eres un experto en IA e infraestructura, puedes buscar en la web o usar los comandos pwd, ls, cat, head, tail, ollama."}, {"role": "user", "content": "Cuál es la version mas alta de gemma que puedo correr en ollama."}],
-    "max_tokens": 500,
-    "temperature": 0.1, 
     "stream": false,
     "tools": [
     {
