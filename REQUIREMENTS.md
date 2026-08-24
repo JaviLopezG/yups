@@ -1248,10 +1248,10 @@ acabar cualquier proceso.
 
 ### v1.0.0
 
-- [ ] Cliente Go
-- [ ] Ayuda inline `--help`
-- [ ] Proceso de [instalación](#instalacion) `--install`
-- [ ] Proceso de desinstalación `--uninstall`
+- [ ] (WIP) Cliente Go
+- [ ] (WIP) Ayuda inline `--help`
+- [ ] (WIP) Proceso de [instalación](#instalacion) `--install`
+- [ ] (WIP) Proceso de desinstalación `--uninstall`
 - [ ] Proceso de [actualización](#actualizacion) sin comprobación, bajo demanda
   `--update-yups`
 - [ ] Consulta de una [línea que parece un comando](#linea-comando)
