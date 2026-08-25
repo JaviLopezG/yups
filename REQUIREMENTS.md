@@ -1248,11 +1248,11 @@ acabar cualquier proceso.
 
 ### v1.0.0
 
-- [ ] (WIP) Cliente Go
-- [ ] (WIP) Ayuda inline `--help`
-- [ ] (WIP) Proceso de [instalación](#instalacion) `--install`
-- [ ] (WIP) Proceso de desinstalación `--uninstall`
-- [ ] Proceso de [actualización](#actualizacion) sin comprobación, bajo demanda
+- [X] Cliente Go
+- [X] Ayuda inline `--help`
+- [X] Proceso de [instalación](#instalacion) `--install`
+- [X] Proceso de desinstalación `--uninstall`
+- [ ] (WIP) Proceso de [actualización](#actualizacion) sin comprobación, bajo demanda
   `--update-yups`
 - [ ] Consulta de una [línea que parece un comando](#linea-comando)
   - [ ] Gestión del motor de inferencia
@@ -1265,8 +1265,8 @@ acabar cualquier proceso.
     quiere asumir el riesgo de que salgan datos fuera del sistema.
   - [ ] `--ask-run` sólo para command line
   - [ ] `--test`
-- [ ] Readme
-- [ ] (WIP) Worker de Goreleaser para generar el ejecutable automáticamente con cada
+- [ ] (WIP) Readme
+- [X] Worker de Goreleaser para generar el ejecutable automáticamente con cada
   nueva versión.
 - [ ] Test de otras fuentes de información como tldr, cheatsheets navi o Arch
   Wiki

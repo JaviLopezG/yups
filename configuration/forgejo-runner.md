@@ -120,6 +120,46 @@ prefer releases published under a specific account instead of the CI bot,
 define your own token secret and swap the mapping in
 `.github/workflows/release.yml`.
 
+## Known issues
+
+### Forgejo: checkout fails with "path escapes from parent"
+
+Symptom: every job fails at the first step (`actions/checkout`) with
+
+```
+copyDir: failed to copy content to container:
+Error response from daemon: statat var/run/act/actions/<hash>: path escapes from parent
+```
+
+Cause: an incompatibility between the runner's `docker cp`-style copy of
+action code into the job container and **recent Docker engines** (the
+validation of destination paths was tightened; `docker:dind` floating on
+`latest` currently ships one of them). It is unrelated to the contents of
+the workflows.
+
+Workaround (already applied in the owner's compose): pin the dind sidecar
+to a known-good engine instead of `latest`:
+
+```yaml
+services:
+  docker-in-docker:
+    image: docker:27.5.1-dind   # instead of docker:dind
+    ...
+```
+
+Keep an eye on forgejo-runner releases for a version that adapts to newer
+daemons, then unpin.
+
+### Registry flakiness on first-time pulls
+
+Pulling several images concurrently (the parallel suite starts up to 8
+scenarios at once) occasionally trips the registry/daemon into spurious
+`page not found` errors or stalled downloads. The test harness already
+handles this: `TestMain` pre-pulls every image sequentially with timeouts
+and retries before any scenario starts, and scenarios run their containers
+with `--pull=never`, so a network hiccup can fail fast but never hang the
+suite.
+
 ## Other settings worth knowing
 
 - `runner.capacity`: how many jobs run concurrently. Each integration job
