@@ -3,7 +3,7 @@
 `yups` prints the `#_?` marker in ANSI 256-colour 214 and manages its own
 installation.
 
-```console
+```bash
 $ yups            # prints #_? in colour 214
 $ yups --help     # help with the options available so far
 $ yups --install
@@ -42,16 +42,16 @@ Exit codes: `0` success, `1` error, `2` wrong usage.
 
 Requirements: Go >= 1.25 and, for the integration tests, Docker.
 
-```console
+```bash
 $ make build              # builds ./yups
 $ make test               # gofmt + go vet + unit tests
-$ make test-integration   # ubuntu:24.04 containers, users and permissions
+$ make test-integration   # ubuntu:latest containers, users and permissions
 ```
 
 The unit tests live next to the code (`internal/app`) and use an in-memory
 fake of the operating system. The integration tests (`integration/`, build tag
 `integration`) build a linux binary and run every scenario inside stock
-distro containers — `ubuntu:24.04` (the default), `fedora:latest`,
+distro containers — `ubuntu:latest` (the default), `fedora:latest`,
 `archlinux:latest` and `opensuse/leap:latest`: root installs, plain users
 without permissions, users in the `sudo` group, writable `~/bin`
 directories, repeated installs, partial uninstalls, etc.
@@ -59,7 +59,7 @@ directories, repeated installs, partial uninstalls, etc.
 Select the target systems with `YUPS_TEST_DISTRO` (comma separated names or
 `all`; unset means ubuntu):
 
-```console
+```bash
 $ make test-integration                      # only ubuntu (default)
 $ make test-integration DISTRO=arch          # a single distro
 $ make test-integration DISTRO=fedora,arch   # several distros

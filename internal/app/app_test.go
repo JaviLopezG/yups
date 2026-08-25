@@ -93,7 +93,7 @@ func TestHelpListsAvailableCommands(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
-	for _, want := range []string{"--help", "--install", "--uninstall", Marker} {
+	for _, want := range []string{"--help", "--install", "--uninstall", Logo} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output %q does not contain %q", out, want)
 		}

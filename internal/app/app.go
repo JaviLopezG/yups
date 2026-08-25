@@ -1,4 +1,4 @@
-// Package app implements the yups commands: printing the marker, --help,
+// Package app implements the yups commands: printing the logo, --help,
 // --install and --uninstall.
 package app
 
@@ -19,17 +19,17 @@ const (
 const (
 	// ProgramName is the name the executable is installed as.
 	ProgramName = "yups"
-	// Marker is the string printed by default.
-	Marker = "#_?"
+	// Logo is the string printed by default.
+	Logo = "#_?"
 )
 
-// ColoredMarker is Marker wrapped in ANSI 256-colour 214 (orange).
-const ColoredMarker = "\x1b[38;5;214m" + Marker + "\x1b[0m"
+// ColoredLogo is Logo wrapped in ANSI 256-colour 214 (orange).
+const ColoredLogo = "\x1b[38;5;214m" + Logo + "\x1b[0m"
 
-const helpText = `yups - prints the ` + Marker + ` marker and manages its own installation
+const helpText = `yups - prints the ` + Logo + ` logo and manages its own installation
 
 Usage:
-  yups                 Print the marker (` + Marker + `) in ANSI colour 214
+  yups                 Print the logo (` + Logo + `) in ANSI colour 214
   yups --help          Show this help text
   yups --install       Install the yups executable into the first directory
                        of the PATH where the current user can write
@@ -40,7 +40,7 @@ Usage:
 // code for the process.
 func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, ColoredMarker)
+		fmt.Fprintln(stdout, ColoredLogo)
 		return ExitOK
 	}
 
@@ -124,7 +124,6 @@ func isAdmin(env *Env) bool {
 	}
 	return env.SudoWithoutPassword()
 }
-
 
 // quotedJoin renders each directory as its full executable path for user
 // facing messages.

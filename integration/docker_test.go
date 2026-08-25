@@ -1,7 +1,7 @@
 //go:build integration
 
 // Integration tests: they build the yups binary for linux and exercise it
-// inside stock ubuntu:24.04 and fedora:latest containers with different
+// inside stock ubuntu:latest and fedora:latest containers with different
 // users and permissions.
 //
 // Run them with:
@@ -34,16 +34,11 @@ type distro struct {
 
 // allDistros lists every system the suite knows about.
 var allDistros = []distro{
-	{name: "ubuntu", image: "ubuntu:24.04", adminGroup: "sudo"},
+	{name: "ubuntu", image: "ubuntu:latest", adminGroup: "sudo"},
 	{name: "fedora", image: "fedora:latest", adminGroup: "wheel"},
-	{
-		name:       "arch",
-		image:      "archlinux:latest",
-		adminGroup: "wheel",
-		// The arch image may not ship useradd/groupadd (the shadow
-		// package); install it when missing.
-		setup: "command -v useradd >/dev/null 2>&1 || pacman -Sy --noconfirm shadow",
-	},
+	// The arch image may not ship useradd/groupadd (the shadow
+	// package); install it when missing.
+	{name: "arch", image: "archlinux:latest", adminGroup: "wheel", setup: "command -v useradd >/dev/null 2>&1 || pacman -Sy --noconfirm shadow"},
 	// openSUSE only creates the wheel group when the installer (YaST)
 	// grants administrator rights to a user; a stock container lacks it,
 	// so reproduce that configuration step.
