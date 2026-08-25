@@ -13,9 +13,9 @@ name: release
 # goreleaser is installed directly instead of through the
 # goreleaser/goreleaser-action action: that action does not exist on
 # data.forgejo.org (the DEFAULT_ACTIONS_URL of typical Forgejo instances),
-# so its use would break every Forgejo run. Each release step exports ONLY
-# the token its target needs: goreleaser aborts when more than one token
-# variable is defined at once.
+# so its use would break every Forgejo run. The release step decides the
+# target in-shell and exports exactly one token variable (see its
+# comments): goreleaser aborts when more than one is defined at once.
 on:
   push:
     tags:
@@ -70,15 +70,29 @@ jobs:
           tar xzf "goreleaser_Linux_${ga}.tar.gz" -C /tmp goreleaser
           /tmp/goreleaser --version
 
-      - name: Release with goreleaser (GitHub)
-        if: startsWith(github.server_url, 'https://github.com')
-        run: /tmp/goreleaser release --clean
+      - name: Release with goreleaser
+        # A single step decides the target in-shell: Forgejo/Gitea runners
+        # auto-inject their own run token as real container environment
+        # variables (GITHUB_TOKEN among them), which would trip goreleaser's
+        # "multiple tokens" check no matter which variable a step exports,
+        # and `if:`-selected steps leave room for context differences
+        # between platforms. The token travels under a neutral name and is
+        # re-exported -- with every other token variable unset -- to
+        # exactly the one each target requires.
+        run: |
+          args="release --clean"
+          case "$GITHUB_SERVER_URL" in
+            https://github.com)
+              unset GITEA_TOKEN FORGEJO_TOKEN
+              export GITHUB_TOKEN="$YUPS_RELEASE_TOKEN"
+              ;;
+            *)
+              unset GITHUB_TOKEN FORGEJO_TOKEN
+              export GITEA_TOKEN="$YUPS_RELEASE_TOKEN"
+              args="$args --config .goreleaser-forgejo.yaml"
+              ;;
+          esac
+          exec /tmp/goreleaser $args
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Release with goreleaser (Forgejo/Gitea)
-        if: "!startsWith(github.server_url, 'https://github.com')"
-        run: /tmp/goreleaser release --clean --config .goreleaser-forgejo.yaml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          YUPS_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
