@@ -53,13 +53,15 @@ jobs:
             *) echo "unsupported architecture: $(uname -m)"; exit 1 ;;
           esac
           base=https://github.com/goreleaser/goreleaser/releases/latest/download
-          mkdir /tmp/goreleaser-bin && cd /tmp/goreleaser-bin
+          mkdir -p /tmp/goreleaser-bin && cd /tmp/goreleaser-bin
           # Keep the original asset name: checksums.txt refers to it.
           curl -fsSL "$base/goreleaser_Linux_${ga}.tar.gz" -o "goreleaser_Linux_${ga}.tar.gz"
           curl -fsSL "$base/checksums.txt" -o checksums.txt
           grep "goreleaser_Linux_${ga}.tar.gz\$" checksums.txt | sha256sum -c -
-          tar xzf "goreleaser_Linux_${ga}.tar.gz" goreleaser
-          ./goreleaser --version
+          # Extract straight into /tmp: the release steps below invoke
+          # /tmp/goreleaser by its absolute path.
+          tar xzf "goreleaser_Linux_${ga}.tar.gz" -C /tmp goreleaser
+          /tmp/goreleaser --version
 
       - name: Release with goreleaser (GitHub)
         if: startsWith(github.server_url, 'https://github.com')
