@@ -83,9 +83,11 @@ func osLookupExecutable(dir, name string) bool {
 
 // osIsWritableDir probes the directory by actually creating (and removing)
 // a temporary file in it: access(2)-style checks can be misleading with
-// ACLs, read-only mounts or sticky bits.
+// ACLs, read-only mounts or sticky bits. CreateTemp replaces the "*" with a
+// random string (no collisions); the ".kk" extension marks the file as
+// disposable junk, so anything left behind is trivially identifiable.
 func osIsWritableDir(dir string) bool {
-	file, err := os.CreateTemp(dir, ".yups-writable-check-*")
+	file, err := os.CreateTemp(dir, ".yups-writable-check-*.kk")
 	if err != nil {
 		return false
 	}

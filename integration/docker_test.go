@@ -46,14 +46,16 @@ var allDistros = []distro{
 }
 
 // distroEnvVar selects which distros the suite runs against: a comma
-// separated list of names, or "all". When unset only ubuntu runs.
+// separated list of names, or "all". Every distro runs by default: the
+// scenarios are fully parallel, so the extra cost of the whole matrix is
+// small.
 const distroEnvVar = "YUPS_TEST_DISTRO"
 
 // selectedDistros resolves the distros requested through distroEnvVar.
 func selectedDistros() ([]distro, error) {
 	selection := strings.ToLower(strings.TrimSpace(os.Getenv(distroEnvVar)))
 	if selection == "" {
-		selection = "ubuntu"
+		selection = "all"
 	}
 	if selection == "all" {
 		return allDistros, nil
@@ -153,12 +155,15 @@ func docker(t *testing.T, args ...string) (string, int) {
 }
 
 // forEachImage runs fn once per selected distro, turning each run into a
-// subtest named after it.
+// subtest named after it. Subtests run in parallel: every scenario uses its
+// own throwaway container, so nothing is shared between them. The overall
+// concurrency is bounded by `go test -parallel` (GOMAXPROCS by default).
 func forEachImage(t *testing.T, fn func(t *testing.T, d distro)) {
 	t.Helper()
 	for _, d := range testDistros {
 		d := d
 		t.Run(d.name, func(t *testing.T) {
+			t.Parallel()
 			fn(t, d)
 		})
 	}

@@ -1266,7 +1266,7 @@ acabar cualquier proceso.
   - [ ] `--ask-run` sólo para command line
   - [ ] `--test`
 - [ ] Readme
-- [ ] Worker de Goreleaser para generar el ejecutable automáticamente con cada
+- [ ] (WIP) Worker de Goreleaser para generar el ejecutable automáticamente con cada
   nueva versión.
 - [ ] Test de otras fuentes de información como tldr, cheatsheets navi o Arch
   Wiki

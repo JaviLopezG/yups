@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// Version is the version of the binary. It is overridden at build time with
+// -ldflags "-X yups/internal/app.Version=vX.Y.Z"; a plain `go build` leaves
+// the development placeholder.
+var Version = "dev"
+
 // Process exit codes.
 const (
 	ExitOK    = 0
@@ -31,6 +36,7 @@ const helpText = `yups - prints the ` + Logo + ` logo and manages its own instal
 Usage:
   yups                 Print the logo (` + Logo + `) in ANSI colour 214
   yups --help          Show this help text
+  yups --version       Show the yups version
   yups --install       Install the yups executable into the first directory
                        of the PATH where the current user can write
   yups --uninstall     Remove every yups executable found in the PATH
@@ -47,6 +53,9 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, helpText)
+		return ExitOK
+	case "-V", "--version", "version":
+		fmt.Fprintf(stdout, "%s %s\n", ProgramName, Version)
 		return ExitOK
 	case "-i", "--install", "install":
 		return Install(env, stdout, stderr)

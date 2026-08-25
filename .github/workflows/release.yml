@@ -1,0 +1,61 @@
+name: release
+# Publishes a release when a vX.Y.Z tag is pushed. The full test suite runs
+# first: if anything fails, there is no release.
+#
+# Works unmodified on GitHub and Forgejo/Gitea:
+#   - On GitHub, goreleaser uses .goreleaser.yaml and publishes with the
+#     automatic GITHUB_TOKEN.
+#   - On Forgejo/Gitea, it uses the .goreleaser-forgejo.yaml overlay
+#     (publishes to the self-hosted instance) with the token the forge
+#     injects automatically as secrets.GITHUB_TOKEN. No user-defined
+#     secrets are required on either platform.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Both tokens are always exported from the automatic per-run token;
+    # each platform injects secrets.GITHUB_TOKEN with its own value.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser builds the changelog from git history
+
+      - name: Install docker client
+        run: |
+          command -v docker >/dev/null 2>&1 && exit 0
+          apt-get update && apt-get install -y --no-install-recommends docker.io
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Full test suite
+        run: |
+          make build test
+          make test-integration
+
+      - name: Release with goreleaser (GitHub)
+        if: startsWith(github.server_url, 'https://github.com')
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+
+      - name: Release with goreleaser (Forgejo/Gitea)
+        if: "!startsWith(github.server_url, 'https://github.com')"
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean --config .goreleaser-forgejo.yaml
+

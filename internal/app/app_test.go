@@ -93,9 +93,21 @@ func TestHelpListsAvailableCommands(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
-	for _, want := range []string{"--help", "--install", "--uninstall", Logo} {
+	for _, want := range []string{"--help", "--version", "--install", "--uninstall", Logo} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output %q does not contain %q", out, want)
+		}
+	}
+}
+
+func TestVersionFlagPrintsNameAndVersion(t *testing.T) {
+	for _, arg := range []string{"--version", "-V", "version"} {
+		out, code := runDispatch(t, newFakeFS().env(), arg)
+		if code != ExitOK {
+			t.Fatalf("arg %q: exit code = %d, want %d", arg, code, ExitOK)
+		}
+		if want := ProgramName + " " + Version + "\n"; out != want {
+			t.Errorf("arg %q: output = %q, want %q", arg, out, want)
 		}
 	}
 }

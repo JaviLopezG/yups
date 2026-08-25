@@ -1,0 +1,12 @@
+version: 2
+
+# goreleaser overlay for releases made from the self-hosted Forgejo/Gitea
+# instance. It inherits every setting from .goreleaser.yaml and only
+# switches the upload target; the token arrives through GITEA_TOKEN (see
+# .github/workflows/release.yml and configuration/forgejo-runner.md).
+includes:
+  - ./.goreleaser.yaml
+
+gitea_urls:
+  api: https://code.javilopezg.com/api/v1
+  download: https://code.javilopezg.com

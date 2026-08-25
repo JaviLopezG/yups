@@ -1,0 +1,34 @@
+name: tests
+# Runs identically on GitHub and on Forgejo/Gitea: all three read the
+# .github/workflows directory (Forgejo also reads .forgejo/workflows, but
+# only when that directory exists, so it must stay absent).
+#
+# Docker requirement: the integration tests spawn throwaway distro
+# containers. GitHub hosted runners provide a docker daemon; self-hosted
+# runners must expose one through the DOCKER_HOST environment variable
+# (see configuration/forgejo-runner.md). Jobs never need privileged mode.
+on: [push, pull_request]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install docker client
+        run: |
+          command -v docker >/dev/null 2>&1 && exit 0
+          apt-get update && apt-get install -y --no-install-recommends docker.io
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build, vet, lint and unit tests
+        run: make build test
+
+      - name: Integration tests (every distro, parallel)
+        run: make test-integration
+
