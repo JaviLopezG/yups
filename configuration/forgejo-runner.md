@@ -114,13 +114,26 @@ per-run, repository-scoped token as `secrets.GITHUB_TOKEN`:
 | GitHub | `secrets.GITHUB_TOKEN` | GitHub (`.goreleaser.yaml`) |
 | Forgejo/Gitea | `secrets.GITHUB_TOKEN` (alias of its own run token) | the self-hosted instance (`.goreleaser-forgejo.yaml`) |
 
-The release workflow exports both `GITHUB_TOKEN` and `GITEA_TOKEN` from it
-so goreleaser finds whichever variable matches the detected target. If you
-prefer releases published under a specific account instead of the CI bot,
-define your own token secret and swap the mapping in
+Each release step exports **only** the single token its target requires
+(`GITHUB_TOKEN` on GitHub, `GITEA_TOKEN` elsewhere): goreleaser aborts with
+"multiple tokens found" when more than one is defined at once, and the value
+always comes from the automatic `secrets.GITHUB_TOKEN`. If you prefer
+releases published under a specific account instead of the CI bot, define
+your own token secret and swap the mapping in
 `.github/workflows/release.yml`.
 
 ## Known issues
+
+### goreleaser-action cannot be used in the shared release workflow
+
+`uses: goreleaser/goreleaser-action@v6` breaks Forgejo runs: the runner
+resolves short action references against `DEFAULT_ACTIONS_URL` (typically
+`data.forgejo.org`) and that repository does not exist there. Because the
+runner clones every remote action before running anything, the whole job
+fails at preparation time with "unable to clone ... remote: Not found".
+
+The release workflow therefore installs goreleaser directly from its GitHub
+releases, verifying its `checksums.txt`, and runs it with `run:` steps.
 
 ### Forgejo: checkout fails with "path escapes from parent"
 
