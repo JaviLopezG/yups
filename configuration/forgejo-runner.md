@@ -114,12 +114,16 @@ per-run, repository-scoped token as `secrets.GITHUB_TOKEN`:
 | GitHub | `secrets.GITHUB_TOKEN` | GitHub (`.goreleaser.yaml`) |
 | Forgejo/Gitea | `secrets.GITHUB_TOKEN` (alias of its own run token) | the self-hosted instance (`.goreleaser-forgejo.yaml`) |
 
-Each release step exports **only** the single token its target requires
-(`GITHUB_TOKEN` on GitHub, `GITEA_TOKEN` elsewhere): goreleaser aborts with
-"multiple tokens found" when more than one is defined at once, and the value
-always comes from the automatic `secrets.GITHUB_TOKEN`. If you prefer
-releases published under a specific account instead of the CI bot, define
-your own token secret and swap the mapping in
+Each platform also injects its run token as a **real environment variable**
+in the job container (`GITHUB_TOKEN` on GitHub; `GITHUB_TOKEN`,
+`GITEA_TOKEN` or `FORGEJO_TOKEN`, depending on the runner, on
+Forgejo/Gitea). Since goreleaser aborts with "multiple tokens found" when
+more than one is defined at once, the release step receives the token
+under a neutral name (`YUPS_RELEASE_TOKEN`) and re-exports it -- after
+unsetting every other token variable -- to the single name its target
+requires (`GITHUB_TOKEN` on GitHub, `GITEA_TOKEN` elsewhere). If you
+prefer releases published under a specific account instead of the CI bot,
+define your own token secret and swap the mapping in
 `.github/workflows/release.yml`.
 
 ## Known issues
