@@ -13,3 +13,9 @@ coverage.txt
 # Editor / system noise
 .DS_Store
 *.swp
+
+# VS Code
+.vscode/
+
+# Cline
+.clinerules/
