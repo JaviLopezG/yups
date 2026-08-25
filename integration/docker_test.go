@@ -1,8 +1,8 @@
 //go:build integration
 
 // Integration tests: they build the yups binary for linux and exercise it
-// inside stock ubuntu:latest and fedora:latest containers with different
-// users and permissions.
+// inside stock distro containers (ubuntu, fedora, archlinux and opensuse;
+// see allDistros below) with different users and permissions.
 //
 // Run them with:
 //
@@ -11,6 +11,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // defaultPATH is the PATH of a stock container image (every distro below
@@ -131,6 +133,32 @@ func runIntegration(m *testing.M) int {
 		return 1
 	}
 
+	// Pull every distro image up front, sequentially: when the parallel
+	// suite starts, several first-time pulls race against each other and
+	// the registry or daemon occasionally answers them with spurious
+	// "page not found" errors or hangs outright (both seen on CI). Scenarios
+	// run their containers with --pull=never, so this is the only place
+	// where downloads happen; a final failure here means the affected
+	// scenarios will fail fast instead of hanging.
+	for _, d := range testDistros {
+		var err error
+		for attempt := 1; attempt <= 2; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			pull := exec.CommandContext(ctx, "docker", "pull", d.image)
+			pull.Stdout, pull.Stderr = os.Stdout, os.Stderr
+			err = pull.Run()
+			cancel()
+			if err == nil {
+				break
+			}
+			fmt.Printf("warning: pulling %s failed on attempt %d: %v; retrying\n", d.image, attempt, err)
+			time.Sleep(time.Duration(attempt) * 3 * time.Second)
+		}
+		if err != nil {
+			fmt.Printf("warning: pre-pulling %s failed after retries (%v); its scenarios will fail fast\n", d.image, err)
+		}
+	}
+
 	return m.Run()
 }
 
@@ -171,10 +199,13 @@ func forEachImage(t *testing.T, fn func(t *testing.T, d distro)) {
 
 // newContainer starts a fresh container of the given distro image with the
 // built binary mounted read-only at /opt/yups and registers its removal.
+// The image is expected to be local already (TestMain pre-pulls it);
+// --pull=never keeps network hiccups from hanging the suite: with no image
+// available the scenario fails fast instead.
 func newContainer(t *testing.T, d distro) string {
 	t.Helper()
 	out, code := docker(t,
-		"run", "-d", "--rm",
+		"run", "-d", "--pull=never", "--rm",
 		"-v", testBinary+":/opt/yups:ro",
 		d.image,
 		"sleep", "900",
