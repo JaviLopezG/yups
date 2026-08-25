@@ -80,5 +80,5 @@ jobs:
         if: "!startsWith(github.server_url, 'https://github.com')"
         run: /tmp/goreleaser release --clean --config .goreleaser-forgejo.yaml
         env:
-          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
