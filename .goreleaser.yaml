@@ -19,7 +19,8 @@ builds:
       - -s -w -X yups/internal/app.Version={{ .Tag }}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -36,6 +37,8 @@ changelog:
 
 # Publishing target: with no gitea_urls block, goreleaser publishes to
 # GitHub using the automatic GITHUB_TOKEN. Releases made from the
-# self-hosted Forgejo instance use the .goreleaser-forgejo.yaml overlay,
-# which adds a gitea_urls block on top of this file (see
-# .github/workflows/release.yml).
+# self-hosted Forgejo instance use .goreleaser-forgejo.yaml instead, which
+# duplicates this file and adds a gitea_urls block on top of it (see
+# .github/workflows/release.yml). Keep both files in sync when editing:
+# goreleaser's `includes` feature is Pro-only, so they cannot reference
+# each other.

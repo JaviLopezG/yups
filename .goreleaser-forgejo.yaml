@@ -1,12 +1,45 @@
 version: 2
 
-# goreleaser overlay for releases made from the self-hosted Forgejo/Gitea
-# instance. It inherits every setting from .goreleaser.yaml and only
-# switches the upload target; the token arrives through GITEA_TOKEN (see
-# .github/workflows/release.yml and configuration/forgejo-runner.md).
-includes:
-  - ./.goreleaser.yaml
+# Full standalone configuration for releases published from the self-hosted
+# Forgejo/Gitea instance. It is an exact copy of .goreleaser.yaml plus the
+# gitea_urls block at the bottom; keep them in sync when editing (they
+# cannot reference each other: goreleaser's `includes` is Pro-only).
+project_name: yups
+
+before:
+  hooks:
+    - go vet ./...
+
+builds:
+  - id: yups
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X yups/internal/app.Version={{ .Tag }}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
 
 gitea_urls:
   api: https://code.javilopezg.com/api/v1
   download: https://code.javilopezg.com
+

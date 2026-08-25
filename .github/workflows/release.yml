@@ -21,6 +21,13 @@ on:
     tags:
       - "v*"
 
+# The automatic GITHUB_TOKEN needs write access to create the release and
+# upload artifacts (otherwise: 403 Resource not accessible by integration).
+# Forgejo ignores this key, which is fine: its run tokens are not scoped
+# down by default.
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
