@@ -409,10 +409,8 @@ convierten a YUPS en un verdadero ayudante.
 
 #### Del usuario
 
-- `--install`: cuando se quiere lanzar el proceso de instalación.
-- `--uninstall`: para lanzar el proceso de desinstalación.
-- `--help`: muestra la ayuda inline.
-- `--script script.sh`: sirve para pasar un script que haya que explicar o
+- `--install-yups`: cuando se quiere lanzar el proceso de instalación.
+- `--uninstall-yups`: para lanzar el proceso de desinstalación.
   corregir.
 - `--continue [request_code]`: flag para continuar una solicitud anterior. Si no
   se establece un ID, se continuará con la última solicitud. Es la opción
@@ -1180,10 +1178,9 @@ YUPS installation is not correct
 Do you want to \e[1;Launch automatic installation process\e[0;? (Y/n)
 Estimated time: 1 minute if no models need to be installed.
 (Keep in mind that if you don't have a correct installation you can't expect best results)
->Y # This user interaction launches yups --install process
+>Y # This user interaction launches yups --install-yups process
 #_?
 YUPS Installation Process
-...
 \e[1;Instalation complete\e[0;. The result of this process is saved in ~/.yups/config.ini configuration file.
 Do you want to \e[1;review the configuration file\e[0;? (y/N)
 >Y # this launches edit ~/.yups/config.ini and after user exit the first command `yups --script my-script.sh -- ¿Ejecutar este script es seguro?` continues
@@ -1250,13 +1247,11 @@ acabar cualquier proceso.
 
 - [x] Cliente Go
 - [x] Ayuda inline `--help`
-- [x] Proceso de [instalación](#instalacion) `--install`
-- [x] Proceso de desinstalación `--uninstall`
+- [x] Proceso de [instalación](#instalacion) `--install-yups`
+- [x] Proceso de desinstalación `--uninstall-yups`
 - [ ] (WIP) Proceso de [actualización](#actualizacion) sin comprobación, bajo demanda
   `--update-yups`
 - [ ] Consulta de una [línea que parece un comando](#linea-comando)
-  - [ ] Gestión del motor de inferencia
-    - [ ] `--config`
     - [ ] `--advanced`
   - [ ] Fuente de datos: lo que está escrito en el prompt actualmente
   - [ ] Fuente de datos: lista de comandos disponible en el sistema

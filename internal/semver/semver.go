@@ -21,8 +21,11 @@ type Version struct {
 // Parse parses a semantic version string like "v1.2.3", "1.2.3", "v1.0.0-rc.1", or "dev".
 func Parse(v string) (Version, error) {
 	raw := strings.TrimSpace(v)
-	if raw == "" || raw == "dev" {
+	if raw == "dev" {
 		return Version{IsDev: true, Raw: raw}, nil
+	}
+	if raw == "" {
+		return Version{}, fmt.Errorf("empty version string")
 	}
 
 	clean := strings.TrimPrefix(raw, "v")
@@ -72,8 +75,10 @@ func Parse(v string) (Version, error) {
 //	 0 if v1 == v2
 //	 1 if v1 > v2
 //
-// "dev" or invalid versions are treated as lower than any valid semantic version.
-// If both are invalid or "dev", Compare returns 0 when equal, or compares them lexicographically.
+// "dev" is treated as higher than any numbered semantic version to facilitate
+// testing. Invalid versions are treated as lower than any valid semantic version.
+// If both are invalid or both are "dev", Compare returns 0 when equal, or
+// compares them lexicographically.
 func Compare(v1, v2 string) int {
 	ver1, err1 := Parse(v1)
 	ver2, err2 := Parse(v2)
@@ -81,14 +86,21 @@ func Compare(v1, v2 string) int {
 	if err1 != nil && err2 != nil {
 		return strings.Compare(v1, v2)
 	}
-	if err1 != nil || ver1.IsDev {
-		if err2 != nil || ver2.IsDev {
-			return strings.Compare(v1, v2)
-		}
+	if err1 != nil {
 		return -1
 	}
-	if err2 != nil || ver2.IsDev {
+	if err2 != nil {
 		return 1
+	}
+
+	if ver1.IsDev && ver2.IsDev {
+		return strings.Compare(v1, v2)
+	}
+	if ver1.IsDev {
+		return 1
+	}
+	if ver2.IsDev {
+		return -1
 	}
 
 	if ver1.Major != ver2.Major {

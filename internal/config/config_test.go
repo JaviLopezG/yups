@@ -119,7 +119,7 @@ func TestBumpVersionNeverMovesBackwards(t *testing.T) {
 		{"newer tag bumps", "v1.0.0", "v1.2.0", true, "v1.2.0"},
 		{"equal tag keeps", "v1.2.0", "v1.2.0", false, "v1.2.0"},
 		{"older tag keeps", "v1.2.0", "v1.0.0", false, "v1.2.0"},
-		{"dev current accepts any tag", "dev", "v0.1.0", true, "v0.1.0"},
+		{"dev current keeps older tag", "dev", "v0.1.0", false, "dev"},
 		{"floor accepts first real tag", FloorVersion, "v1.0.0", true, "v1.0.0"},
 		{"multi version jump lands on newest", "v1.0.0", "v3.0.0", true, "v3.0.0"},
 	}
@@ -135,5 +135,18 @@ func TestBumpVersionNeverMovesBackwards(t *testing.T) {
 				t.Errorf("final Version = %q, want %q", c.Version, tt.wantFinal)
 			}
 		})
+	}
+}
+
+func TestSetVersion(t *testing.T) {
+	c := Config{Version: "v1.0.0"}
+	if !SetVersion(&c, "v0.5.0") {
+		t.Error("SetVersion to older version should return true")
+	}
+	if c.Version != "v0.5.0" {
+		t.Errorf("Version = %q, want v0.5.0", c.Version)
+	}
+	if SetVersion(&c, "v0.5.0") {
+		t.Error("SetVersion to same version should return false")
 	}
 }

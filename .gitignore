@@ -25,3 +25,6 @@ agent-migration/
 
 #Zoo
 .roo/
+
+#Gemini
+.agents/

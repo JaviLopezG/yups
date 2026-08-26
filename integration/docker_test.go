@@ -356,7 +356,7 @@ func TestHelpListsCommands(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
-		requireOutputContains(t, out, "--help", "--install", "--uninstall")
+		requireOutputContains(t, out, "--help", "--install-yups", "--uninstall-yups")
 	})
 }
 
@@ -373,7 +373,7 @@ func TestUnknownOptionFailsWithUsageCode(t *testing.T) {
 func TestInstallAsRootInstallsIntoFirstPATHDirectory(t *testing.T) {
 	forEachImage(t, func(t *testing.T, d distro) {
 		id := newContainer(t, d)
-		out, code := yupsCmd(t, id, "root", "", "--install")
+		out, code := yupsCmd(t, id, "root", "", "--install-yups")
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
@@ -382,16 +382,19 @@ func TestInstallAsRootInstallsIntoFirstPATHDirectory(t *testing.T) {
 		if !fileExists(t, id, "/usr/local/sbin/yups") {
 			t.Error("/usr/local/sbin/yups was not created")
 		}
+		if !fileExists(t, id, "/root/.yups/config.toml") {
+			t.Error("/root/.yups/config.toml was not initialized")
+		}
 	})
 }
 
 func TestInstallTwiceReportsAlreadyInstalled(t *testing.T) {
 	forEachImage(t, func(t *testing.T, d distro) {
 		id := newContainer(t, d)
-		if out, code := yupsCmd(t, id, "root", "", "--install"); code != 0 {
+		if out, code := yupsCmd(t, id, "root", "", "--install-yups"); code != 0 {
 			t.Fatalf("first install failed (%d):\n%s", code, out)
 		}
-		out, code := yupsCmd(t, id, "root", "", "--install")
+		out, code := yupsCmd(t, id, "root", "", "--install-yups")
 		if code != 0 {
 			t.Fatalf("second install exit code = %d, want 0\n%s", code, out)
 		}
@@ -407,9 +410,9 @@ func TestInstallDetectsSameNameCommandOutsideCurrentPATH(t *testing.T) {
 			t.Fatalf("setup failed:\n%s", out)
 		}
 		// PATH no longer contains /usr/bin, but the command exists in one
-		// of the well-known binary directories: step 2 of --install
+		// of the well-known binary directories: step 2 of --install-yups
 		// catches it.
-		out, code := yupsCmd(t, id, "root", "/tmp/only", "--install")
+		out, code := yupsCmd(t, id, "root", "/tmp/only", "--install-yups")
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
@@ -423,7 +426,7 @@ func TestInstallWithoutPermissionsAndWithoutSudoFails(t *testing.T) {
 		createUser(t, id, d, "plain", false)
 		// The default PATH directories are all root-owned and not
 		// writable by `plain`.
-		out, code := yupsCmd(t, id, "plain", "", "--install")
+		out, code := yupsCmd(t, id, "plain", "", "--install-yups")
 		if code == 0 {
 			t.Fatalf("exit code = %d, want failure\n%s", code, out)
 		}
@@ -439,7 +442,7 @@ func TestInstallWithoutPermissionsAndWithSudoSuggestsSudoBangBang(t *testing.T) 
 	forEachImage(t, func(t *testing.T, d distro) {
 		id := newContainer(t, d)
 		createUser(t, id, d, "adminish", true)
-		out, code := yupsCmd(t, id, "adminish", "", "--install")
+		out, code := yupsCmd(t, id, "adminish", "", "--install-yups")
 		if code == 0 {
 			t.Fatalf("exit code = %d, want failure\n%s", code, out)
 		}
@@ -457,13 +460,16 @@ func TestInstallIntoWritableHomeBin(t *testing.T) {
 		createWritableUserBin(t, id, "plain")
 
 		pathEnv := "/home/plain/bin:" + defaultPATH
-		out, code := yupsCmd(t, id, "plain", pathEnv, "--install")
+		out, code := yupsCmd(t, id, "plain", pathEnv, "--install-yups")
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
 		requireOutputContains(t, out, "/home/plain/bin/yups")
 		if !fileExists(t, id, "/home/plain/bin/yups") {
 			t.Error("/home/plain/bin/yups was not created")
+		}
+		if !fileExists(t, id, "/home/plain/.yups/config.toml") {
+			t.Error("user config.toml was not created")
 		}
 		if _, code := sh(t, id, "root", "", "test -x /home/plain/bin/yups"); code != 0 {
 			t.Error("installed file is not executable")
@@ -474,7 +480,7 @@ func TestInstallIntoWritableHomeBin(t *testing.T) {
 func TestUninstallWhenNotInstalled(t *testing.T) {
 	forEachImage(t, func(t *testing.T, d distro) {
 		id := newContainer(t, d)
-		out, code := yupsCmd(t, id, "root", "", "--uninstall")
+		out, code := yupsCmd(t, id, "root", "", "--uninstall-yups")
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
@@ -489,7 +495,7 @@ func TestUninstallRemovesEveryCopy(t *testing.T) {
 			"cp /opt/yups /usr/local/sbin/yups && cp /opt/yups /usr/bin/yups"); code != 0 {
 			t.Fatalf("setup failed:\n%s", out)
 		}
-		out, code := yupsCmd(t, id, "root", "", "--uninstall")
+		out, code := yupsCmd(t, id, "root", "", "--uninstall-yups")
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
@@ -510,7 +516,7 @@ func TestUninstallBlockedWithoutSudoInformsUser(t *testing.T) {
 			"cp /opt/yups /usr/bin/yups && chmod 755 /usr/bin/yups"); code != 0 {
 			t.Fatalf("setup failed:\n%s", out)
 		}
-		out, code := yupsCmd(t, id, "plain", "", "--uninstall")
+		out, code := yupsCmd(t, id, "plain", "", "--uninstall-yups")
 		if code == 0 {
 			t.Fatalf("exit code = %d, want failure\n%s", code, out)
 		}
@@ -530,7 +536,7 @@ func TestUninstallBlockedWithSudoSuggestsSudoBangBang(t *testing.T) {
 			"cp /opt/yups /usr/bin/yups && chmod 755 /usr/bin/yups"); code != 0 {
 			t.Fatalf("setup failed:\n%s", out)
 		}
-		out, code := yupsCmd(t, id, "adminish", "", "--uninstall")
+		out, code := yupsCmd(t, id, "adminish", "", "--uninstall-yups")
 		if code == 0 {
 			t.Fatalf("exit code = %d, want failure\n%s", code, out)
 		}
@@ -553,7 +559,7 @@ func TestUninstallMixedPermissionsRemovesWritableAndHintsSudo(t *testing.T) {
 		}
 
 		pathEnv := "/home/adminish/bin:" + defaultPATH
-		out, code := yupsCmd(t, id, "adminish", pathEnv, "--uninstall")
+		out, code := yupsCmd(t, id, "adminish", pathEnv, "--uninstall-yups")
 		if code == 0 {
 			t.Fatalf("exit code = %d, want failure (some copies could not be removed)\n%s", code, out)
 		}
@@ -783,18 +789,18 @@ func TestUpdateAsRootDoesNotTouchOtherUsersConfig(t *testing.T) {
 func TestUninstallKeepsConfigByDefault(t *testing.T) {
 	forEachImage(t, func(t *testing.T, d distro) {
 		id := newContainer(t, d)
-		if out, code := yupsCmd(t, id, "root", "", "--install"); code != 0 {
+		if out, code := yupsCmd(t, id, "root", "", "--install-yups"); code != 0 {
 			t.Fatalf("install failed (%d):\n%s", code, out)
 		}
 		writeUserConfig(t, id, "root", "http://nobody.invalid/a/b", "v0.0.9")
 
 		// docker exec without -i leaves stdin closed: the questions fall
 		// back to their defaults (uninstall for all users, keep ~/.yups).
-		out, code := yupsCmd(t, id, "root", "", "--uninstall")
+		out, code := yupsCmd(t, id, "root", "", "--uninstall-yups")
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
-		if fileExists(t, id, "/usr/local/sbin/yups") {
+		if fileExists(t, id, "/usr/local/sbin/yups") || fileExists(t, id, "/usr/local/bin/yups") {
 			t.Error("the binary should have been removed")
 		}
 		if !fileExists(t, id, "/root/.yups/config.toml") {
@@ -807,20 +813,17 @@ func TestUninstallKeepsConfigByDefault(t *testing.T) {
 func TestUninstallDeletesConfigWhenConfirmed(t *testing.T) {
 	forEachImage(t, func(t *testing.T, d distro) {
 		id := newContainer(t, d)
-		if out, code := yupsCmd(t, id, "root", "", "--install"); code != 0 {
+		if out, code := yupsCmd(t, id, "root", "", "--install-yups"); code != 0 {
 			t.Fatalf("install failed (%d):\n%s", code, out)
 		}
 		writeUserConfig(t, id, "root", "http://nobody.invalid/a/b", "v0.0.9")
 
-		// Two yes answers: depending on the distro, /usr/local/sbin can be
-		// a symlink of /usr/local/bin (Fedora merges sbin into bin), which
-		// makes the installation show up as several places and triggers
-		// the all-users question before the config one.
-		out, code := shWithInput(t, id, "root", "", "/opt/yups --uninstall", strings.NewReader("y\ny\n"))
+		// "n" declines keeping the state directory, "y" confirms deletion for all users.
+		out, code := shWithInput(t, id, "root", "", "/opt/yups --uninstall-yups", strings.NewReader("n\ny\n"))
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
-		if fileExists(t, id, "/usr/local/sbin/yups") {
+		if fileExists(t, id, "/usr/local/sbin/yups") || fileExists(t, id, "/usr/local/bin/yups") {
 			t.Error("the binary should have been removed")
 		}
 		if fileExists(t, id, "/root/.yups") {

@@ -162,6 +162,9 @@ func (f *fakeFS) env() *Env {
 		PathExists: func(path string) bool {
 			return f.existingPaths[path]
 		},
+		EvalSymlinks: func(path string) (string, error) {
+			return path, nil
+		},
 		AskConfirmation: func(prompt string, defaultYes bool) bool {
 			hint := "(y/N)"
 			if defaultYes {
@@ -200,7 +203,7 @@ func TestHelpListsAvailableCommands(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
-	for _, want := range []string{"--help", "--version", "--install", "--uninstall", "--update-yups", Logo} {
+	for _, want := range []string{"--help", "--version", "--install-yups", "--uninstall-yups", "--update-yups", Logo} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output %q does not contain %q", out, want)
 		}
@@ -232,7 +235,7 @@ func TestUnknownOptionIsAUsageError(t *testing.T) {
 func TestInstallWhenAlreadyInPath(t *testing.T) {
 	fs := newFakeFS()
 	fs.addExecutable("/usr/bin/yups")
-	out, code := runDispatch(t, fs.env(), "--install")
+	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 	}
@@ -247,7 +250,7 @@ func TestInstallWhenAlreadyInPath(t *testing.T) {
 func TestInstallDetectsSameCommandOutsideCurrentPath(t *testing.T) {
 	fs := newFakeFS()
 	fs.addExecutable("/usr/local/sbin/yups") // exists outside the fake PATH
-	out, code := runDispatch(t, fs.env(), "--install")
+	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 	}
@@ -256,10 +259,10 @@ func TestInstallDetectsSameCommandOutsideCurrentPath(t *testing.T) {
 	}
 }
 
-func TestInstallCopiesIntoFirstWritablePATHDir(t *testing.T) {
+func TestInstallCopiesIntoFirstWritablePATHDirAndInitializesConfig(t *testing.T) {
 	fs := newFakeFS()
 	fs.writable["/usr/local/bin"] = true
-	out, code := runDispatch(t, fs.env(), "--install")
+	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 	}
@@ -269,11 +272,22 @@ func TestInstallCopiesIntoFirstWritablePATHDir(t *testing.T) {
 	if !strings.Contains(out, "/usr/local/bin/yups") {
 		t.Errorf("user was not informed of the destination: %q", out)
 	}
+	cfgPath := config.Path(fs.home)
+	cfg, ok := fs.configs[cfgPath]
+	if !ok {
+		t.Fatalf("config file was not initialized at %s", cfgPath)
+	}
+	if cfg.Version != Version {
+		t.Errorf("initialized config version = %q, want %q", cfg.Version, Version)
+	}
+	if cfg.YUPSRepo != config.DefaultYUPSRepo {
+		t.Errorf("initialized config YUPSRepo = %q, want %q", cfg.YUPSRepo, config.DefaultYUPSRepo)
+	}
 }
 
 func TestInstallWithoutPermissionsAndWithoutSudoFails(t *testing.T) {
 	fs := newFakeFS() // nothing writable, no groups
-	out, code := runDispatch(t, fs.env(), "--install")
+	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitError {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitError, out)
 	}
@@ -289,7 +303,7 @@ func TestInstallWithoutPermissionsAndWithSudoSuggestsSudoBangBang(t *testing.T) 
 	for _, group := range []string{"sudo", "sudoer", "sudoers", "wheel", "admin"} {
 		fs := newFakeFS()
 		fs.groups = []string{"users", group}
-		out, code := runDispatch(t, fs.env(), "--install")
+		out, code := runDispatch(t, fs.env(), "--install-yups")
 		if code != ExitError {
 			t.Fatalf("group %q: exit code = %d, want %d (%s)", group, code, ExitError, out)
 		}
@@ -302,7 +316,7 @@ func TestInstallWithoutPermissionsAndWithSudoSuggestsSudoBangBang(t *testing.T) 
 func TestInstallWithoutGroupButPasswordlessSudoSuggestsSudoBangBang(t *testing.T) {
 	fs := newFakeFS()
 	fs.sudoNoPass = true // e.g. root or a NOPASSWD sudoers entry
-	out, code := runDispatch(t, fs.env(), "--install")
+	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitError {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitError, out)
 	}
@@ -316,7 +330,7 @@ func TestUninstallBlockedWithPasswordlessSudoSuggestsSudoBangBang(t *testing.T) 
 	fs.sudoNoPass = true
 	fs.addExecutable("/usr/bin/yups")  // exists...
 	fs.blocked["/usr/bin/yups"] = true // ...but cannot be removed
-	out, code := runDispatch(t, fs.env(), "--uninstall")
+	out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 	if code != ExitError {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitError, out)
 	}
@@ -330,7 +344,7 @@ func TestUninstallWithWheelGroupSuggestsSudoBangBang(t *testing.T) {
 	fs.groups = []string{"wheel"}
 	fs.addExecutable("/usr/bin/yups")  // exists...
 	fs.blocked["/usr/bin/yups"] = true // ...but cannot be removed
-	out, code := runDispatch(t, fs.env(), "--uninstall")
+	out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 	if code != ExitError {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitError, out)
 	}
@@ -343,7 +357,7 @@ func TestInstallReportsExecutableResolutionFailure(t *testing.T) {
 	fs := newFakeFS()
 	fs.writable["/usr/bin"] = true
 	fs.execPathErr = errors.New("cannot resolve")
-	out, code := runDispatch(t, fs.env(), "--install")
+	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitError {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitError, out)
 	}
@@ -354,7 +368,7 @@ func TestInstallReportsExecutableResolutionFailure(t *testing.T) {
 
 func TestUninstallWhenNotInstalled(t *testing.T) {
 	fs := newFakeFS()
-	out, code := runDispatch(t, fs.env(), "--uninstall")
+	out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 	}
@@ -367,7 +381,7 @@ func TestUninstallRemovesEveryCopy(t *testing.T) {
 	fs := newFakeFS()
 	fs.addExecutable("/home/user/bin/yups")
 	fs.addExecutable("/usr/bin/yups")
-	out, code := runDispatch(t, fs.env(), "--uninstall")
+	out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 	}
@@ -385,7 +399,7 @@ func TestUninstallBlockedWithoutSudoInformsUser(t *testing.T) {
 	fs := newFakeFS()
 	fs.addExecutable("/usr/bin/yups")  // exists...
 	fs.blocked["/usr/bin/yups"] = true // ...but cannot be removed
-	out, code := runDispatch(t, fs.env(), "--uninstall")
+	out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 	if code != ExitError {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitError, out)
 	}
@@ -402,7 +416,7 @@ func TestUninstallBlockedWithSudoSuggestsSudoBangBang(t *testing.T) {
 	fs.groups = []string{"sudo"}
 	fs.addExecutable("/usr/bin/yups")  // exists...
 	fs.blocked["/usr/bin/yups"] = true // ...but cannot be removed
-	out, code := runDispatch(t, fs.env(), "--uninstall")
+	out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 	if code != ExitError {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitError, out)
 	}

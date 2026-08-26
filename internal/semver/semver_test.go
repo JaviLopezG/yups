@@ -18,7 +18,7 @@ func TestParse(t *testing.T) {
 		{input: "v0.6.4", wantErr: false, major: 0, min: 6, patch: 4},
 		{input: "v1.0.0-rc.1", wantErr: false, major: 1, min: 0, patch: 0, preRelease: "rc.1"},
 		{input: "dev", wantErr: false, isDev: true},
-		{input: "", wantErr: false, isDev: true},
+		{input: "", wantErr: true},
 		{input: "v1.2", wantErr: true},
 		{input: "invalid", wantErr: true},
 		{input: "v1.2.a", wantErr: true},
@@ -56,8 +56,8 @@ func TestCompare(t *testing.T) {
 		{"v2.0.0", "v1.9.9", 1},
 		{"v0.6.4", "v0.6.3", 1},
 		{"v0.6.3", "v0.6.4", -1},
-		{"dev", "v1.0.0", -1},
-		{"v1.0.0", "dev", 1},
+		{"dev", "v1.0.0", 1},
+		{"v1.0.0", "dev", -1},
 		{"dev", "dev", 0},
 		{"v1.0.0-rc.1", "v1.0.0", -1},
 		{"v1.0.0", "v1.0.0-rc.1", 1},
@@ -81,7 +81,10 @@ func TestIsNewer(t *testing.T) {
 	if IsNewer("v1.0.0", "v1.0.0") {
 		t.Error("v1.0.0 should not be newer than v1.0.0")
 	}
-	if !IsNewer("dev", "v0.1.0") {
-		t.Error("v0.1.0 should be newer than dev")
+	if !IsNewer("v0.1.0", "dev") {
+		t.Error("dev should be newer than v0.1.0")
+	}
+	if IsNewer("dev", "v0.1.0") {
+		t.Error("v0.1.0 should not be newer than dev")
 	}
 }

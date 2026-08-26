@@ -92,6 +92,9 @@ type Env struct {
 	// PathExists reports whether a filesystem path exists (files and
 	// directories alike).
 	PathExists func(path string) bool
+	// EvalSymlinks returns the path name after the evaluation of any symbolic
+	// links.
+	EvalSymlinks func(path string) (string, error)
 	// AskConfirmation asks the user a yes/no question, returning
 	// defaultYes when the input is empty, unavailable (piped scripts,
 	// containers) or exhausted. It echoes the question so transcripts
@@ -133,6 +136,7 @@ func NewOSEnv() *Env {
 		ExecSelf:            osExecSelf,
 		ReplaceExecutable:   osReplaceExecutable,
 		PathExists:          osPathExists,
+		EvalSymlinks:        filepath.EvalSymlinks,
 		AskConfirmation:     osAskConfirmation,
 	}
 }
@@ -143,9 +147,9 @@ func osPathDirs() []string {
 
 func osKnownBinDirs() []string {
 	return []string{
-		"/usr/local/sbin", "/usr/local/bin",
-		"/usr/sbin", "/usr/bin",
-		"/sbin", "/bin",
+		"/usr/local/bin", "/usr/local/sbin",
+		"/usr/bin", "/usr/sbin",
+		"/bin", "/sbin",
 	}
 }
 

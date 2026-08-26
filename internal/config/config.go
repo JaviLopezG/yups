@@ -125,3 +125,12 @@ func BumpVersion(c *Config, tag string) bool {
 	c.Version = tag
 	return true
 }
+
+// SetVersion updates c.Version to tag, returning whether the stored version changed.
+func SetVersion(c *Config, tag string) bool {
+	if c.Version == tag {
+		return false
+	}
+	c.Version = tag
+	return true
+}

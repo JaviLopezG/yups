@@ -1,4 +1,4 @@
-// uninstall.go - `yups --uninstall`.
+// uninstall.go - `yups --uninstall-yups`.
 package app
 
 import (
@@ -12,7 +12,7 @@ import (
 	"yups/internal/config"
 )
 
-// Uninstall implements `yups --uninstall`:
+// Uninstall implements `yups --uninstall-yups`:
 //
 //  1. If the command is nowhere to be found (PATH plus the well-known
 //     binary directories), the user is informed that it is already
@@ -25,14 +25,17 @@ import (
 //     user has permission, reporting what was removed.
 //  4. If some copy could not be removed and the user belongs to an
 //     administrator group, repeating the command with sudo is suggested.
-//  5. Finally, when ~/.yups exists, the user is asked whether to delete
-//     the configuration and history directory; the default keeps it.
+//  5. Finally, the user is asked whether to keep configuration files and
+//     request history (default: keep). If the user opts to delete them,
+//     an administrator is asked whether to delete for all users or only
+//     the current user.
 func Uninstall(env *Env, stdout, stderr io.Writer) int {
 	candidates := append(append([]string{}, env.PathDirs()...), env.KnownBinDirs()...)
 
 	found := findInDirs(env, candidates, ProgramName)
 	if len(found) == 0 {
 		fmt.Fprintf(stdout, "%s is not installed (already uninstalled).\n", ProgramName)
+		askToDeleteStateDir(env, stdout)
 		return ExitOK
 	}
 
@@ -49,6 +52,7 @@ func Uninstall(env *Env, stdout, stderr io.Writer) int {
 			targets = dirsInsideHome(found, home)
 			if len(targets) == 0 {
 				fmt.Fprintf(stdout, "Keeping the system-wide installations (%s).\n", quotedJoin(found))
+				askToDeleteStateDir(env, stdout)
 				return ExitOK
 			}
 		}
@@ -89,9 +93,9 @@ func Uninstall(env *Env, stdout, stderr io.Writer) int {
 	return exitCode
 }
 
-// askToDeleteStateDir offers deleting ~/.yups (configuration, logs and
-// interaction history). The default answer keeps it: losing history is
-// worse than an orphan directory nobody reads.
+// askToDeleteStateDir offers keeping ~/.yups (configuration, logs and
+// interaction history). Default is to keep. If declined, administrator users
+// are asked whether to delete for all users or only the current user.
 func askToDeleteStateDir(env *Env, stdout io.Writer) {
 	home, err := env.UserHomeDir()
 	if err != nil {
@@ -101,11 +105,35 @@ func askToDeleteStateDir(env *Env, stdout io.Writer) {
 	if !env.PathExists(stateDir) {
 		return
 	}
-	question := fmt.Sprintf("Delete the %s configuration and history directory?", stateDir)
-	if !env.AskConfirmation(question, false) {
+	if env.AskConfirmation("Keep configuration files and request history?", true) {
 		fmt.Fprintf(stdout, "Keeping %s.\n", stateDir)
 		return
 	}
+
+	if isAdmin(env) {
+		if env.AskConfirmation("Delete configuration and history for all users?", false) {
+			dirs := []string{stateDir}
+			if home != "/root" && env.PathExists("/root/.yups") {
+				dirs = append(dirs, "/root/.yups")
+			}
+			if matches, err := filepath.Glob("/home/*/.yups"); err == nil {
+				for _, m := range matches {
+					if env.PathExists(m) {
+						dirs = append(dirs, m)
+					}
+				}
+			}
+			for _, dir := range dedupeDirs(dirs) {
+				if err := env.RemoveAll(dir); err != nil {
+					fmt.Fprintf(stdout, "Could not delete %s: %v.\n", dir, err)
+				} else {
+					fmt.Fprintf(stdout, "Deleted %s.\n", dir)
+				}
+			}
+			return
+		}
+	}
+
 	if err := env.RemoveAll(stateDir); err != nil {
 		fmt.Fprintf(stdout, "Could not delete %s: %v.\n", stateDir, err)
 		return

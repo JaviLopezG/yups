@@ -23,7 +23,7 @@ const (
 	testFallbackAPI   = "https://api.github.com/repos/JaviLopezG/yups/releases/latest"
 	testArchiveURL    = "https://dl.example/yups.tar.gz"
 	testChecksumsURL  = "https://dl.example/checksums.txt"
-	testStagingBinary = "/tmp/stage-abc123/yups"
+	testStagingBinary = "/tmp/yups-update-stage123.kk/yups"
 )
 
 // fakeTransport serves canned HTTP responses without touching the network;
@@ -202,7 +202,7 @@ func TestUpdateExecsApplierWithHandoffArguments(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 	}
-	wantArgv := []string{ProgramName, flagUpdateApply, "--from", "/tmp/stage-abc123", "--installed", "/usr/bin"}
+	wantArgv := []string{ProgramName, flagUpdateApply, "--from", "/tmp/yups-update-stage123.kk", "--installed", "/usr/bin"}
 	call := fs.execCalls[0]
 	if call.path != testStagingBinary {
 		t.Errorf("exec path = %q, want the staged binary %q", call.path, testStagingBinary)
@@ -222,10 +222,10 @@ func TestUpdateWithoutInstalledCopyInformsAndCleansStaging(t *testing.T) {
 	if code != ExitError {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitError, out)
 	}
-	if !strings.Contains(out, "--install") {
+	if !strings.Contains(out, "--install-yups") {
 		t.Errorf("output %q does not suggest installing instead", out)
 	}
-	if !containsString(fs.removedAll, "/tmp/stage-abc123") {
+	if !containsString(fs.removedAll, "/tmp/yups-update-stage123.kk") {
 		t.Errorf("staging directory was not cleaned: %v", fs.removedAll)
 	}
 	if len(fs.execCalls) != 0 {
@@ -245,26 +245,27 @@ func containsString(list []string, want string) bool {
 func TestUpdateApplyOperatesOnKeeperAndInformsDuplicates(t *testing.T) {
 	setVersion(t, "v1.1.0")
 	fs := newFakeFS()
+	fs.addExecutable("/home/user/bin/yups")
 	fs.addExecutable("/usr/bin/yups")
 
 	out, code := runDispatch(t, fs.env(),
-		flagUpdateApply, "--from", "/tmp/stage-abc123", "--installed", "/usr/bin,/home/user/bin")
+		flagUpdateApply, "--from", "/tmp/yups-update-stage123.kk", "--installed", "/usr/bin,/home/user/bin")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 	}
-	// Decision 8: only the keeper is replaced; duplicates survive.
-	if len(fs.replacedDirs) != 1 || fs.replacedDirs[0] != "/usr/bin" {
-		t.Errorf("replaced = %v, want only the keeper /usr/bin", fs.replacedDirs)
+	// The first instance in PATH (/home/user/bin) is replaced; duplicates survive.
+	if len(fs.replacedDirs) != 1 || fs.replacedDirs[0] != "/home/user/bin" {
+		t.Errorf("replaced = %v, want only the keeper /home/user/bin", fs.replacedDirs)
 	}
 	requireOutputContains(t, out,
-		"Updated /usr/bin/"+ProgramName,
+		"Updated /home/user/bin/"+ProgramName,
 		"several places",
-		"/home/user/bin/"+ProgramName,
+		"/usr/bin/"+ProgramName,
 		"duplicates are left untouched")
-	if containsString(fs.replacedDirs, "/home/user/bin") {
+	if containsString(fs.replacedDirs, "/usr/bin") {
 		t.Error("the duplicate must not be touched")
 	}
-	if !containsString(fs.removedAll, "/tmp/stage-abc123") {
+	if !containsString(fs.removedAll, "/tmp/yups-update-stage123.kk") {
 		t.Errorf("staging directory was not cleaned: %v", fs.removedAll)
 	}
 	if !strings.Contains(out, "updated to v1.1.0") {
@@ -272,51 +273,45 @@ func TestUpdateApplyOperatesOnKeeperAndInformsDuplicates(t *testing.T) {
 	}
 }
 
-func TestSelectKeeperPriorityRules(t *testing.T) {
+func TestFirstInPath(t *testing.T) {
+	fs := newFakeFS()
+	// PATH is: /home/user/bin, /usr/local/bin, /usr/bin
+
 	tests := []struct {
 		name     string
 		dirs     []string
-		running  string
 		want     string
-		wantRest string // comma joined expected others
+		wantRest string
 	}{
 		{
-			name:     "first result wins without signals",
+			name:     "first PATH directory wins over later one",
 			dirs:     []string{"/usr/bin", "/home/user/bin"},
-			running:  "",
-			want:     "/usr/bin",
-			wantRest: "/home/user/bin",
+			want:     "/home/user/bin",
+			wantRest: "/usr/bin",
 		},
 		{
-			name:     "directory outside usr and home wins",
-			dirs:     []string{"/home/user/bin", "/opt/bin"},
-			want:     "/opt/bin",
-			wantRest: "/home/user/bin",
+			name:     "middle PATH directory wins over last one",
+			dirs:     []string{"/usr/bin", "/usr/local/bin"},
+			want:     "/usr/local/bin",
+			wantRest: "/usr/bin",
 		},
 		{
-			name:     "running executable wins among ties",
-			dirs:     []string{"/opt/a", "/opt/b"},
-			running:  "/opt/b/yups",
+			name:     "directories not in PATH pick the first discovered",
+			dirs:     []string{"/opt/b", "/opt/a"},
 			want:     "/opt/b",
 			wantRest: "/opt/a",
 		},
 		{
-			name:     "outside beats the running executable in system dirs",
-			dirs:     []string{"/usr/bin", "/opt/bin", "/home/user/bin"},
-			running:  "/usr/bin/yups",
-			want:     "/opt/bin",
-			wantRest: "/usr/bin,/home/user/bin",
-		},
-		{
-			name: "duplicates collapse to one candidate",
-			dirs: []string{"/usr/bin", "/usr/bin"},
-			want: "/usr/bin",
+			name:     "single directory returns no duplicates",
+			dirs:     []string{"/usr/bin"},
+			want:     "/usr/bin",
+			wantRest: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			keeper, others := selectKeeper(tt.dirs, tt.running)
+			keeper, others := firstInPath(fs.env(), tt.dirs)
 			if keeper != tt.want {
 				t.Errorf("keeper = %q, want %q", keeper, tt.want)
 			}
@@ -327,14 +322,14 @@ func TestSelectKeeperPriorityRules(t *testing.T) {
 	}
 }
 
-func TestUpdateApplyBumpsConfigForwardNeverBackwards(t *testing.T) {
+func TestUpdateApplyRecordsInstalledVersionInConfig(t *testing.T) {
 	tests := []struct {
 		name       string
 		configured string
 		want       string
 	}{
 		{"older config advances", "v0.9.0", "v1.1.0"},
-		{"newer config is kept", "v2.0.0", "v2.0.0"},
+		{"downgrade updates config", "v2.0.0", "v1.1.0"},
 	}
 
 	for _, tt := range tests {
@@ -348,7 +343,7 @@ func TestUpdateApplyBumpsConfigForwardNeverBackwards(t *testing.T) {
 			})
 
 			out, code := runDispatch(t, fs.env(),
-				flagUpdateApply, "--from", "/tmp/stage-abc123", "--installed", "/usr/bin")
+				flagUpdateApply, "--from", "/tmp/yups-update-stage123.kk", "--installed", "/usr/bin")
 			if code != ExitOK {
 				t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 			}
@@ -367,14 +362,14 @@ func TestUpdateApplyKeepsStagingWhenBlockedAndSuggestsSudo(t *testing.T) {
 	fs.replaceErrs["/usr/bin"] = errors.New("permission denied")
 
 	out, code := runDispatch(t, fs.env(),
-		flagUpdateApply, "--from", "/tmp/stage-abc123", "--installed", "/usr/bin")
+		flagUpdateApply, "--from", "/tmp/yups-update-stage123.kk", "--installed", "/usr/bin")
 	if code != ExitError {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitError, out)
 	}
 	if !strings.Contains(out, "sudo !!") {
 		t.Errorf("output %q does not suggest the sudo retry", out)
 	}
-	if containsString(fs.removedAll, "/tmp/stage-abc123") {
+	if containsString(fs.removedAll, "/tmp/yups-update-stage123.kk") {
 		t.Error("staging was cleaned although a retry with sudo still needs it")
 	}
 }
@@ -465,14 +460,14 @@ func TestRunMigrationsSkipsAppliedAndOutOfRangeSteps(t *testing.T) {
 	}
 }
 
-func TestRunMigrationsDevTargetAppliesNothing(t *testing.T) {
+func TestRunMigrationsDevTargetAppliesAllPending(t *testing.T) {
 	restoreMigrations(t, stepMigration("v1.1.0", &ranSteps))
 	ranSteps = nil
 
 	fs := newFakeFS()
 	applied, err := RunMigrations(fs.env(), fs.home, "dev")
-	if err != nil || applied != 0 || len(ranSteps) != 0 {
-		t.Errorf("applied = %d, ran = %v, err = %v; want nothing to run for a dev build", applied, ranSteps, err)
+	if err != nil || applied != 1 || len(ranSteps) != 1 {
+		t.Errorf("applied = %d, ran = %v, err = %v; want dev build to apply pending migrations for testing", applied, ranSteps, err)
 	}
 }
 
@@ -542,15 +537,14 @@ func TestInstallReportsMultiLocationAnomaly(t *testing.T) {
 	fs.addExecutable("/home/user/bin/yups") // first PATH directory
 	fs.addExecutable("/usr/bin/yups")
 
-	out, code := runDispatch(t, fs.env(), "--install")
+	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 	}
 	requireOutputContains(t, out,
 		"already installed",
 		"several places",
-		"consider cleaning up the duplicates",
-		"will keep using /home/user/bin/"+ProgramName)
+		"operating on /home/user/bin/"+ProgramName)
 	if fs.installedDst != "" {
 		t.Error("nothing should have been copied over an existing installation")
 	}
@@ -599,9 +593,9 @@ func TestUninstallSeveralCopiesAsksForAllUsers(t *testing.T) {
 			}
 			fs.askScript = []bool{tt.answer}
 
-			out, code := runDispatch(t, fs.env(), "--uninstall")
+			out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 			if code != tt.wantExitCode {
-				t.Fatalf("exit code = %d, want %d (%s)", code, tt.wantExitCode, out)
+				t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 			}
 			if len(fs.askedQuestions) != 1 || !strings.Contains(fs.askedQuestions[0], "all users") {
 				t.Errorf("asked = %v, want exactly the all-users question", fs.askedQuestions)
@@ -631,7 +625,7 @@ func TestUninstallAsksToDeleteStateDir(t *testing.T) {
 		fs.addExecutable("/usr/bin/yups")
 		fs.existingPaths[stateDir] = true
 
-		out, code := runDispatch(t, fs.env(), "--uninstall")
+		out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 		if code != ExitOK {
 			t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 		}
@@ -641,13 +635,13 @@ func TestUninstallAsksToDeleteStateDir(t *testing.T) {
 		}
 	})
 
-	t.Run("confirming deletes the state directory", func(t *testing.T) {
+	t.Run("declining keep deletes the state directory", func(t *testing.T) {
 		fs := newFakeFS()
 		fs.addExecutable("/usr/bin/yups")
 		fs.existingPaths[stateDir] = true
-		fs.askScript = []bool{true}
+		fs.askScript = []bool{false} // Decline "Keep config..." -> deletes
 
-		out, code := runDispatch(t, fs.env(), "--uninstall")
+		out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 		if code != ExitOK {
 			t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 		}
@@ -657,11 +651,29 @@ func TestUninstallAsksToDeleteStateDir(t *testing.T) {
 		}
 	})
 
+	t.Run("admin can delete state dir for all users", func(t *testing.T) {
+		fs := newFakeFS()
+		fs.groups = []string{"sudo"}
+		fs.addExecutable("/usr/bin/yups")
+		fs.existingPaths[stateDir] = true
+		fs.existingPaths["/root/.yups"] = true
+		fs.askScript = []bool{false, true} // Decline keep, Accept all users
+
+		out, code := runDispatch(t, fs.env(), "--uninstall-yups")
+		if code != ExitOK {
+			t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+		}
+		requireOutputContains(t, out, "Deleted "+stateDir, "Deleted /root/.yups")
+		if !containsString(fs.removedAll, stateDir) || !containsString(fs.removedAll, "/root/.yups") {
+			t.Errorf("both state dirs should be deleted: %v", fs.removedAll)
+		}
+	})
+
 	t.Run("no question without a state directory", func(t *testing.T) {
 		fs := newFakeFS()
 		fs.addExecutable("/usr/bin/yups")
 
-		out, code := runDispatch(t, fs.env(), "--uninstall")
+		out, code := runDispatch(t, fs.env(), "--uninstall-yups")
 		if code != ExitOK {
 			t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 		}
@@ -692,4 +704,115 @@ func TestUpdateWithoutStateDirWarnsAndOffersPerUserInstall(t *testing.T) {
 	if len(fs.askedQuestions) != 1 || !strings.Contains(fs.askedQuestions[0], "per-user installation") {
 		t.Errorf("asked = %v, want exactly the per-user install offer", fs.askedQuestions)
 	}
+}
+
+func TestUpdateDowngradePrompt(t *testing.T) {
+	t.Run("declining downgrade cancels without touching anything", func(t *testing.T) {
+		setVersion(t, "v1.2.0")
+		fs := newFakeFS()
+		fs.addExecutable("/home/user/bin/yups")
+		fs.existingPaths[config.Dir(fs.home)] = true
+		storeConfig(fs, config.Config{
+			Version:          "v1.2.0",
+			YUPSRepo:         testRepoPrimary,
+			YUPSRepoFallback: testRepoFallback,
+		})
+		serveLatestRelease(fs, "v1.0.0", "payload")
+		fs.askScript = []bool{false} // Decline downgrade
+
+		out, code := runDispatch(t, fs.env(), "--update-yups")
+		if code != ExitOK {
+			t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+		}
+		requireOutputContains(t, out, "older than the current version", "Downgrade cancelled.")
+		if len(fs.httpHits) != 1 { // Only checked releases/latest, never downloaded assets
+			t.Errorf("expected only release check, got hits: %v", fs.httpHits)
+		}
+		if len(fs.execCalls) != 0 {
+			t.Errorf("ExecSelf should not be called: %v", fs.execCalls)
+		}
+	})
+
+	t.Run("accepting downgrade proceeds with update", func(t *testing.T) {
+		setVersion(t, "v1.2.0")
+		fs := newFakeFS()
+		fs.addExecutable("/home/user/bin/yups")
+		fs.existingPaths[config.Dir(fs.home)] = true
+		storeConfig(fs, config.Config{
+			Version:          "v1.2.0",
+			YUPSRepo:         testRepoPrimary,
+			YUPSRepoFallback: testRepoFallback,
+		})
+		serveLatestRelease(fs, "v1.0.0", "payload")
+		fs.stagedBinary = "/tmp/yups-update-999.kk/yups"
+		fs.askScript = []bool{true} // Accept downgrade
+
+		out, code := runDispatch(t, fs.env(), "--update-yups")
+		if code != ExitOK {
+			t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+		}
+		requireOutputContains(t, out, "Downloading v1.0.0...", "Applying v1.0.0")
+		if len(fs.execCalls) != 1 {
+			t.Fatalf("ExecSelf was not called: %v", fs.execCalls)
+		}
+	})
+
+	t.Run("dev version prompts downgrade when release is numbered", func(t *testing.T) {
+		setVersion(t, "dev")
+		fs := newFakeFS()
+		fs.addExecutable("/home/user/bin/yups")
+		fs.existingPaths[config.Dir(fs.home)] = true
+		storeConfig(fs, config.Config{
+			Version:          "dev",
+			YUPSRepo:         testRepoPrimary,
+			YUPSRepoFallback: testRepoFallback,
+		})
+		serveLatestRelease(fs, "v0.6.5", "payload")
+		fs.askScript = []bool{false} // Decline downgrade
+
+		out, code := runDispatch(t, fs.env(), "--update-yups")
+		if code != ExitOK {
+			t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+		}
+		requireOutputContains(t, out, "older than the current version", "Downgrade cancelled.")
+	})
+}
+
+func TestUpdateApplyNeverDeletesUnsafeDirectories(t *testing.T) {
+	t.Run("safe staging directory is removed", func(t *testing.T) {
+		fs := newFakeFS()
+		fs.addExecutable("/home/user/bin/yups")
+		safeDir := "/tmp/yups-update-12345.kk"
+
+		out, code := runDispatch(t, fs.env(), flagUpdateApply, "--from", safeDir, "--installed", "/home/user/bin")
+		if code != ExitOK {
+			t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+		}
+		if !containsString(fs.removedAll, safeDir) {
+			t.Errorf("safe staging directory was not cleaned: %v", fs.removedAll)
+		}
+	})
+
+	t.Run("user or system directory is never deleted", func(t *testing.T) {
+		unsafeDirs := []string{
+			"/home/user/.local/bin",
+			"/usr/local/bin",
+			"/usr/bin",
+			"/tmp",
+			"/home/user",
+		}
+
+		for _, dir := range unsafeDirs {
+			fs := newFakeFS()
+			fs.addExecutable("/home/user/bin/yups")
+
+			out, code := runDispatch(t, fs.env(), flagUpdateApply, "--from", dir, "--installed", "/home/user/bin")
+			if code != ExitOK {
+				t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+			}
+			if containsString(fs.removedAll, dir) {
+				t.Fatalf("CRITICAL BUG: unsafe directory %q was deleted by UpdateApply!", dir)
+			}
+		}
+	})
 }

@@ -64,9 +64,17 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 		return ExitError
 	}
 
-	if !semver.IsNewer(Version, release.Tag) {
+	cmp := semver.Compare(release.Tag, Version)
+	if cmp == 0 {
 		fmt.Fprintf(stdout, "%s %s is up to date (latest release: %s).\n", ProgramName, Version, release.Tag)
 		return ExitOK
+	}
+	if cmp < 0 {
+		fmt.Fprintf(stdout, "The repository version (%s) is older than the current version (%s).\n", release.Tag, Version)
+		if !env.AskConfirmation(fmt.Sprintf("Do you want to downgrade to %s?", release.Tag), false) {
+			fmt.Fprintln(stdout, "Downgrade cancelled.")
+			return ExitOK
+		}
 	}
 
 	fmt.Fprintf(stdout, "Downloading %s...\n", release.Tag)
@@ -95,15 +103,14 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	installed := findInDirs(env, candidates, ProgramName)
 	if len(installed) == 0 {
 		// Best-effort cleanup: the primary message below is what matters.
-		_ = env.RemoveAll(filepath.Dir(binaryPath))
-		fmt.Fprintf(stdout, "%s is not installed; run 'yups --install' instead of updating.\n", ProgramName)
+		cleanupStaging(env, filepath.Dir(binaryPath))
+		fmt.Fprintf(stdout, "%s is not installed; run 'yups --install-yups' instead of updating.\n", ProgramName)
 		return ExitError
 	}
 
-	// Decision 8: with several coexisting copies only the keeper is
-	// replaced; duplicates are informed and left untouched.
-	runningExecutable, _ := env.ExecutablePath()
-	keeper, duplicates := selectKeeper(installed, runningExecutable)
+	// Multi-instance handling: the first instance found in PATH is updated;
+	// duplicates are reported and left untouched.
+	keeper, duplicates := firstInPath(env, installed)
 	if len(duplicates) > 0 {
 		fmt.Fprintf(stdout,
 			"Warning: %s is installed in several places (%s); only %s will be updated, duplicates are left untouched.\n",
@@ -115,7 +122,7 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	argv := []string{ProgramName, flagUpdateApply, "--from", stagingDir, "--installed", keeper}
 	if err := env.ExecSelf(binaryPath, argv); err != nil {
 		// Best-effort cleanup: the exec failure is the error to report.
-		_ = env.RemoveAll(stagingDir)
+		cleanupStaging(env, stagingDir)
 		fmt.Fprintf(stderr, "Cannot hand over to the new binary: %v.\n", err)
 		return ExitError
 	}
@@ -163,19 +170,18 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 
 	// Re-scan even though phase 1 reported the locations, and operate on
 	// the union of both views: cheap insurance against anything that
-	// changed between the two phases. The keeper rules then pick the one
-	// copy that gets replaced; duplicates stay informed but untouched
-	// (approved design decision 8).
+	// changed between the two phases. The firstInPath rule picks the first
+	// copy in PATH that gets replaced; duplicates stay informed but untouched.
 	candidates := append(append([]string{}, env.PathDirs()...), env.KnownBinDirs()...)
 	locations := dedupeDirs(append(splitCommaList(installedArg), findInDirs(env, candidates, ProgramName)...))
 	if len(locations) == 0 {
 		// Best-effort cleanup: the primary message below is what matters.
-		_ = env.RemoveAll(from)
+		cleanupStaging(env, from)
 		fmt.Fprintf(stderr, "No installed copy of %s was found to replace; staging cleaned.\n", ProgramName)
 		return ExitError
 	}
 
-	keeper, duplicates := selectKeeper(locations, stagedBinary)
+	keeper, duplicates := firstInPath(env, locations)
 	if len(duplicates) > 0 {
 		fmt.Fprintf(stdout,
 			"Warning: %s is present in several places (%s); only %s is updated, duplicates are left untouched.\n",
@@ -208,10 +214,9 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Record progress before anything else can fail: config.version is
-	// the highest version ever run on this install, and this new binary
-	// IS running now. A corrupt config is reported but does not abort:
-	// the binaries are already replaced; migrations track themselves in
-	// state.toml independently.
+	// updated to the newly running version. A corrupt config is reported
+	// but does not abort: the binaries are already replaced; migrations
+	// track themselves in state.toml independently.
 	home, homeErr := env.UserHomeDir()
 	if homeErr != nil {
 		fmt.Fprintf(stdout, "Warning: cannot locate the home directory (%v); config.version and migrations skipped.\n", homeErr)
@@ -230,8 +235,8 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 	}
 
 	if len(blocked) == 0 {
-		// Best-effort cleanup: leftovers are .kk junk in the OS temp dir.
-		_ = env.RemoveAll(from)
+		// Best-effort cleanup: safely delete only ephemeral .kk staging dirs.
+		cleanupStaging(env, from)
 	}
 	if exitCode == ExitOK {
 		fmt.Fprintf(stdout, "%s updated to %s.\n", ProgramName, Version)
@@ -239,21 +244,43 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 	return exitCode
 }
 
-// recordUpdateProgress moves config.version forward to the running
-// version, never backwards.
+// recordUpdateProgress sets config.version to the newly installed version.
 func recordUpdateProgress(env *Env, home string, stdout io.Writer) error {
 	cfgPath := config.Path(home)
 	cfg, err := env.LoadConfig(cfgPath)
 	if err != nil {
-		return fmt.Errorf("cannot read %s (%v); config.version not advanced", cfgPath, err)
+		return fmt.Errorf("cannot read %s (%v); config.version not updated", cfgPath, err)
 	}
-	if !config.BumpVersion(&cfg, Version) {
+	if !config.SetVersion(&cfg, Version) {
 		return nil
 	}
 	if err := env.SaveConfig(cfgPath, cfg); err != nil {
 		return fmt.Errorf("cannot write %s: %w", cfgPath, err)
 	}
 	return nil
+}
+
+// isSafeStagingDir ensures that a path passed to --from is strictly a disposable
+// staging directory created by yups (prefixed with "yups-" and ending with ".kk"),
+// avoiding catastrophic deletion of system or user directories like ~/.local/bin.
+func isSafeStagingDir(dir string) bool {
+	clean := filepath.Clean(dir)
+	base := filepath.Base(clean)
+	if clean == "/" || clean == "." || clean == "" {
+		return false
+	}
+	if strings.HasPrefix(clean, "/bin") || strings.HasPrefix(clean, "/usr") ||
+		strings.HasPrefix(clean, "/etc") || strings.HasPrefix(clean, "/var") ||
+		strings.HasPrefix(clean, "/home") {
+		return strings.HasPrefix(base, "yups-") && strings.HasSuffix(base, ".kk")
+	}
+	return strings.HasPrefix(base, "yups-") && strings.HasSuffix(base, ".kk")
+}
+
+func cleanupStaging(env *Env, dir string) {
+	if isSafeStagingDir(dir) {
+		_ = env.RemoveAll(dir)
+	}
 }
 
 // parseUpdateApplyArgs reads the system flags of phase 2.

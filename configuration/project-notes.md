@@ -3,8 +3,7 @@
 Behaviours of `yups` that only show up in specific environments. None of these
 are bugs to fix blindly: they are documented trade-offs and known interactions.
 
-## `--install` may touch the shell prompt (PS1) — VS Code / Cline
-
+## `--install-yups` may touch the shell prompt (PS1) — VS Code / Cline
 Planned behaviour for a future iteration: installing yups customises the shell
 prompt (for example to show the yups marker in the PS1). Changing PS1 from an
 installer can confuse tools that need to *see* clean command output, notably:
@@ -23,9 +22,8 @@ Mitigations to implement when PS1 support lands:
 2. Write the change into `.bashrc`/`.zshrc` as a separate, clearly marked,
    removable block (`# >>> yups >>>` ... `# <<< yups <<<`) so uninstalling
    restores the original prompt exactly.
-3. Provide `yups --install --no-prompt` to opt out.
+3. Provide `yups --install-yups --no-prompt` to opt out.
 
-## Terminal output capture inside VS Code
 
 Related to the above but independent of yups: agents using the VS Code terminal
 sometimes lose stdout capture mid-session (commands still run; output is not

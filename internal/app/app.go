@@ -1,5 +1,5 @@
-// Package app implements the yups commands: printing the logo, --help,
-// --install and --uninstall.
+// Package app implements the CLI entry point, flag dispatching,
+// --install-yups and --uninstall-yups.
 package app
 
 import (
@@ -34,14 +34,14 @@ const ColoredLogo = "\x1b[38;5;214m" + Logo + "\x1b[0m"
 const helpText = `yups - prints the ` + Logo + ` logo and manages its own installation
 
 Usage:
-  yups                 Print the logo (` + Logo + `) in ANSI colour 214
-  yups --help          Show this help text
-  yups --version       Show the yups version
-  yups --install       Install the yups executable into the first directory
-                       of the PATH where the current user can write
-  yups --uninstall     Remove every yups executable found in the PATH
-  yups --update-yups   Download the latest released version and replace
-                       every installed copy with it
+  yups                  Print the logo (` + Logo + `) in ANSI colour 214
+  yups --help           Show this help text
+  yups --version        Show the yups version
+  yups --install-yups   Install the yups executable into the first directory
+                        of the PATH where the current user can write
+  yups --uninstall-yups Remove every yups executable found in the PATH
+  yups --update-yups    Download the latest released version and replace
+                        every installed copy with it
 `
 
 // Dispatch parses args and runs the matching command, returning the exit
@@ -53,15 +53,15 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
-	case "-h", "--help", "help":
+	case "-h", "--help":
 		fmt.Fprint(stdout, helpText)
 		return ExitOK
-	case "-V", "--version", "version":
+	case "-V", "--version":
 		fmt.Fprintf(stdout, "%s %s\n", ProgramName, Version)
 		return ExitOK
-	case "-i", "--install", "install":
+	case "-i", "--install-yups":
 		return Install(env, stdout, stderr)
-	case "-u", "--uninstall", "uninstall":
+	case "-u", "--uninstall-yups":
 		return Uninstall(env, stdout, stderr)
 	case "--update-yups":
 		return Update(env, stdout, stderr)
@@ -75,12 +75,31 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 }
 
 // findInDirs returns the directories from dirs that contain an executable
-// file called name.
+// file called name, deduplicating references that point to the same physical
+// binary (such as directory symlinks on merged-usr distributions).
 func findInDirs(env *Env, dirs []string, name string) []string {
 	var found []string
+	seenFiles := make(map[string]bool)
 	for _, dir := range dedupeDirs(dirs) {
 		if env.LookupExecutable(dir, name) {
-			found = append(found, dir)
+			fullPath := filepath.Join(dir, name)
+			canonicalPath := fullPath
+			if env.EvalSymlinks != nil {
+				if realPath, err := env.EvalSymlinks(fullPath); err == nil && realPath != "" {
+					canonicalPath = realPath
+				}
+			}
+			if seenFiles[canonicalPath] {
+				continue
+			}
+			seenFiles[canonicalPath] = true
+			reportDir := dir
+			if env.EvalSymlinks != nil {
+				if realDir, err := env.EvalSymlinks(dir); err == nil && realDir == "/usr/bin" {
+					reportDir = "/usr/bin"
+				}
+			}
+			found = append(found, reportDir)
 		}
 	}
 	return found
@@ -150,58 +169,33 @@ func quotedJoin(dirs []string) string {
 	return strings.Join(paths, ", ")
 }
 
-// selectKeeper chooses which installation keeps operating when several
-// copies of the executable exist (approved design decision 8):
-//
-//  1. directories outside /usr/... and /home/... win: they usually mean a
-//     deliberate, user-managed location;
-//  2. among ties, the directory holding the currently running executable;
-//  3. otherwise the first result.
-//
-// It returns the keeper and every other location. v1.0 only informs about
-// the duplicates; nothing is ever deleted automatically.
-func selectKeeper(dirs []string, runningExecutable string) (keeper string, others []string) {
+// firstInPath selects the first executable found according to the PATH order
+// (matching what `which` and shell invocation resolve). If none is in PATH,
+// it picks the first discovered directory.
+func firstInPath(env *Env, dirs []string) (keeper string, duplicates []string) {
 	all := dedupeDirs(dirs)
-
-	candidates := all
-	var outside []string
-	for _, dir := range all {
-		if !underSystemOrHome(dir) {
-			outside = append(outside, dir)
-		}
+	if len(all) == 0 {
+		return "", nil
 	}
-	if len(outside) > 0 {
-		candidates = outside
-	}
-
-	keeper = candidates[0]
-	if runningExecutable != "" {
-		runningDir := filepath.Dir(runningExecutable)
-		for _, dir := range candidates {
-			if dir == runningDir {
-				keeper = dir
+	pathDirs := dedupeDirs(env.PathDirs())
+	for _, p := range pathDirs {
+		for _, d := range all {
+			if d == p {
+				keeper = d
 				break
 			}
 		}
-	}
-
-	// Every other location counts as a duplicate worth reporting, not
-	// just the ones that took part in the keeper election.
-	for _, dir := range all {
-		if dir != keeper {
-			others = append(others, dir)
+		if keeper != "" {
+			break
 		}
 	}
-	return keeper, others
-}
-
-// underSystemOrHome reports whether dir is /usr or /home themselves or
-// hangs from either of them.
-func underSystemOrHome(dir string) bool {
-	for _, root := range []string{"/usr", "/home"} {
-		if dir == root || strings.HasPrefix(dir, root+"/") {
-			return true
+	if keeper == "" {
+		keeper = all[0]
+	}
+	for _, d := range all {
+		if d != keeper {
+			duplicates = append(duplicates, d)
 		}
 	}
-	return false
+	return keeper, duplicates
 }
