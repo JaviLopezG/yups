@@ -1,10 +1,18 @@
 package app
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"yups/internal/config"
 )
 
 // fakeFS is an in-memory Env for the unit tests.
@@ -18,13 +26,46 @@ type fakeFS struct {
 
 	installedDst string
 	removed      []string
+
+	// Self-update support: everything the update phases touch lives in
+	// memory so no test ever touches the real filesystem or network.
+	home           string
+	configs        map[string]config.Config  // config file path -> contents
+	corruptConfig  map[string]bool           // config paths that fail to parse
+	httpResponses  map[string]*http.Response // URL -> canned response
+	httpHits       []string                  // URLs actually requested
+	stagedBinary   string                    // path returned by StageBinary
+	stageErr       error
+	removedAll     []string
+	execCalls      []execCall
+	replaceErrs    map[string]error // destination dir -> failure
+	replacedDirs   []string
+	stateLast      map[string]string // state file path -> last applied version
+	corruptState   map[string]bool   // state paths that fail to parse
+	existingPaths  map[string]bool   // paths reported as existing
+	askScript      []bool            // scripted AskConfirmation answers
+	askedQuestions []string          // every question with its default hint
+}
+
+// execCall records one ExecSelf invocation.
+type execCall struct {
+	path string
+	argv []string
 }
 
 func newFakeFS() *fakeFS {
 	return &fakeFS{
-		files:    map[string]bool{},
-		writable: map[string]bool{},
-		blocked:  map[string]bool{},
+		files:         map[string]bool{},
+		writable:      map[string]bool{},
+		blocked:       map[string]bool{},
+		home:          "/home/user",
+		configs:       map[string]config.Config{},
+		corruptConfig: map[string]bool{},
+		httpResponses: map[string]*http.Response{},
+		replaceErrs:   map[string]error{},
+		stateLast:     map[string]string{},
+		corruptState:  map[string]bool{},
+		existingPaths: map[string]bool{},
 	}
 }
 
@@ -68,6 +109,72 @@ func (f *fakeFS) env() *Env {
 			f.removed = append(f.removed, path)
 			return nil
 		},
+		UserHomeDir: func() (string, error) {
+			return f.home, nil
+		},
+		LoadConfig: func(path string) (config.Config, error) {
+			if f.corruptConfig[path] {
+				return config.Config{}, fmt.Errorf("corrupt configuration file %q", path)
+			}
+			if c, ok := f.configs[path]; ok {
+				return c, nil
+			}
+			return config.Defaults(), nil
+		},
+		SaveConfig: func(path string, c config.Config) error {
+			f.configs[path] = c
+			return nil
+		},
+		LoadUpdateState: func(path string) (string, error) {
+			if f.corruptState[path] {
+				return "", fmt.Errorf("corrupt update state file %q", path)
+			}
+			return f.stateLast[path], nil
+		},
+		SaveUpdateState: func(path string, lastApplied string) error {
+			f.stateLast[path] = lastApplied
+			return nil
+		},
+		HTTPClient: func() *http.Client {
+			return &http.Client{Transport: &fakeTransport{responses: f.httpResponses, hits: &f.httpHits}}
+		},
+		StageBinary: func(archive []byte, tag string) (string, error) {
+			if f.stageErr != nil {
+				return "", f.stageErr
+			}
+			return f.stagedBinary, nil
+		},
+		RemoveAll: func(path string) error {
+			f.removedAll = append(f.removedAll, path)
+			return nil
+		},
+		ExecSelf: func(path string, argv []string) error {
+			f.execCalls = append(f.execCalls, execCall{path: path, argv: argv})
+			return nil
+		},
+		ReplaceExecutable: func(sourcePath, destDir string) (string, error) {
+			if err, ok := f.replaceErrs[destDir]; ok {
+				return "", err
+			}
+			f.replacedDirs = append(f.replacedDirs, destDir)
+			return filepath.Join(destDir, ProgramName), nil
+		},
+		PathExists: func(path string) bool {
+			return f.existingPaths[path]
+		},
+		AskConfirmation: func(prompt string, defaultYes bool) bool {
+			hint := "(y/N)"
+			if defaultYes {
+				hint = "(Y/n)"
+			}
+			f.askedQuestions = append(f.askedQuestions, prompt+" "+hint)
+			if len(f.askScript) > 0 {
+				answer := f.askScript[0]
+				f.askScript = f.askScript[1:]
+				return answer
+			}
+			return defaultYes
+		},
 	}
 }
 
@@ -93,7 +200,7 @@ func TestHelpListsAvailableCommands(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
-	for _, want := range []string{"--help", "--version", "--install", "--uninstall", Logo} {
+	for _, want := range []string{"--help", "--version", "--install", "--uninstall", "--update-yups", Logo} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output %q does not contain %q", out, want)
 		}
@@ -324,5 +431,34 @@ func TestOSCurrentUserGroupsReadsRealGroupsFile(t *testing.T) {
 	}
 	if len(groups) == 0 {
 		t.Fatal("expected at least the primary group")
+	}
+}
+
+func TestOSAskConfirmationSharesStdinAcrossQuestions(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating pipe: %v", err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = reader
+	resetReader := func() { stdinReader = sync.OnceValue(func() *bufio.Reader { return bufio.NewReader(os.Stdin) }) }
+	resetReader()
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		resetReader()
+		reader.Close()
+		writer.Close()
+	})
+
+	if _, err := writer.WriteString("y\ny\n"); err != nil {
+		t.Fatalf("writing answers: %v", err)
+	}
+	writer.Close()
+
+	if !osAskConfirmation("first question?", true) {
+		t.Error("first answer should be yes")
+	}
+	if !osAskConfirmation("second question?", false) {
+		t.Error("second answer was lost: the stdin reader is not shared between questions")
 	}
 }

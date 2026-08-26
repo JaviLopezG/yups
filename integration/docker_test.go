@@ -10,9 +10,17 @@
 package integration
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -199,17 +207,19 @@ func forEachImage(t *testing.T, fn func(t *testing.T, d distro)) {
 
 // newContainer starts a fresh container of the given distro image with the
 // built binary mounted read-only at /opt/yups and registers its removal.
-// The image is expected to be local already (TestMain pre-pulls it);
-// --pull=never keeps network hiccups from hanging the suite: with no image
-// available the scenario fails fast instead.
-func newContainer(t *testing.T, d distro) string {
+// Extra docker run flags (for example --add-host) can be passed after the
+// distro. The image is expected to be local already (TestMain pre-pulls
+// it); --pull=never keeps network hiccups from hanging the suite: with no
+// image available the scenario fails fast instead.
+func newContainer(t *testing.T, d distro, extra ...string) string {
 	t.Helper()
-	out, code := docker(t,
-		"run", "-d", "--pull=never", "--rm",
+	args := append([]string{"run", "-d", "--pull=never", "--rm"}, extra...)
+	args = append(args,
 		"-v", testBinary+":/opt/yups:ro",
 		d.image,
 		"sleep", "900",
 	)
+	out, code := docker(t, args...)
 	if code != 0 {
 		t.Fatalf("starting %s container failed:\n%s", d.name, out)
 	}
@@ -227,14 +237,40 @@ func newContainer(t *testing.T, d distro) string {
 // default, root) with an optional custom PATH.
 func sh(t *testing.T, id, user, pathEnv, script string) (string, int) {
 	t.Helper()
+	return shWithInput(t, id, user, pathEnv, script, nil)
+}
+
+// shWithInput runs a shell script like sh, feeding input to its stdin
+// (used to answer the interactive uninstall questions).
+func shWithInput(t *testing.T, id, user, pathEnv, script string, stdin io.Reader) (string, int) {
+	t.Helper()
 	args := []string{"exec"}
+	if stdin != nil {
+		args = append(args, "-i")
+	}
 	if user != "" {
 		args = append(args, "-u", user)
 	}
 	if pathEnv != "" {
 		args = append(args, "-e", "PATH="+pathEnv)
 	}
-	return docker(t, append(args, id, "sh", "-c", script)...)
+	args = append(args, id, "sh", "-c", script)
+
+	var buf bytes.Buffer
+	cmd := exec.Command("docker", args...)
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	cmd.Stdin = stdin
+	err := cmd.Run()
+
+	code := 0
+	if err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("docker %s: %v\n%s", strings.Join(args, " "), err, buf.String())
+		}
+		code = exitErr.ExitCode()
+	}
+	return buf.String(), code
 }
 
 // yupsCmd runs the mounted binary inside the container with the given
@@ -528,5 +564,268 @@ func TestUninstallMixedPermissionsRemovesWritableAndHintsSudo(t *testing.T) {
 			t.Error("/usr/bin/yups should have survived")
 		}
 		requireOutputContains(t, out, "Removed /home/adminish/bin/yups", "sudo !!")
+	})
+}
+
+// --- Self-update scenarios -------------------------------------------------
+//
+// The release API is faked by an httptest server bound to all interfaces;
+// containers reach it through the host-gateway alias "yups-release"
+// (--add-host=yups-release:host-gateway, supported by every docker version
+// this suite targets).
+
+const releaseHostAlias = "yups-release"
+
+// buildVersionedBinary builds the project binary with a version stamped
+// through ldflags, like goreleaser does.
+func buildVersionedBinary(t *testing.T, version string) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate repository root")
+	}
+	root := filepath.Dir(filepath.Dir(thisFile))
+	bin := filepath.Join(t.TempDir(), "yups-"+strings.TrimPrefix(version, "v"))
+	build := exec.Command("go", "build", "-o", bin,
+		"-ldflags", "-X yups/internal/app.Version="+version, ".")
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building %s: %v: %s", version, err, out)
+	}
+	return bin
+}
+
+// startReleaseServer serves a Forgejo-shaped releases/latest document plus
+// the archive (payload packed as an executable named yups) and its
+// checksums, on all interfaces so containers can connect.
+func startReleaseServer(t *testing.T, tag string, payload []byte) string {
+	t.Helper()
+
+	archive := tarGzOf(t, payload)
+	sum := sha256.Sum256(archive)
+	archiveName := fmt.Sprintf("yups_%s_linux_%s.tar.gz", tag, runtime.GOARCH)
+
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("binding the fake release server: %v", err)
+	}
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	base := fmt.Sprintf("http://%s:%s", releaseHostAlias, port)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/owner/repo/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"tag_name": %q, "assets": [
+			{"name": %q, "browser_download_url": "%s/archive.tar.gz"},
+			{"name": "checksums.txt", "browser_download_url": "%s/checksums.txt"}]}`,
+			tag, archiveName, base, base)
+	})
+	mux.HandleFunc("/archive.tar.gz", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(archive)
+	})
+	mux.HandleFunc("/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+	})
+
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+
+	return base + "/owner/repo"
+}
+
+// tarGzOf packs payload as a root-level executable named yups.
+func tarGzOf(t *testing.T, payload []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	writer := tar.NewWriter(gz)
+	header := &tar.Header{Name: "yups", Mode: 0o755, Size: int64(len(payload)), Typeflag: tar.TypeReg}
+	if err := writer.WriteHeader(header); err != nil {
+		t.Fatalf("writing tar header: %v", err)
+	}
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatalf("writing tar payload: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("closing tar: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("closing gzip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// installCopy places a binary into the container at path with executable
+// permissions.
+func installCopy(t *testing.T, id, source, path, owner string) {
+	t.Helper()
+	if out, code := docker(t, "cp", source, id+":"+path); code != 0 {
+		t.Fatalf("copying %s into the container failed:\n%s", path, out)
+	}
+	script := "chmod 755 " + path
+	if owner != "" {
+		script += " && chown " + owner + " " + path
+	}
+	if out, code := sh(t, id, "root", "", script); code != 0 {
+		t.Fatalf("preparing %s failed:\n%s", path, out)
+	}
+}
+
+// writeUserConfig creates ~/.yups/config.toml for the given user pointing
+// at the fake release repository.
+func writeUserConfig(t *testing.T, id, user, repoURL, version string) {
+	t.Helper()
+	home := "/root"
+	if user != "" && user != "root" {
+		home = "/home/" + user
+	}
+	script := fmt.Sprintf(
+		"mkdir -p %[1]s/.yups && printf 'version = \"%[2]s\"\\nYUPS_REPO = \"%[3]s\"\\nYUPS_REPO_FALLBACK = \"http://fallback.invalid/a/b\"\\n' > %[1]s/.yups/config.toml",
+		home, version, repoURL)
+	asUser := ""
+	if user != "" && user != "root" {
+		asUser = user
+	}
+	if out, code := sh(t, id, asUser, "", script); code != 0 {
+		t.Fatalf("writing the config of %s failed:\n%s", user, out)
+	}
+}
+
+func TestUpdateInsideContainerAsRoot(t *testing.T) {
+	forEachImage(t, func(t *testing.T, d distro) {
+		oldBin := buildVersionedBinary(t, "v0.0.9")
+		newBin := buildVersionedBinary(t, "v0.1.0")
+		payload, err := os.ReadFile(newBin)
+		if err != nil {
+			t.Fatalf("reading the new binary: %v", err)
+		}
+		repoURL := startReleaseServer(t, "v0.1.0", payload)
+
+		id := newContainer(t, d, "--add-host="+releaseHostAlias+":host-gateway")
+		installCopy(t, id, oldBin, "/usr/local/bin/yups", "")
+		writeUserConfig(t, id, "root", repoURL, "v0.0.9")
+
+		out, code := sh(t, id, "root", "", "/usr/local/bin/yups --update-yups")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0\n%s", code, out)
+		}
+		requireOutputContains(t, out, "updated to v0.1.0")
+
+		versionOut, code := sh(t, id, "root", "", "/usr/local/bin/yups --version")
+		if code != 0 || !strings.Contains(versionOut, "v0.1.0") {
+			t.Errorf("the installed binary does not report v0.1.0 (%d): %s", code, versionOut)
+		}
+		configOut, _ := sh(t, id, "root", "", "cat /root/.yups/config.toml")
+		requireOutputContains(t, configOut, `version = "v0.1.0"`)
+	})
+}
+
+func TestUpdateInsideContainerAsPlainUser(t *testing.T) {
+	forEachImage(t, func(t *testing.T, d distro) {
+		oldBin := buildVersionedBinary(t, "v0.0.9")
+		newBin := buildVersionedBinary(t, "v0.1.0")
+		payload, err := os.ReadFile(newBin)
+		if err != nil {
+			t.Fatalf("reading the new binary: %v", err)
+		}
+		repoURL := startReleaseServer(t, "v0.1.0", payload)
+
+		id := newContainer(t, d, "--add-host="+releaseHostAlias+":host-gateway")
+		createUser(t, id, d, "plain", false)
+		createWritableUserBin(t, id, "plain")
+		installCopy(t, id, oldBin, "/home/plain/bin/yups", "plain")
+		writeUserConfig(t, id, "plain", repoURL, "v0.0.9")
+
+		pathEnv := "/home/plain/bin:" + defaultPATH
+		out, code := sh(t, id, "plain", pathEnv, "yups --update-yups")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0\n%s", code, out)
+		}
+		requireOutputContains(t, out, "updated to v0.1.0")
+
+		versionOut, code := sh(t, id, "plain", pathEnv, "yups --version")
+		if code != 0 || !strings.Contains(versionOut, "v0.1.0") {
+			t.Errorf("the installed binary does not report v0.1.0 (%d): %s", code, versionOut)
+		}
+	})
+}
+
+func TestUpdateAsRootDoesNotTouchOtherUsersConfig(t *testing.T) {
+	forEachImage(t, func(t *testing.T, d distro) {
+		oldBin := buildVersionedBinary(t, "v0.0.9")
+		newBin := buildVersionedBinary(t, "v0.1.0")
+		payload, err := os.ReadFile(newBin)
+		if err != nil {
+			t.Fatalf("reading the new binary: %v", err)
+		}
+		repoURL := startReleaseServer(t, "v0.1.0", payload)
+
+		id := newContainer(t, d, "--add-host="+releaseHostAlias+":host-gateway")
+		createUser(t, id, d, "plain", false)
+		installCopy(t, id, oldBin, "/usr/local/bin/yups", "")
+		writeUserConfig(t, id, "root", repoURL, "v0.0.9")
+		writeUserConfig(t, id, "plain", "http://nobody.invalid/a/b", "v0.0.5")
+
+		out, code := sh(t, id, "root", "", "/usr/local/bin/yups --update-yups")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0\n%s", code, out)
+		}
+
+		rootConfig, _ := sh(t, id, "root", "", "cat /root/.yups/config.toml")
+		requireOutputContains(t, rootConfig, `version = "v0.1.0"`)
+		plainConfig, _ := sh(t, id, "root", "", "cat /home/plain/.yups/config.toml")
+		requireOutputContains(t, plainConfig, `version = "v0.0.5"`)
+	})
+}
+
+func TestUninstallKeepsConfigByDefault(t *testing.T) {
+	forEachImage(t, func(t *testing.T, d distro) {
+		id := newContainer(t, d)
+		if out, code := yupsCmd(t, id, "root", "", "--install"); code != 0 {
+			t.Fatalf("install failed (%d):\n%s", code, out)
+		}
+		writeUserConfig(t, id, "root", "http://nobody.invalid/a/b", "v0.0.9")
+
+		// docker exec without -i leaves stdin closed: the questions fall
+		// back to their defaults (uninstall for all users, keep ~/.yups).
+		out, code := yupsCmd(t, id, "root", "", "--uninstall")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0\n%s", code, out)
+		}
+		if fileExists(t, id, "/usr/local/sbin/yups") {
+			t.Error("the binary should have been removed")
+		}
+		if !fileExists(t, id, "/root/.yups/config.toml") {
+			t.Error("~/.yups/config.toml should have survived by default")
+		}
+		requireOutputContains(t, out, "Keeping /root/.yups")
+	})
+}
+
+func TestUninstallDeletesConfigWhenConfirmed(t *testing.T) {
+	forEachImage(t, func(t *testing.T, d distro) {
+		id := newContainer(t, d)
+		if out, code := yupsCmd(t, id, "root", "", "--install"); code != 0 {
+			t.Fatalf("install failed (%d):\n%s", code, out)
+		}
+		writeUserConfig(t, id, "root", "http://nobody.invalid/a/b", "v0.0.9")
+
+		// Two yes answers: depending on the distro, /usr/local/sbin can be
+		// a symlink of /usr/local/bin (Fedora merges sbin into bin), which
+		// makes the installation show up as several places and triggers
+		// the all-users question before the config one.
+		out, code := shWithInput(t, id, "root", "", "/opt/yups --uninstall", strings.NewReader("y\ny\n"))
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0\n%s", code, out)
+		}
+		if fileExists(t, id, "/usr/local/sbin/yups") {
+			t.Error("the binary should have been removed")
+		}
+		if fileExists(t, id, "/root/.yups") {
+			t.Error("~/.yups should have been deleted after confirmation")
+		}
+		requireOutputContains(t, out, "Deleted /root/.yups")
 	})
 }

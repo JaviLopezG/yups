@@ -37,8 +37,9 @@ labels:
 The stock example labels shipped with forgejo-runner (`debian`, `node20`,
 `docker`) are not used by this repository and can be replaced freely.
 
-> **Note for maintainers and forks:** if you run your own worker, create the
-> labels your workflows refer to. The only one used today is `ubuntu-latest`;
+> [!NOTE]
+> **Note for maintainers and forks:** if you run your own worker, create
+> the labels your workflows refer to. The only one used today is `ubuntu-latest`;
 > if a future workflow targets another system natively (e.g. `runs-on:
 > fedora` to run tests inside a Fedora container instead of through docker),
 > add a label for it - e.g. `- fedora:docker://docker.io/library/fedora:latest`

@@ -1248,10 +1248,10 @@ acabar cualquier proceso.
 
 ### v1.0.0
 
-- [X] Cliente Go
-- [X] Ayuda inline `--help`
-- [X] Proceso de [instalación](#instalacion) `--install`
-- [X] Proceso de desinstalación `--uninstall`
+- [x] Cliente Go
+- [x] Ayuda inline `--help`
+- [x] Proceso de [instalación](#instalacion) `--install`
+- [x] Proceso de desinstalación `--uninstall`
 - [ ] (WIP) Proceso de [actualización](#actualizacion) sin comprobación, bajo demanda
   `--update-yups`
 - [ ] Consulta de una [línea que parece un comando](#linea-comando)
@@ -1266,7 +1266,7 @@ acabar cualquier proceso.
   - [ ] `--ask-run` sólo para command line
   - [ ] `--test`
 - [ ] (WIP) Readme
-- [X] Worker de Goreleaser para generar el ejecutable automáticamente con cada
+- [x] Worker de Goreleaser para generar el ejecutable automáticamente con cada
   nueva versión.
 - [ ] Test de otras fuentes de información como tldr, cheatsheets navi o Arch
   Wiki

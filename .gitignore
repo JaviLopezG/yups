@@ -22,3 +22,6 @@ coverage.txt
 
 # Agent migration
 agent-migration/
+
+#Zoo
+.roo/
