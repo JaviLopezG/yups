@@ -423,10 +423,12 @@ convierten a YUPS en un verdadero ayudante.
   - **cheat.sh**: https://github.com/chubin/cheat.sheets (Igor Chubin)
   - **cheat**: https://github.com/cheat/cheatsheets (Chris Allen Lane)
   Para mantener los tiempos de respuesta instantáneos en casos básicos, yups envía una
-  solicitud ligera inicial al LLM y le proporciona la herramienta `fetch_command_documentation`.
-  Si el LLM requiere detalles adicionales sobre un comando o flag, invoca la herramienta;
-  yups informa al usuario en tiempo real en la terminal, reúne `--help`, la página `man` y
-  las cheatsheets locales de dicho comando y se las envía para obtener la respuesta final.
+  solicitud ligera inicial al LLM y le proporciona las herramientas:
+  - `fetch_command_documentation`: reúne `--help`, página `man` y cheatsheets de cualquier comando.
+  - `command-run`: permite al LLM ejecutar de forma segura comandos de inspección del sistema
+    validados contra la [lista blanca](#whitelist) (ej. `ls`, `stat`, `find`, `cat`, `grep`, etc.,
+    combinables mediante cualquier operador de Bash).
+  yups informa al usuario en tiempo real en la terminal cada vez que el LLM solicita una herramienta.
 
 #### Del usuario
 

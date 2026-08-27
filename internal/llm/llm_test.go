@@ -224,11 +224,14 @@ func TestBuildChatRequestIncludesTools(t *testing.T) {
 	if len(req.Messages) != 2 {
 		t.Fatalf("len(messages) = %d, want 2", len(req.Messages))
 	}
-	if len(req.Tools) == 0 {
-		t.Fatal("expected Tools to be populated in ChatRequest")
+	if len(req.Tools) < 2 {
+		t.Fatalf("expected at least 2 Tools in ChatRequest, got %d", len(req.Tools))
 	}
 	if req.Tools[0].Function.Name != "fetch_command_documentation" {
-		t.Errorf("tool name = %q, want 'fetch_command_documentation'", req.Tools[0].Function.Name)
+		t.Errorf("tool 0 name = %q, want 'fetch_command_documentation'", req.Tools[0].Function.Name)
+	}
+	if req.Tools[1].Function.Name != "command-run" {
+		t.Errorf("tool 1 name = %q, want 'command-run'", req.Tools[1].Function.Name)
 	}
 }
 
@@ -310,5 +313,18 @@ func TestExtractToolCalls(t *testing.T) {
 	}
 	if calls3[0].Function.Arguments["command"] != "git" || calls3[0].Function.Arguments["subcommand"] != "commit" {
 		t.Errorf("args = %v, want git commit", calls3[0].Function.Arguments)
+	}
+
+	// 4. Functional text fallback: command-run(command="ls -la")
+	msg4 := Message{
+		Role:    "assistant",
+		Content: `Let me check the files: command-run(command="ls -la")`,
+	}
+	calls4 := ExtractToolCalls(msg4)
+	if len(calls4) != 1 || calls4[0].Function.Name != "command-run" {
+		t.Fatalf("calls4 = %+v, want 1 call", calls4)
+	}
+	if calls4[0].Function.Arguments["command"] != "ls -la" {
+		t.Errorf("args = %v, want ls -la", calls4[0].Function.Arguments)
 	}
 }

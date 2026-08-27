@@ -96,6 +96,23 @@ func DefaultTools() []Tool {
 				},
 			},
 		},
+		{
+			Type: "function",
+			Function: ToolFunction{
+				Name:        "command-run",
+				Description: "You can ask for whitelisted commands execution. You can use any Bash way to combine them (&&, ||, |, ;, &). Avoid harmful commands.",
+				Parameters: ToolParams{
+					Type: "object",
+					Properties: map[string]ToolProp{
+						"command": {
+							Type:        "string",
+							Description: "The shell command to run (must only use whitelisted commands: ls, pwd, stat, file, du, df, find, locate, tree, cat, head, tail, grep, ps, free, uptime, lscpu, ip, ss, ping, dig, nslookup, etc.).",
+						},
+					},
+					Required: []string{"command"},
+				},
+			},
+		},
 	}
 }
 

@@ -39,14 +39,19 @@ func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, mi
 	}
 
 	sysSb.WriteString("\nInstructions:\n")
-	sysSb.WriteString("1. Tool calling: You have the tool 'fetch_command_documentation(command=\"...\", subcommand=\"...\")'. If any command in the input has unknown options or you need to inspect its options/cheatsheets, invoke this tool. You can invoke it multiple times (for multiple commands at once or across turns).\n")
+	sysSb.WriteString("1. Tool calling:\n")
+	sysSb.WriteString("   - 'fetch_command_documentation(command=\"...\", subcommand=\"...\")': fetch manual pages, --help, and cheatsheets for commands.\n")
+	sysSb.WriteString("   - 'command-run(command=\"...\")': execute read-only whitelisted shell commands (e.g. ls, pwd, stat, file, du, df, find, locate, tree, cat, head, tail, grep, ps, free, uptime, lscpu, ip, ss, ping, dig, nslookup, etc. combined with standard Bash operators) to inspect system files or state.\n")
+	sysSb.WriteString("   You can invoke tools multiple times (at once or across turns).\n")
 	sysSb.WriteString("2. Suggestion: If the command line has invalid options, typos, or mistakes, provide the entire corrected command line on a single line:\n")
 	sysSb.WriteString("   Suggested command: <full corrected command line>\n")
 	sysSb.WriteString("   (If a multiline script is truly necessary, wrap it in a single ```bash ... ``` code block).\n")
-	sysSb.WriteString("3. Explanation (OPTIONAL, STRICT MAXIMUM 256 CHARACTERS):\n")
-	sysSb.WriteString("   - The explanation is NOT mandatory. Use it ONLY to clarify the specific items listed under 'Unknown items' or to address user comments (#...).\n")
+	sysSb.WriteString("3. Explanation (STRICT MAXIMUM 256 CHARACTERS):\n")
+	sysSb.WriteString("   - If the user asked a question in a comment (e.g. # ¿Cual es la ip...?), provide the direct answer in the explanation.\n")
+	sysSb.WriteString("   - If explaining unknown flags or errors, explain ONLY the specific items under 'Unknown items'.\n")
+	sysSb.WriteString("   - If everything is understood and there are no questions or unknowns, the explanation can be omitted.\n")
 	sysSb.WriteString("   - Do NOT explain known commands, known flags, or shell operators (like &&, ||).\n")
-	sysSb.WriteString("   - Do NOT include or repeat the suggested command inside the explanation; it will already be displayed to the user separately.\n")
+	sysSb.WriteString("   - Do NOT repeat the suggested command inside the explanation; it will already be displayed to the user separately.\n")
 	sysSb.WriteString("   - Keep it direct, precise, and under 256 characters without conversational filler.\n")
 
 	var userSb strings.Builder
@@ -64,7 +69,7 @@ func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, mi
 		userSb.WriteString("\n")
 	}
 
-	userSb.WriteString("Task: If needed, invoke 'fetch_command_documentation' for unknown commands/flags. Provide the full corrected 'Suggested command: ...' and an optional brief explanation (max 256 chars) covering ONLY the unknown items.")
+	userSb.WriteString("Task: If needed, invoke tools ('fetch_command_documentation' or 'command-run') to inspect documentation or system state. Provide 'Suggested command: ...' (if a command is needed) and a brief answer or explanation (max 256 chars) covering the question or unknown items.")
 
 	return ChatRequest{
 		Model: model,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -247,18 +248,17 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		})
 	}
 
-	llmCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
 	var chatResp llm.ChatResponse
-	maxToolTurns := 4
+	maxToolTurns := 10
 
 	for turn := 0; turn < maxToolTurns; turn++ {
-		resp, err := r.env.LLMClient.Chat(llmCtx, llm.ChatRequest{
+		turnCtx, turnCancel := context.WithTimeout(ctx, 60*time.Second)
+		resp, err := r.env.LLMClient.Chat(turnCtx, llm.ChatRequest{
 			Model:    model,
 			Messages: exp.Conversation,
 			Tools:    llm.DefaultTools(),
 		})
+		turnCancel()
 		if err != nil {
 			exp.LLMError = err.Error()
 			return err
@@ -307,7 +307,8 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		}
 
 		for _, tc := range toolCalls {
-			if tc.Function.Name == "fetch_command_documentation" {
+			switch tc.Function.Name {
+			case "fetch_command_documentation":
 				targetCmd := ""
 				targetSub := ""
 				if c, ok := tc.Function.Arguments["command"].(string); ok {
@@ -334,6 +335,56 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 						Content: toolContent,
 					})
 				}
+
+			case "command-run", "command_run":
+				cmdToRun := ""
+				if c, ok := tc.Function.Arguments["command"].(string); ok {
+					cmdToRun = strings.TrimSpace(c)
+				}
+
+				if cmdToRun != "" {
+					allowed, reason := ValidateWhitelistedCommand(cmdToRun)
+					if !allowed {
+						if statusWriter != nil {
+							fmt.Fprintf(statusWriter, "  LLM requested command '%s' (blocked: %s)\n", cmdToRun, reason)
+						}
+						exp.Conversation = append(exp.Conversation, llm.Message{
+							Role:    "tool",
+							Content: fmt.Sprintf("Error: Command %q was rejected by whitelist: %s. Only safe inspection commands are permitted.", cmdToRun, reason),
+						})
+					} else {
+						if statusWriter != nil {
+							fmt.Fprintf(statusWriter, "  LLM requested running command: '%s'...\n", cmdToRun)
+							fmt.Fprintf(statusWriter, "  Executing whitelisted command...\n")
+						}
+
+						output, err := r.execWhitelisted(ctx, cmdToRun)
+						if err != nil && len(output) == 0 {
+							output = []byte(fmt.Sprintf("Error executing command: %v", err))
+						}
+						outStr := string(output)
+						if len(outStr) > 4096 {
+							outStr = outStr[:4096] + "\n... (truncated)"
+						}
+						exp.Conversation = append(exp.Conversation, llm.Message{
+							Role:    "tool",
+							Content: fmt.Sprintf("Command '%s' output:\n%s", cmdToRun, strings.TrimSpace(outStr)),
+						})
+					}
+				}
+			}
+		}
+
+		// If this was the last allowed tool turn, request the final conclusion from the model
+		if turn == maxToolTurns-1 {
+			finalCtx, finalCancel := context.WithTimeout(ctx, 60*time.Second)
+			finalResp, finalErr := r.env.LLMClient.Chat(finalCtx, llm.ChatRequest{
+				Model:    model,
+				Messages: exp.Conversation,
+			})
+			finalCancel()
+			if finalErr == nil && finalResp.Message.Content != "" {
+				chatResp = finalResp
 			}
 		}
 	}
@@ -376,6 +427,16 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 	exp.SuggestedScript = pExp.SuggestedScript
 	exp.LLMError = pExp.LLMError
 	return err
+}
+
+func (r *Resolver) execWhitelisted(ctx context.Context, cmdStr string) ([]byte, error) {
+	if r.env.RunCmdTimeout != nil {
+		return r.env.RunCmdTimeout(ctx, 10*time.Second, "bash", "-c", cmdStr)
+	}
+	execCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(execCtx, "bash", "-c", cmdStr)
+	return cmd.CombinedOutput()
 }
 
 func (r *Resolver) lookupSummary(ctx context.Context, cmd, subcmd string) string {

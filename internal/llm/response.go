@@ -136,5 +136,22 @@ func ExtractToolCalls(msg Message) []ToolCall {
 		}
 	}
 
+	// 3. Check for functional text call: command-run(command="...") or command_run(command="...")
+	cmdRunRegex := regexp.MustCompile(`(?i)(?:command-run|command_run)\s*\(\s*command\s*=\s*["']([^"']+)["']\s*\)`)
+	if matches := cmdRunRegex.FindAllStringSubmatch(raw, -1); len(matches) > 0 {
+		for _, m := range matches {
+			cmd := m[1]
+			calls = append(calls, ToolCall{
+				Function: ToolCallFunction{
+					Name:      "command-run",
+					Arguments: map[string]any{"command": cmd},
+				},
+			})
+		}
+		if len(calls) > 0 {
+			return calls
+		}
+	}
+
 	return nil
 }

@@ -869,3 +869,261 @@ func TestExplainMultiTurnToolCalls(t *testing.T) {
 		}
 	}
 }
+
+func TestExplainWithCommandRunToolExecutesAndReturnsOutput(t *testing.T) {
+	var requestCount int
+	var receivedToolMsg string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+		if requestCount == 1 {
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "command-run",
+								Arguments: map[string]any{"command": "ls -l | grep test"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		for _, m := range chatReq.Messages {
+			if m.Role == "tool" {
+				receivedToolMsg = m.Content
+			}
+		}
+
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Found matching files.\nSuggested command: ls -la",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			return "ls (1) - list directory contents", nil
+		},
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			if len(args) >= 2 && args[0] == "-c" {
+				return []byte("-rw-r--r-- 1 user user 123 test.txt"), nil
+			}
+			return []byte("Usage: ls [OPTION]..."), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if requestCount != 2 {
+		t.Errorf("requestCount = %d, want 2", requestCount)
+	}
+
+	if !strings.Contains(receivedToolMsg, "test.txt") {
+		t.Errorf("expected command output in tool message, got %q", receivedToolMsg)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"LLM requested running command: 'ls -l | grep test'",
+		"Executing whitelisted command...",
+		"Suggested command:\n  ls -la",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestExplainWithCommandRunToolRejectsDisallowedCommand(t *testing.T) {
+	var requestCount int
+	var receivedToolMsg string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+		if requestCount == 1 {
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "command-run",
+								Arguments: map[string]any{"command": "rm -rf /tmp/junk"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		for _, m := range chatReq.Messages {
+			if m.Role == "tool" {
+				receivedToolMsg = m.Content
+			}
+		}
+
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Command was rejected.\nSuggested command: ls -a",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			return "ls (1) - list directory contents", nil
+		},
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("Usage: ls [OPTION]..."), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if !strings.Contains(receivedToolMsg, "rejected by whitelist") {
+		t.Errorf("expected whitelist rejection in tool message, got %q", receivedToolMsg)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "blocked: command \"rm\" is not in the whitelist") {
+		t.Errorf("stdout missing whitelist blocked warning:\n%s", out)
+	}
+}
+
+func TestExplainCommentQuestionWithMultiTurnInspection(t *testing.T) {
+	var turn int
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turn++
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+		switch turn {
+		case 1:
+			// Turn 1: request grep /etc/hosts
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "command-run",
+								Arguments: map[string]any{"command": "grep trillian /etc/hosts"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case 2:
+			// Turn 2: request nslookup trillian
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "command-run",
+								Arguments: map[string]any{"command": "nslookup trillian.ts"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case 3:
+			// Turn 3: final answer with no command suggestion
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "La dirección IP de trillian es 100.64.0.42 según resolución DNS.",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			if len(args) >= 2 && strings.Contains(args[1], "hosts") {
+				return []byte(""), nil
+			}
+			if len(args) >= 2 && strings.Contains(args[1], "nslookup") {
+				return []byte("Server: 100.100.100.100\nAddress: 100.64.0.42"), nil
+			}
+			return nil, nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"# ¿Cual es la ip de trillian?"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if turn != 3 {
+		t.Errorf("turn = %d, want 3", turn)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"LLM requested running command: 'grep trillian /etc/hosts'",
+		"LLM requested running command: 'nslookup trillian.ts'",
+		"LLM Explanation:",
+		"La dirección IP de trillian es 100.64.0.42",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
+		}
+	}
+}
+
