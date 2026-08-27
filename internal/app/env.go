@@ -564,11 +564,15 @@ func osManPage(ctx context.Context, cmd string) (string, error) {
 	return string(out), nil
 }
 
-// osTypeCmd runs `bash -c "type <cmd>"` to discover aliases or builtins.
+// osTypeCmd runs `<shell> -i -c "type <cmd>"` to discover aliases or builtins.
 func osTypeCmd(ctx context.Context, cmd string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "bash", "-c", "type "+cmd).CombinedOutput()
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "bash"
+	}
+	out, err := exec.CommandContext(ctx, shell, "-i", "-c", "type "+cmd).CombinedOutput()
 	if err != nil {
 		return "", err
 	}
@@ -687,9 +691,13 @@ func osListDirNames(dir string, maxItems int) []string {
 	return names
 }
 
-// osExecShell executes command in a subshell, attaching standard IO streams.
+// osExecShell executes command in an interactive subshell so aliases and functions expand.
 func osExecShell(command string, stdout, stderr io.Writer) int {
-	cmd := exec.Command("bash", "-c", command)
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "bash"
+	}
+	cmd := exec.Command(shell, "-i", "-c", command)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
