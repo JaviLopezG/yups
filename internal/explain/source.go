@@ -53,7 +53,9 @@ func (r *Resolver) ExplainPipeline(ctx context.Context, pipeline *Pipeline) *Pip
 		return &PipelineExplanation{}
 	}
 
-	result := &PipelineExplanation{}
+	result := &PipelineExplanation{
+		Comment: pipeline.Comment,
+	}
 	for _, stage := range pipeline.Stages {
 		stageExp := StageExplanation{
 			Operator:  stage.Operator,
@@ -70,7 +72,21 @@ func (r *Resolver) ExplainPipeline(ctx context.Context, pipeline *Pipeline) *Pip
 
 // ExplainCommand resolves local documentation for a single command.
 func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExplanation {
-	if cmd == nil || cmd.Name == "" {
+	if cmd == nil {
+		return &CommandExplanation{}
+	}
+	if cmd.Name == "" {
+		if cmd.Comment != "" {
+			exp := &CommandExplanation{
+				Comment:         cmd.Comment,
+				HasMissingItems: true,
+				RawCommand:      formatRawCommand(cmd),
+			}
+			if r.env.LLMClient != nil {
+				exp.LLMEndpoint = r.env.LLMClient.BaseURL()
+			}
+			return exp
+		}
 		return &CommandExplanation{}
 	}
 
@@ -78,6 +94,7 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 		Name:       cmd.Name,
 		Subcommand: cmd.Subcommand,
 		EnvVars:    cmd.EnvVars,
+		Comment:    cmd.Comment,
 	}
 
 	// 1. Alias & Builtin inspection
@@ -172,7 +189,7 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 
 	// 7. Record missing items and raw command for LLM query
 	missingItems := detectMissingItems(exp)
-	exp.HasMissingItems = len(missingItems) > 0
+	exp.HasMissingItems = len(missingItems) > 0 || exp.Comment != ""
 	exp.RawCommand = formatRawCommand(cmd)
 	if r.env.LLMClient != nil {
 		exp.LLMEndpoint = r.env.LLMClient.BaseURL()
@@ -465,5 +482,13 @@ func formatRawCommand(cmd *Command) string {
 	for _, r := range cmd.Redirects {
 		parts = append(parts, r.Op, r.Target)
 	}
-	return strings.Join(parts, " ")
+	res := strings.Join(parts, " ")
+	if cmd.Comment != "" {
+		if res != "" {
+			res += " #" + cmd.Comment
+		} else {
+			res = "#" + cmd.Comment
+		}
+	}
+	return res
 }

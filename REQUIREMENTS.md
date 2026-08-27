@@ -400,12 +400,19 @@ convierten a YUPS en un verdadero ayudante.
   podría estar realizando una tarea repetitiva.
 - `--ask-run script.sh|command_line`: flag del sistema, para permitir a yups
   preguntar al usuario en diferido si quiere ejecutar algo. Las posibles
-  respuestas son Yes/no/edit/modifications. Hay que subrayar le abreviatura
-  (<u>y/n/e/m</u>). `Edit` en caso de command lines hace lo mismo que no, pero
-  deja el commandline en el prompt para que el usuario lo pueda editar a su
-  conveniencia; en el caso de scripts, los abre en el editor predeterminado,
-  preguntando al salir de nuevo si los quiere ejecutar. `Modifications` continua
-  o comienza la conversación con el LLM para plantear cambios.
+  respuestas son Yes/no/edit/modifications. Hay que subrayar la abreviatura
+  (<u>y/n/e/m</u>). `Edit` en caso de command lines activa la edición en línea
+  interactiva en la terminal con el comando sugerido precargado y control
+  de cursor ($\leftarrow$/$\rightarrow$/Home/End/Backspace/Delete); en el caso de
+  scripts, los abre en el editor predeterminado, preguntando al salir de nuevo si
+  los quiere ejecutar. `Modifications` continua o comienza la conversación con el
+  LLM para plantear cambios.
+
+- Comentarios en línea de comandos (`#...`): si el usuario incluye un comentario
+  en la línea a explicar (ej. `yups -- ls -avi #Quiero listar todos los subdirectorios`),
+  yups muestra la información local y **siempre** consulta al LLM interpretando el
+  comentario como la intención o pregunta explícita del usuario, permitiendo al
+  LLM contrastar la orden con el objetivo y proponer el comando óptimo.
 
 #### Del usuario
 

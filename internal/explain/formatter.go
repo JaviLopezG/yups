@@ -71,17 +71,19 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 	}
 
 	// 1. Found header
-	if cmd.Found {
-		if opts.Color {
-			fmt.Fprintf(w, "%sFound:%s %s%s%s\n", ansiBold, ansiReset, ansiOrange, cmd.Name, ansiReset)
+	if cmd.Name != "" {
+		if cmd.Found {
+			if opts.Color {
+				fmt.Fprintf(w, "%sFound:%s %s%s%s\n", ansiBold, ansiReset, ansiOrange, cmd.Name, ansiReset)
+			} else {
+				fmt.Fprintf(w, "Found: %s\n", cmd.Name)
+			}
 		} else {
-			fmt.Fprintf(w, "Found: %s\n", cmd.Name)
-		}
-	} else {
-		if opts.Color {
-			fmt.Fprintf(w, "%sNo manual entry or help found for %q%s\n", ansiRed, cmd.Name, ansiReset)
-		} else {
-			fmt.Fprintf(w, "No manual entry or help found for %q\n", cmd.Name)
+			if opts.Color {
+				fmt.Fprintf(w, "%sNo manual entry or help found for %q%s\n", ansiRed, cmd.Name, ansiReset)
+			} else {
+				fmt.Fprintf(w, "No manual entry or help found for %q\n", cmd.Name)
+			}
 		}
 	}
 
@@ -141,6 +143,15 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 	for _, redir := range cmd.Redirects {
 		if redir.Description != "" {
 			fmt.Fprintf(w, "  %s\n", redir.Description)
+		}
+	}
+
+	// 10. Comment
+	if cmd.Comment != "" {
+		if opts.Color {
+			fmt.Fprintf(w, "  %s# %s%s\n", ansiGray, cmd.Comment, ansiReset)
+		} else {
+			fmt.Fprintf(w, "  # %s\n", cmd.Comment)
 		}
 	}
 }

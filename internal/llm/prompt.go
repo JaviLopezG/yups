@@ -39,10 +39,11 @@ func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, mi
 
 	sysSb.WriteString("\nInstructions:\n")
 	sysSb.WriteString("1. Briefly explain what the unknown commands, flags, or syntax mean or were likely intended to be.\n")
-	sysSb.WriteString("2. If you detect a typo or invalid flag, clearly provide:\n")
+	sysSb.WriteString("2. If the user command line contains a comment (e.g. #...), treat it as an explicit user question or goal. Assess whether the command achieves that goal, explain any discrepancy, and suggest the ideal command or script to accomplish what the user asked in the comment.\n")
+	sysSb.WriteString("3. If you detect a typo, invalid flag, or alternative better command, clearly provide:\n")
 	sysSb.WriteString("   Suggested command: <corrected command>\n")
 	sysSb.WriteString("   (Or if a multiline script is required, wrap it inside a ```bash ... ``` code block).\n")
-	sysSb.WriteString("3. Keep explanations concise, clear, and without unnecessary filler.\n")
+	sysSb.WriteString("4. Keep explanations concise, clear, and without unnecessary filler.\n")
 
 	var userSb strings.Builder
 	fmt.Fprintf(&userSb, "User command line: %s\n\n", commandLine)
@@ -59,7 +60,7 @@ func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, mi
 		userSb.WriteString("\n")
 	}
 
-	userSb.WriteString("Please explain the unknown parts and suggest a correction if appropriate.")
+	userSb.WriteString("Please explain the command/comment and suggest a correction or solution if appropriate.")
 
 	return ChatRequest{
 		Model: model,

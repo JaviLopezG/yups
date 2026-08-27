@@ -17,6 +17,7 @@ const (
 	TokenOpSemi                 // ;
 	TokenOpBackground           // &
 	TokenRedir                  // >, >>, <, 2>, 2>&1, &>, etc.
+	TokenComment                // # comment text
 )
 
 // Token holds a single lexed shell token with its type.
@@ -39,15 +40,20 @@ func Tokenize(args []string) []Token {
 }
 
 // joinArgs intelligently rebuilds the raw command line while preserving quotes
-// when necessary.
+// when necessary and keeping raw comments untouched.
 func joinArgs(args []string) string {
 	if len(args) == 1 {
 		return args[0]
 	}
 	var sb strings.Builder
-	for i, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if i > 0 {
 			sb.WriteByte(' ')
+		}
+		if strings.HasPrefix(arg, "#") {
+			sb.WriteString(strings.Join(args[i:], " "))
+			break
 		}
 		if needsQuotes(arg) {
 			sb.WriteString(quoteArg(arg))
@@ -144,6 +150,13 @@ func tokenizeString(input string) []Token {
 			}
 		}
 
+		// Check comment
+		if runes[i] == '#' {
+			comment := strings.TrimSpace(string(runes[i+1:]))
+			tokens = append(tokens, Token{Type: TokenComment, Value: comment})
+			break
+		}
+
 		// Check single-character operators
 		switch runes[i] {
 		case '|':
@@ -168,6 +181,16 @@ func tokenizeString(input string) []Token {
 		var word strings.Builder
 		for i < n && !unicode.IsSpace(runes[i]) {
 			r := runes[i]
+
+			// If we hit a comment, emit current word and the comment token
+			if r == '#' {
+				if word.Len() > 0 {
+					tokens = append(tokens, Token{Type: TokenWord, Value: word.String()})
+				}
+				comment := strings.TrimSpace(string(runes[i+1:]))
+				tokens = append(tokens, Token{Type: TokenComment, Value: comment})
+				return tokens
+			}
 
 			// If we hit an unquoted operator, break the word unless it's inside quotes
 			if (r == '|' || r == '&' || r == ';' || r == '>' || r == '<') && word.Len() > 0 {

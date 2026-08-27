@@ -19,7 +19,8 @@ const (
 
 // Pipeline represents a full command sequence with control operators.
 type Pipeline struct {
-	Stages []Stage
+	Stages  []Stage
+	Comment string
 }
 
 // Stage represents one command in the pipeline and the operator connecting it
@@ -61,6 +62,7 @@ type Command struct {
 	Flags      []Flag
 	Args       []string
 	Redirects  []Redirect
+	Comment    string
 }
 
 // KnownWrappers lists command wrappers that execute another command.
@@ -155,6 +157,27 @@ func Parse(args []string) *Pipeline {
 					Operator: ControlOperator(token.Value),
 				})
 				currentTokens = nil
+			}
+		case TokenComment:
+			pipeline.Comment = token.Value
+			if len(currentTokens) > 0 {
+				cmd := parseCommand(currentTokens)
+				cmd.Comment = token.Value
+				pipeline.Stages = append(pipeline.Stages, Stage{
+					Command:  cmd,
+					Operator: OpNone,
+				})
+				currentTokens = nil
+			} else if len(pipeline.Stages) > 0 {
+				lastStage := &pipeline.Stages[len(pipeline.Stages)-1]
+				if lastStage.Command != nil {
+					lastStage.Command.Comment = token.Value
+				}
+			} else {
+				pipeline.Stages = append(pipeline.Stages, Stage{
+					Command:  &Command{Comment: token.Value},
+					Operator: OpNone,
+				})
 			}
 		default:
 			currentTokens = append(currentTokens, token)

@@ -423,3 +423,100 @@ func TestExplainInteractiveExecutionModifications(t *testing.T) {
 		t.Errorf("callCount = %d, want 2", callCount)
 	}
 }
+
+func TestTokenizeWithComment(t *testing.T) {
+	tokens := Tokenize([]string{"ls", "-avi", "#Quiero listar subdirectorios"})
+	if len(tokens) != 3 {
+		t.Fatalf("len(tokens) = %d, want 3 (%+v)", len(tokens), tokens)
+	}
+	if tokens[0].Value != "ls" || tokens[1].Value != "-avi" {
+		t.Errorf("unexpected command tokens: %+v", tokens[:2])
+	}
+	if tokens[2].Type != TokenComment || tokens[2].Value != "Quiero listar subdirectorios" {
+		t.Errorf("unexpected comment token: %+v", tokens[2])
+	}
+}
+
+func TestParseCommandWithComment(t *testing.T) {
+	p := Parse([]string{"ls", "-a", "#", "buscar", "todo"})
+	if len(p.Stages) != 1 {
+		t.Fatalf("len(stages) = %d, want 1", len(p.Stages))
+	}
+	cmd := p.Stages[0].Command
+	if cmd == nil {
+		t.Fatal("expected command stage")
+	}
+	if cmd.Name != "ls" {
+		t.Errorf("cmd.Name = %q, want 'ls'", cmd.Name)
+	}
+	if cmd.Comment != "buscar todo" {
+		t.Errorf("cmd.Comment = %q, want 'buscar todo'", cmd.Comment)
+	}
+}
+
+func TestExplainKnownCommandWithCommentTriggersLLM(t *testing.T) {
+	llmCalled := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCalled = true
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+		userMsg := chatReq.Messages[len(chatReq.Messages)-1].Content
+		if !strings.Contains(userMsg, "#Quiero listar todos los subdirectorios") {
+			t.Errorf("user message did not contain comment: %q", userMsg)
+		}
+
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "To list all subdirectories recursively, use the -R flag.\nSuggested command: ls -laR",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			if cmd == "ls" {
+				return "ls (1) - list directory contents", nil
+			}
+			return "", nil
+		},
+		LookupInPath: func(cmd string) bool { return cmd == "ls" },
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			if name == "ls" {
+				return []byte("  -a, --all    do not ignore entries starting with .\n"), nil
+			}
+			return nil, nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-a", "#Quiero listar todos los subdirectorios"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !llmCalled {
+		t.Error("expected LLM to be queried when comment is present")
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"Found: ls",
+		"-a found:",
+		"# Quiero listar todos los subdirectorios",
+		"Asking LLM at " + ts.URL,
+		"LLM Explanation:",
+		"recursively",
+		"Suggested command:",
+		"ls -laR",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q\nFull output:\n%s", want, out)
+		}
+	}
+}

@@ -22,15 +22,16 @@ $ yups --update-yups
   and fetches documentation prioritizing `<command> --help` before falling back
   to `man` and `whatis`.
   Local basic documentation is displayed immediately. When a command or flag is
-  not found locally, it announces the query and connects to the configured Ollama
-  inference endpoint via direct HTTP, providing low-cost system context
-  (OS distribution, working directory structure, referenced file snippets,
-  and recent shell history) to explain missing items and suggest corrected
-  commands or scripts.
+  not found locally, or when the command line includes a comment (`#...`),
+  it announces the query and connects to the configured Ollama inference
+  endpoint via direct HTTP. Shell comments are interpreted as user goals or
+  questions, allowing the LLM to explain discrepancies and suggest optimal
+  commands along with low-cost system context (OS distribution, working directory
+  structure, referenced file snippets, and recent shell history).
   If the LLM suggests a command, `yups` prompts for action:
   `[Yes/no/edit/modifications]` (`y` executes immediately in subshell, `n` aborts,
-  `e` enables inline editing before execution, `m` sends feedback/followup to the
-  LLM in a multi-turn conversation).
+  `e` enables interactive inline editing with cursor navigation, `m` sends
+  feedback/followup to the LLM in a multi-turn conversation).
   If Ollama is unreachable, `yups` reports the connection error and, if unconfigured,
   suggests running `yups --install-yups`.
 
