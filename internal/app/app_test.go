@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"yups/internal/config"
+	"yups/internal/llm"
 )
 
 // fakeFS is an in-memory Env for the unit tests.
@@ -297,6 +300,58 @@ func TestDispatchBareCommandExplains(t *testing.T) {
 	}
 	if !strings.Contains(out, "Found: ls") {
 		t.Errorf("output does not contain 'Found: ls'\nFull output:\n%s", out)
+	}
+}
+
+func TestDispatchUnknownFlagFallsBackToLLM(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:latest",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Flag -javi does not exist for ls.\nSuggested command: ls -la",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	fs.configs[config.Path(fs.home)] = config.Config{
+		InferenceEndpoint: ts.URL,
+		DefaultModel:      "qwen2.5-coder:latest",
+	}
+
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.Whatis = func(ctx context.Context, cmd string) (string, error) {
+		if cmd == "ls" {
+			return "ls (1) - list directory contents", nil
+		}
+		return "", nil
+	}
+
+	out, code := runDispatch(t, env, "--", "ls", "-javi")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+	}
+
+	for _, want := range []string{
+		"#_?",
+		"Found: ls",
+		"-j: No description found.",
+		"Asking LLM at " + ts.URL,
+		"LLM Explanation:",
+		"Flag -javi does not exist",
+		"Suggested command:",
+		"ls -la",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q\nFull output:\n%s", want, out)
+		}
 	}
 }
 

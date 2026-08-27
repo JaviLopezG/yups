@@ -1,5 +1,7 @@
 package explain
 
+import "yups/internal/llm"
+
 // PipelineExplanation holds the structured explanation of an entire pipeline.
 type PipelineExplanation struct {
 	Stages []StageExplanation
@@ -25,6 +27,9 @@ type CommandExplanation struct {
 	Flags            []FlagExplanation
 	PositionalArgs   []ArgExplanation
 	Redirects        []RedirectExplanation
+	HasMissingItems  bool
+	RawCommand       string
+	Conversation     []llm.Message
 	LLMQueried       bool
 	LLMEndpoint      string
 	LLMExplanation   string

@@ -3,6 +3,7 @@ package explain
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"strings"
 	"time"
@@ -24,6 +25,9 @@ type DocEnv struct {
 	LLMEnv        llm.LLMEnv
 	DefaultModel  string
 	AdvancedModel string
+	IsInstalled   bool
+	AskPrompt     func(prompt, defaultValue string) string
+	ExecShell     func(command string, stdout, stderr io.Writer) int
 }
 
 // Resolver coordinates documentation lookup across multiple sources.
@@ -42,7 +46,7 @@ func NewResolver(env DocEnv) *Resolver {
 	}
 }
 
-// ExplainPipeline resolves documentation for an entire parsed Pipeline.
+// ExplainPipeline resolves local documentation for an entire parsed Pipeline.
 func (r *Resolver) ExplainPipeline(ctx context.Context, pipeline *Pipeline) *PipelineExplanation {
 	if pipeline == nil || len(pipeline.Stages) == 0 {
 		return &PipelineExplanation{}
@@ -63,7 +67,7 @@ func (r *Resolver) ExplainPipeline(ctx context.Context, pipeline *Pipeline) *Pip
 	return result
 }
 
-// ExplainCommand resolves documentation for a single command.
+// ExplainCommand resolves local documentation for a single command.
 func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExplanation {
 	if cmd == nil || cmd.Name == "" {
 		return &CommandExplanation{}
@@ -75,49 +79,50 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 		EnvVars:    cmd.EnvVars,
 	}
 
-	// 1. Check wrappers (e.g. sudo, time)
-	for _, w := range cmd.Wrappers {
-		wExp := WrapperExplanation{
-			Name: w.Name,
-			Args: w.Args,
-		}
-		if r.env.Whatis != nil {
-			if s, err := r.env.Whatis(ctx, w.Name); err == nil && s != "" {
-				wExp.Summary = firstNonEmptyLine(s)
+	// 1. Alias & Builtin inspection
+	if r.env.TypeCmd != nil {
+		if typeOut, err := r.env.TypeCmd(ctx, cmd.Name); err == nil && typeOut != "" {
+			trimmed := strings.TrimSpace(typeOut)
+			if strings.Contains(trimmed, "is an alias for") || strings.Contains(trimmed, "es un alias") {
+				exp.AliasInfo = trimmed
+			} else if strings.Contains(trimmed, "is a shell builtin") || strings.Contains(trimmed, "es una función") {
+				exp.BuiltinInfo = trimmed
 			}
 		}
-		for _, flag := range w.Flags {
-			wExp.Flags = append(wExp.Flags, r.lookupFlagDoc(ctx, w.Name, "", flag))
+	}
+
+	// 2. Command existence check & summary
+	if r.env.LookupInPath != nil && r.env.LookupInPath(cmd.Name) {
+		exp.Found = true
+	} else if exp.AliasInfo != "" || exp.BuiltinInfo != "" {
+		exp.Found = true
+	}
+
+	exp.Summary = r.lookupSummary(ctx, cmd.Name, cmd.Subcommand)
+	if exp.Summary != "" {
+		exp.Found = true
+	}
+
+	// 3. Wrappers
+	for _, wrapper := range cmd.Wrappers {
+		wExp := WrapperExplanation{
+			Name: wrapper.Name,
+			Args: wrapper.Args,
+		}
+		wExp.Summary = r.lookupSummary(ctx, wrapper.Name, "")
+		for _, f := range wrapper.Flags {
+			wExp.Flags = append(wExp.Flags, r.lookupFlagDoc(ctx, wrapper.Name, "", f))
 		}
 		exp.Wrappers = append(exp.Wrappers, wExp)
 	}
 
-	// 2. Type / Alias / Builtin check
-	if r.env.TypeCmd != nil {
-		if out, err := r.env.TypeCmd(ctx, cmd.Name); err == nil && out != "" {
-			firstLine := firstNonEmptyLine(out)
-			if strings.Contains(firstLine, "alias") {
-				exp.AliasInfo = firstLine
-			} else if strings.Contains(firstLine, "builtin") || strings.Contains(firstLine, "interna") {
-				exp.BuiltinInfo = firstLine
-			}
-		}
-	}
-
-	// 3. Command summary (whatis -> man NAME -> help header)
-	exp.Summary = r.lookupSummary(ctx, cmd.Name, cmd.Subcommand)
-	exp.Found = exp.Summary != "" || exp.AliasInfo != "" || exp.BuiltinInfo != "" || (r.env.LookupInPath != nil && r.env.LookupInPath(cmd.Name))
-
-	// 4. Flags documentation (Help first -> fallback to Man)
-	// Track already explained full-word flags (e.g. -type vs -t -y -p -e)
+	// 4. Flags
 	handledFullWords := make(map[string]bool)
 	for _, flag := range cmd.Flags {
 		if flag.FullWord != "" && handledFullWords[flag.FullWord] {
 			continue
 		}
 
-		// If this is part of a single-dash multi-character cluster (e.g. -type or -al):
-		// Check if the full word exists as a dedicated flag first.
 		if flag.FullWord != "" && flag.IsClustered {
 			fullFlag := Flag{
 				Raw:     flag.FullWord,
@@ -132,11 +137,11 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 			}
 		}
 
-		flagDoc := r.lookupFlagDoc(ctx, cmd.Name, cmd.Subcommand, flag)
-		exp.Flags = append(exp.Flags, flagDoc)
+		flagExp := r.lookupFlagDoc(ctx, cmd.Name, cmd.Subcommand, flag)
+		exp.Flags = append(exp.Flags, flagExp)
 	}
 
-	// 5. Positional arguments inspection
+	// 5. Positional arguments inspection (stat filesystem)
 	for _, arg := range cmd.Args {
 		argExp := ArgExplanation{Value: arg}
 		if r.env.StatPath != nil {
@@ -164,39 +169,69 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 		})
 	}
 
-	// 7. Check for unknowns to trigger LLM fallback
+	// 7. Record missing items and raw command for LLM query
 	missingItems := detectMissingItems(exp)
-	if len(missingItems) > 0 && r.env.LLMClient != nil {
-		exp.LLMQueried = true
+	exp.HasMissingItems = len(missingItems) > 0
+	exp.RawCommand = formatRawCommand(cmd)
+	if r.env.LLMClient != nil {
 		exp.LLMEndpoint = r.env.LLMClient.BaseURL()
-		var sysCtx llm.SystemContext
-		if r.env.LLMEnv != nil {
-			sysCtx = llm.GatherContext(r.env.LLMEnv, cmd.Args)
-		}
-		basicSummary := buildBasicSummary(exp)
-		model := r.env.DefaultModel
-		if model == "" {
-			model = llm.FallbackDefaultModel
-		}
-
-		rawCmd := formatRawCommand(cmd)
-		chatReq := llm.BuildChatRequest(model, sysCtx, rawCmd, missingItems, basicSummary)
-
-		llmCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-
-		chatResp, err := r.env.LLMClient.Chat(llmCtx, chatReq)
-		if err == nil && chatResp.Message.Content != "" {
-			parsed := llm.ParseLLMResponse(chatResp.Message.Content)
-			exp.LLMExplanation = parsed.Explanation
-			exp.SuggestedCommand = parsed.SuggestedCommand
-			exp.SuggestedScript = parsed.SuggestedScript
-		} else if err != nil {
-			exp.LLMError = fmt.Sprintf("LLM server (%s) is not reachable", r.env.LLMClient.BaseURL())
-		}
 	}
 
 	return exp
+}
+
+// QueryLLM executes or continues a conversation with the configured Ollama LLM.
+func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExplanation, userFollowup string) error {
+	if r.env.LLMClient == nil {
+		return fmt.Errorf("no LLM client configured")
+	}
+
+	exp.LLMQueried = true
+	exp.LLMEndpoint = r.env.LLMClient.BaseURL()
+
+	model := r.env.DefaultModel
+	if model == "" {
+		model = llm.FallbackDefaultModel
+	}
+
+	if len(exp.Conversation) == 0 {
+		var sysCtx llm.SystemContext
+		if r.env.LLMEnv != nil && cmd != nil {
+			sysCtx = llm.GatherContext(r.env.LLMEnv, cmd.Args)
+		}
+		basicSummary := buildBasicSummary(exp)
+		missingItems := detectMissingItems(exp)
+		chatReq := llm.BuildChatRequest(model, sysCtx, exp.RawCommand, missingItems, basicSummary)
+		exp.Conversation = chatReq.Messages
+	} else if userFollowup != "" {
+		exp.Conversation = append(exp.Conversation, llm.Message{
+			Role:    "user",
+			Content: userFollowup,
+		})
+	}
+
+	llmCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	chatResp, err := r.env.LLMClient.Chat(llmCtx, llm.ChatRequest{
+		Model:    model,
+		Messages: exp.Conversation,
+	})
+	if err != nil {
+		exp.LLMError = err.Error()
+		return err
+	}
+
+	if chatResp.Message.Content != "" {
+		exp.Conversation = append(exp.Conversation, chatResp.Message)
+		parsed := llm.ParseLLMResponse(chatResp.Message.Content)
+		exp.LLMExplanation = parsed.Explanation
+		exp.SuggestedCommand = parsed.SuggestedCommand
+		exp.SuggestedScript = parsed.SuggestedScript
+		exp.LLMError = ""
+	}
+
+	return nil
 }
 
 func (r *Resolver) lookupSummary(ctx context.Context, cmd, subcmd string) string {

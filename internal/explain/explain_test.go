@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -204,5 +205,218 @@ func TestExplainUnknownCommandCallsLLM(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("output does not contain %q\nFull output:\n%s", want, out)
 		}
+	}
+}
+
+func TestExplainUnreachableLLMShowsErrorAndInstallHint(t *testing.T) {
+	// Point to a closed port
+	client := llm.NewClient(&http.Client{Timeout: 100 * time.Millisecond}, "http://127.0.0.1:54321")
+	docEnv := DocEnv{
+		LLMClient:   client,
+		IsInstalled: false,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"sl", "-al"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"No manual entry or help found for \"sl\"",
+		"Asking LLM at http://127.0.0.1:54321 for more information...",
+		"Cannot connect to Ollama at http://127.0.0.1:54321",
+		"Note: yups is using default settings because it is not installed or configured yet.",
+		"Run 'yups --install-yups'",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q\nFull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestExplainInteractiveExecutionYes(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Typo in command.\nSuggested command: ls -av",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	var executedCmd string
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		AskPrompt: func(prompt, defaultValue string) string {
+			return "y"
+		},
+		ExecShell: func(cmd string, stdout, stderr io.Writer) int {
+			executedCmd = cmd
+			return 42
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-javi"}, &stdout, &stderr, false)
+	if code != 42 {
+		t.Fatalf("exit code = %d, want 42", code)
+	}
+	if executedCmd != "ls -av" {
+		t.Errorf("executedCmd = %q, want %q", executedCmd, "ls -av")
+	}
+}
+
+func TestExplainInteractiveExecutionNo(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Typo in command.\nSuggested command: ls -av",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	var executed bool
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		AskPrompt: func(prompt, defaultValue string) string {
+			return "n"
+		},
+		ExecShell: func(cmd string, stdout, stderr io.Writer) int {
+			executed = true
+			return 0
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-javi"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if executed {
+		t.Error("command should not have been executed on 'n'")
+	}
+}
+
+func TestExplainInteractiveExecutionEdit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Typo in command.\nSuggested command: ls -av",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	prompts := []string{"e", "ls -lav /var/log", "y"}
+	promptIdx := 0
+
+	var executedCmd string
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		AskPrompt: func(prompt, defaultValue string) string {
+			if promptIdx < len(prompts) {
+				res := prompts[promptIdx]
+				promptIdx++
+				return res
+			}
+			return "n"
+		},
+		ExecShell: func(cmd string, stdout, stderr io.Writer) int {
+			executedCmd = cmd
+			return 0
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-javi"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if executedCmd != "ls -lav /var/log" {
+		t.Errorf("executedCmd = %q, want %q", executedCmd, "ls -lav /var/log")
+	}
+}
+
+func TestExplainInteractiveExecutionModifications(t *testing.T) {
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+		var resp llm.ChatResponse
+		if callCount == 1 {
+			resp = llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Initial suggestion.\nSuggested command: ls -av",
+				},
+				Done: true,
+			}
+		} else {
+			// Verify multi-turn history includes user modifications
+			lastMsg := chatReq.Messages[len(chatReq.Messages)-1]
+			if !strings.Contains(lastMsg.Content, "recursive") {
+				t.Errorf("last message does not contain 'recursive': %q", lastMsg.Content)
+			}
+			resp = llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Revised suggestion with recursion.\nSuggested command: ls -laR",
+				},
+				Done: true,
+			}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	prompts := []string{"m", "I want recursive listing", "y"}
+	promptIdx := 0
+
+	var executedCmd string
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		AskPrompt: func(prompt, defaultValue string) string {
+			if promptIdx < len(prompts) {
+				res := prompts[promptIdx]
+				promptIdx++
+				return res
+			}
+			return "n"
+		},
+		ExecShell: func(cmd string, stdout, stderr io.Writer) int {
+			executedCmd = cmd
+			return 0
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-javi"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if executedCmd != "ls -laR" {
+		t.Errorf("executedCmd = %q, want %q", executedCmd, "ls -laR")
+	}
+	if callCount != 2 {
+		t.Errorf("callCount = %d, want 2", callCount)
 	}
 }

@@ -21,12 +21,18 @@ $ yups --update-yups
   wrappers (`sudo`, `time`...), inspects positional arguments on the filesystem,
   and fetches documentation prioritizing `<command> --help` before falling back
   to `man` and `whatis`.
-  When a command or flag is not found locally, it queries the configured Ollama
-  LLM inference endpoint via direct HTTP, providing low-cost system context
+  Local basic documentation is displayed immediately. When a command or flag is
+  not found locally, it announces the query and connects to the configured Ollama
+  inference endpoint via direct HTTP, providing low-cost system context
   (OS distribution, working directory structure, referenced file snippets,
-  and recent shell history) to explain the missing items and suggest corrected
-  commands or scripts. If Ollama is unavailable, it gracefully degrades to local
-  basic mode without errors.
+  and recent shell history) to explain missing items and suggest corrected
+  commands or scripts.
+  If the LLM suggests a command, `yups` prompts for action:
+  `[Yes/no/edit/modifications]` (`y` executes immediately in subshell, `n` aborts,
+  `e` enables inline editing before execution, `m` sends feedback/followup to the
+  LLM in a multi-turn conversation).
+  If Ollama is unreachable, `yups` reports the connection error and, if unconfigured,
+  suggests running `yups --install-yups`.
 
 - `--help`: shows the help.
 

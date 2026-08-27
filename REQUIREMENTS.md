@@ -1260,7 +1260,7 @@ acabar cualquier proceso.
   - [ ] Integración con Bash para disparadores `F1` o `Ctrl+g`
   - [ ] Tool: web-search con configuración opt in para que el usuario valore si
     quiere asumir el riesgo de que salgan datos fuera del sistema.
-  - [ ] `--ask-run` sólo para command line
+  - [x] `--ask-run` sólo para command line (`[y/n/e/m]` Yes/no/edit/modifications)
   - [ ] `--test`
 - [x] Readme
 - [x] Worker de Goreleaser para generar el ejecutable automáticamente con cada

@@ -125,11 +125,25 @@ type Env struct {
 	ReadFileSnippet func(path string, maxLines int) (string, error)
 	ListDirNames    func(dir string, maxItems int) []string
 	Getwd           func() (string, error)
+
+	// ExecShell executes a command line in bash.
+	ExecShell func(command string, stdout, stderr io.Writer) int
+	// IsInstalled reports whether yups is installed on the system.
+	IsInstalled func() bool
 }
 
 // DocEnv returns the explain.DocEnv adapter backed by this Env.
 func (e *Env) DocEnv() explain.DocEnv {
 	cfg := config.Defaults()
+	isInstalled := false
+	if e.IsInstalled != nil {
+		isInstalled = e.IsInstalled()
+	} else if e.UserHomeDir != nil && e.PathExists != nil {
+		if home, err := e.UserHomeDir(); err == nil {
+			isInstalled = e.PathExists(config.Path(home))
+		}
+	}
+
 	if e.UserHomeDir != nil && e.LoadConfig != nil {
 		if home, err := e.UserHomeDir(); err == nil {
 			if loaded, err := e.LoadConfig(config.Path(home)); err == nil {
@@ -165,6 +179,9 @@ func (e *Env) DocEnv() explain.DocEnv {
 		LLMEnv:        e.LLMEnv(),
 		DefaultModel:  cfg.DefaultModel,
 		AdvancedModel: cfg.AdvancedModel,
+		IsInstalled:   isInstalled,
+		AskPrompt:     e.AskPrompt,
+		ExecShell:     e.ExecShell,
 	}
 }
 
@@ -267,6 +284,8 @@ func NewOSEnv() *Env {
 		ReadFileSnippet:     osReadFileSnippet,
 		ListDirNames:        osListDirNames,
 		Getwd:               os.Getwd,
+		ExecShell:           osExecShell,
+		IsInstalled:         osIsInstalled,
 	}
 }
 
@@ -662,4 +681,28 @@ func osListDirNames(dir string, maxItems int) []string {
 		names = append(names, e.Name())
 	}
 	return names
+}
+
+// osExecShell executes command in a subshell, attaching standard IO streams.
+func osExecShell(command string, stdout, stderr io.Writer) int {
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		return ExitError
+	}
+	return ExitOK
+}
+
+// osIsInstalled reports whether ~/.yups/config.toml exists on the system.
+func osIsInstalled() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return osPathExists(config.Path(home))
 }
