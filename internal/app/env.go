@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"yups/internal/config"
+	"yups/internal/explain"
 	"yups/internal/update"
 )
 
@@ -100,6 +102,41 @@ type Env struct {
 	// containers) or exhausted. It echoes the question so transcripts
 	// stay readable.
 	AskConfirmation func(prompt string, defaultYes bool) bool
+
+	// RunCmdTimeout runs name with args, bounded by the given timeout.
+	RunCmdTimeout func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error)
+	// Whatis queries whatis / apropos for cmd.
+	Whatis func(ctx context.Context, cmd string) (string, error)
+	// ManPage fetches the cat-rendered manual page for cmd.
+	ManPage func(ctx context.Context, cmd string) (string, error)
+	// TypeCmd inspects the shell type (alias, builtin) for cmd.
+	TypeCmd func(ctx context.Context, cmd string) (string, error)
+	// Stat returns file info for path.
+	Stat func(path string) (fs.FileInfo, error)
+	// IsTerminalOutput reports whether w is an interactive terminal.
+	IsTerminalOutput func(w io.Writer) bool
+}
+
+// DocEnv returns the explain.DocEnv adapter backed by this Env.
+func (e *Env) DocEnv() explain.DocEnv {
+	return explain.DocEnv{
+		RunCmdTimeout: e.RunCmdTimeout,
+		Whatis:        e.Whatis,
+		ManPage:       e.ManPage,
+		TypeCmd:       e.TypeCmd,
+		StatPath:      e.Stat,
+		LookupInPath: func(cmd string) bool {
+			if e.PathDirs == nil || e.LookupExecutable == nil {
+				return false
+			}
+			for _, dir := range e.PathDirs() {
+				if e.LookupExecutable(dir, cmd) {
+					return true
+				}
+			}
+			return false
+		},
+	}
 }
 
 // Run parses args and executes the matching command against the real
@@ -138,6 +175,12 @@ func NewOSEnv() *Env {
 		PathExists:          osPathExists,
 		EvalSymlinks:        filepath.EvalSymlinks,
 		AskConfirmation:     osAskConfirmation,
+		RunCmdTimeout:       osRunCmdTimeout,
+		Whatis:              osWhatis,
+		ManPage:             osManPage,
+		TypeCmd:             osTypeCmd,
+		Stat:                os.Stat,
+		IsTerminalOutput:    osIsTerminalOutput,
 	}
 }
 
@@ -377,4 +420,59 @@ func osAskConfirmation(prompt string, defaultYes bool) bool {
 		fmt.Println("Please answer y or n.")
 	}
 	return defaultYes
+}
+
+// osRunCmdTimeout executes name with args and returns its output, bounded by timeout.
+func osRunCmdTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	return cmd.CombinedOutput()
+}
+
+// osWhatis queries whatis (and falls back to apropos -s 1,8) for cmd.
+func osWhatis(ctx context.Context, cmd string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "whatis", cmd).CombinedOutput()
+	if err != nil || len(bytes.TrimSpace(out)) == 0 {
+		out, err = exec.CommandContext(ctx, "apropos", "-s", "1,8", cmd).CombinedOutput()
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// osManPage runs `man -P cat <cmd>` to fetch the plain text manual page.
+func osManPage(ctx context.Context, cmd string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "man", "-P", "cat", cmd).CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// osTypeCmd runs `bash -c "type <cmd>"` to discover aliases or builtins.
+func osTypeCmd(ctx context.Context, cmd string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "bash", "-c", "type "+cmd).CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// osIsTerminalOutput reports whether w wraps an interactive character device terminal.
+func osIsTerminalOutput(w io.Writer) bool {
+	if f, ok := w.(*os.File); ok {
+		fi, err := f.Stat()
+		if err == nil && (fi.Mode()&os.ModeCharDevice) != 0 {
+			return true
+		}
+	}
+	return false
 }

@@ -3,10 +3,13 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
+
+	"yups/internal/explain"
 )
 
 // Version is the version of the binary. It is overridden at build time with
@@ -35,6 +38,8 @@ const helpText = `yups - prints the ` + Logo + ` logo and manages its own instal
 
 Usage:
   yups                  Print the logo (` + Logo + `) in ANSI colour 214
+  yups -- <command...>  Explain the given command line, flags, and operators
+  yups <command...>     Explain the given command line
   yups --help           Show this help text
   yups --version        Show the yups version
   yups --install-yups   Install the yups executable into the first directory
@@ -50,6 +55,16 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stdout, ColoredLogo)
 		return ExitOK
+	}
+
+	color := env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout)
+
+	if args[0] == "--" {
+		if len(args) == 1 {
+			fmt.Fprintln(stdout, ColoredLogo)
+			return ExitOK
+		}
+		return explain.Explain(context.Background(), env.DocEnv(), args[1:], stdout, stderr, color)
 	}
 
 	switch args[0] {
@@ -68,6 +83,9 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	case flagUpdateApply:
 		return UpdateApply(env, args[1:], stdout, stderr)
 	default:
+		if !strings.HasPrefix(args[0], "-") {
+			return explain.Explain(context.Background(), env.DocEnv(), args, stdout, stderr, color)
+		}
 		fmt.Fprintf(stderr, "yups: unknown option %q\n\n", args[0])
 		fmt.Fprint(stderr, helpText)
 		return ExitUsage

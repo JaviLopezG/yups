@@ -1249,18 +1249,18 @@ acabar cualquier proceso.
 - [x] Ayuda inline `--help`
 - [x] Proceso de [instalación](#instalacion) `--install-yups`
 - [x] Proceso de desinstalación `--uninstall-yups`
-- [ ] (WIP) Proceso de [actualización](#actualizacion) sin comprobación, bajo demanda
+- [x] Proceso de [actualización](#actualizacion) sin comprobación, bajo demanda
   `--update-yups`
-- [ ] Consulta de una [línea que parece un comando](#linea-comando)
+- [x] Consulta de una [línea que parece un comando](#linea-comando)
     - [ ] `--advanced`
   - [ ] Fuente de datos: lo que está escrito en el prompt actualmente
-  - [ ] Fuente de datos: lista de comandos disponible en el sistema
+  - [x] Fuente de datos: lista de comandos disponible en el sistema (help/man/whatis)
   - [ ] Integración con Bash para disparadores `F1` o `Ctrl+g`
   - [ ] Tool: web-search con configuración opt in para que el usuario valore si
     quiere asumir el riesgo de que salgan datos fuera del sistema.
   - [ ] `--ask-run` sólo para command line
   - [ ] `--test`
-- [ ] (WIP) Readme
+- [x] Readme
 - [x] Worker de Goreleaser para generar el ejecutable automáticamente con cada
   nueva versión.
 - [ ] Test de otras fuentes de información como tldr, cheatsheets navi o Arch

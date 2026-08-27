@@ -1,10 +1,12 @@
 # yups
 
-`yups` prints the `#_?` marker in ANSI 256-colour 214 and manages its own
-installation.
+`yups` explains shell commands, prints the `#_?` marker in ANSI 256-colour 214,
+and manages its own installation.
 
 ```bash
 $ yups                # prints #_? in colour 214
+$ yups -- ls -al /var/cache/man/
+$ yups -- "ls -l || ps aux"
 $ yups --help         # help with the options available so far
 $ yups --install-yups
 $ yups --uninstall-yups
@@ -12,6 +14,13 @@ $ yups --update-yups
 ```
 
 ## Commands
+
+- `-- <command...>` (or `yups <command...>`): explains a shell command line.
+  It tokenizes simple or compound pipelines (connected by `||`, `&&`, `;`, `|`,
+  `|&`, `&`), unpacks clustered flags (`-al` -> `-a`, `-l`), identifies
+  wrappers (`sudo`, `time`...), inspects positional arguments on the filesystem,
+  and fetches documentation prioritizing `<command> --help` before falling back
+  to `man` and `whatis`.
 
 - `--help`: shows the help.
 

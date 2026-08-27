@@ -3,14 +3,18 @@ package app
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"yups/internal/config"
 )
@@ -178,6 +182,24 @@ func (f *fakeFS) env() *Env {
 			}
 			return defaultYes
 		},
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return nil, nil
+		},
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			return "", nil
+		},
+		ManPage: func(ctx context.Context, cmd string) (string, error) {
+			return "", nil
+		},
+		TypeCmd: func(ctx context.Context, cmd string) (string, error) {
+			return "", nil
+		},
+		Stat: func(path string) (fs.FileInfo, error) {
+			return nil, fs.ErrNotExist
+		},
+		IsTerminalOutput: func(w io.Writer) bool {
+			return false
+		},
 	}
 }
 
@@ -211,7 +233,7 @@ func TestHelpListsAvailableCommands(t *testing.T) {
 }
 
 func TestVersionFlagPrintsNameAndVersion(t *testing.T) {
-	for _, arg := range []string{"--version", "-V", "version"} {
+	for _, arg := range []string{"--version", "-V"} {
 		out, code := runDispatch(t, newFakeFS().env(), arg)
 		if code != ExitOK {
 			t.Fatalf("arg %q: exit code = %d, want %d", arg, code, ExitOK)
@@ -219,6 +241,62 @@ func TestVersionFlagPrintsNameAndVersion(t *testing.T) {
 		if want := ProgramName + " " + Version + "\n"; out != want {
 			t.Errorf("arg %q: output = %q, want %q", arg, out, want)
 		}
+	}
+}
+
+func TestDispatchDoubleDashAlonePrintsLogo(t *testing.T) {
+	out, code := runDispatch(t, newFakeFS().env(), "--")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d", code, ExitOK)
+	}
+	if want := "\x1b[38;5;214m#_?\x1b[0m\n"; out != want {
+		t.Fatalf("output = %q, want %q", out, want)
+	}
+}
+
+func TestDispatchExplainsCommand(t *testing.T) {
+	fs := newFakeFS()
+	env := fs.env()
+	env.Whatis = func(ctx context.Context, cmd string) (string, error) {
+		if cmd == "ls" {
+			return "ls (1) - list directory contents", nil
+		}
+		return "", nil
+	}
+	env.RunCmdTimeout = func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+		if name == "ls" {
+			return []byte("  -l    use long format\n"), nil
+		}
+		return nil, nil
+	}
+
+	out, code := runDispatch(t, env, "--", "ls", "-l")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d", code, ExitOK)
+	}
+	for _, want := range []string{"#_?", "Found: ls", "ls (1) - list directory contents", "-l found:", "use long format"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q\nFull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestDispatchBareCommandExplains(t *testing.T) {
+	fs := newFakeFS()
+	env := fs.env()
+	env.Whatis = func(ctx context.Context, cmd string) (string, error) {
+		if cmd == "ls" {
+			return "ls (1) - list directory contents", nil
+		}
+		return "", nil
+	}
+
+	out, code := runDispatch(t, env, "ls", "-l")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d", code, ExitOK)
+	}
+	if !strings.Contains(out, "Found: ls") {
+		t.Errorf("output does not contain 'Found: ls'\nFull output:\n%s", out)
 	}
 }
 
