@@ -16,6 +16,12 @@ func TestDefaultsFillEveryField(t *testing.T) {
 		t.Errorf("YUPSRepo = %q, want %q", c.YUPSRepo, DefaultYUPSRepo)
 	case c.YUPSRepoFallback != DefaultYUPSRepoFallback:
 		t.Errorf("YUPSRepoFallback = %q, want %q", c.YUPSRepoFallback, DefaultYUPSRepoFallback)
+	case c.InferenceEndpoint != DefaultInferenceEndpoint:
+		t.Errorf("InferenceEndpoint = %q, want %q", c.InferenceEndpoint, DefaultInferenceEndpoint)
+	case c.DefaultModel != DefaultModel:
+		t.Errorf("DefaultModel = %q, want %q", c.DefaultModel, DefaultModel)
+	case c.AdvancedModel != DefaultAdvancedModel:
+		t.Errorf("AdvancedModel = %q, want %q", c.AdvancedModel, DefaultAdvancedModel)
 	}
 }
 
@@ -81,7 +87,14 @@ func TestLoadCorruptFileReturnsExplicitError(t *testing.T) {
 
 func TestSaveThenLoadRoundtripCreatesParentDirs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".yups", "config.toml")
-	want := Config{Version: "v9.9.9", YUPSRepo: "https://r.example/x", YUPSRepoFallback: "https://f.example/y"}
+	want := Config{
+		Version:           "v9.9.9",
+		YUPSRepo:          "https://r.example/x",
+		YUPSRepoFallback:  "https://f.example/y",
+		InferenceEndpoint: "http://custom:11434",
+		DefaultModel:      "custom-coder:latest",
+		AdvancedModel:     "custom-adv:latest",
+	}
 
 	if err := Save(path, want); err != nil {
 		t.Fatalf("Save: %v", err)

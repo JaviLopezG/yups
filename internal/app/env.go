@@ -22,6 +22,7 @@ import (
 
 	"yups/internal/config"
 	"yups/internal/explain"
+	"yups/internal/llm"
 	"yups/internal/update"
 )
 
@@ -102,6 +103,8 @@ type Env struct {
 	// containers) or exhausted. It echoes the question so transcripts
 	// stay readable.
 	AskConfirmation func(prompt string, defaultYes bool) bool
+	// AskPrompt prompts the user for text input with a default hint.
+	AskPrompt func(prompt, defaultValue string) string
 
 	// RunCmdTimeout runs name with args, bounded by the given timeout.
 	RunCmdTimeout func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error)
@@ -115,10 +118,32 @@ type Env struct {
 	Stat func(path string) (fs.FileInfo, error)
 	// IsTerminalOutput reports whether w is an interactive terminal.
 	IsTerminalOutput func(w io.Writer) bool
+
+	// Environment context gathering for LLM inference
+	ReadOSRelease   func() string
+	ReadHistory     func(home string, maxLines int) []string
+	ReadFileSnippet func(path string, maxLines int) (string, error)
+	ListDirNames    func(dir string, maxItems int) []string
+	Getwd           func() (string, error)
 }
 
 // DocEnv returns the explain.DocEnv adapter backed by this Env.
 func (e *Env) DocEnv() explain.DocEnv {
+	cfg := config.Defaults()
+	if e.UserHomeDir != nil && e.LoadConfig != nil {
+		if home, err := e.UserHomeDir(); err == nil {
+			if loaded, err := e.LoadConfig(config.Path(home)); err == nil {
+				cfg = loaded
+			}
+		}
+	}
+	config.EnsureDefaults(&cfg)
+
+	var llmClient *llm.Client
+	if cfg.InferenceEndpoint != "" && e.HTTPClient != nil {
+		llmClient = llm.NewClient(e.HTTPClient(), cfg.InferenceEndpoint)
+	}
+
 	return explain.DocEnv{
 		RunCmdTimeout: e.RunCmdTimeout,
 		Whatis:        e.Whatis,
@@ -136,7 +161,62 @@ func (e *Env) DocEnv() explain.DocEnv {
 			}
 			return false
 		},
+		LLMClient:     llmClient,
+		LLMEnv:        e.LLMEnv(),
+		DefaultModel:  cfg.DefaultModel,
+		AdvancedModel: cfg.AdvancedModel,
 	}
+}
+
+// LLMEnv returns the llm.LLMEnv adapter backed by this Env.
+func (e *Env) LLMEnv() llm.LLMEnv {
+	return &envLLMAdapter{env: e}
+}
+
+type envLLMAdapter struct {
+	env *Env
+}
+
+func (a *envLLMAdapter) UserHomeDir() (string, error) {
+	if a.env.UserHomeDir == nil {
+		return "", errors.New("no user home dir")
+	}
+	return a.env.UserHomeDir()
+}
+
+func (a *envLLMAdapter) Getwd() (string, error) {
+	if a.env.Getwd == nil {
+		return os.Getwd()
+	}
+	return a.env.Getwd()
+}
+
+func (a *envLLMAdapter) ReadOSRelease() string {
+	if a.env.ReadOSRelease == nil {
+		return ""
+	}
+	return a.env.ReadOSRelease()
+}
+
+func (a *envLLMAdapter) ReadHistory(home string, maxLines int) []string {
+	if a.env.ReadHistory == nil {
+		return nil
+	}
+	return a.env.ReadHistory(home, maxLines)
+}
+
+func (a *envLLMAdapter) ReadFileSnippet(path string, maxLines int) (string, error) {
+	if a.env.ReadFileSnippet == nil {
+		return "", errors.New("cannot read snippet")
+	}
+	return a.env.ReadFileSnippet(path, maxLines)
+}
+
+func (a *envLLMAdapter) ListDirNames(dir string, maxItems int) []string {
+	if a.env.ListDirNames == nil {
+		return nil
+	}
+	return a.env.ListDirNames(dir, maxItems)
 }
 
 // Run parses args and executes the matching command against the real
@@ -175,12 +255,18 @@ func NewOSEnv() *Env {
 		PathExists:          osPathExists,
 		EvalSymlinks:        filepath.EvalSymlinks,
 		AskConfirmation:     osAskConfirmation,
+		AskPrompt:           osAskPrompt,
 		RunCmdTimeout:       osRunCmdTimeout,
 		Whatis:              osWhatis,
 		ManPage:             osManPage,
 		TypeCmd:             osTypeCmd,
 		Stat:                os.Stat,
 		IsTerminalOutput:    osIsTerminalOutput,
+		ReadOSRelease:       osReadOSRelease,
+		ReadHistory:         osReadHistory,
+		ReadFileSnippet:     osReadFileSnippet,
+		ListDirNames:        osListDirNames,
+		Getwd:               os.Getwd,
 	}
 }
 
@@ -475,4 +561,105 @@ func osIsTerminalOutput(w io.Writer) bool {
 		}
 	}
 	return false
+}
+
+// osAskPrompt prompts for user text input, returning defaultValue if empty.
+func osAskPrompt(prompt, defaultValue string) string {
+	if defaultValue != "" {
+		fmt.Printf("%s [%s]: ", prompt, defaultValue)
+	} else {
+		fmt.Printf("%s: ", prompt)
+	}
+	reader := stdinReader()
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return defaultValue
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return defaultValue
+	}
+	return trimmed
+}
+
+// osReadOSRelease parses /etc/os-release for human-readable distribution name.
+func osReadOSRelease() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "Linux"
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, l := range lines {
+		if strings.HasPrefix(l, "PRETTY_NAME=") {
+			val := strings.TrimPrefix(l, "PRETTY_NAME=")
+			return strings.Trim(val, "\"")
+		}
+	}
+	return "Linux"
+}
+
+// osReadHistory reads up to maxLines from shell history file.
+func osReadHistory(home string, maxLines int) []string {
+	if home == "" {
+		return nil
+	}
+	histPath := filepath.Join(home, ".bash_history")
+	data, err := os.ReadFile(histPath)
+	if err != nil {
+		histPath = filepath.Join(home, ".zsh_history")
+		data, err = os.ReadFile(histPath)
+	}
+	if err != nil {
+		return nil
+	}
+	rawLines := strings.Split(string(data), "\n")
+	var valid []string
+	for _, l := range rawLines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed != "" {
+			valid = append(valid, trimmed)
+		}
+	}
+	if len(valid) > maxLines {
+		valid = valid[len(valid)-maxLines:]
+	}
+	return valid
+}
+
+// osReadFileSnippet reads up to maxLines from path if size is under 100KB.
+func osReadFileSnippet(path string, maxLines int) (string, error) {
+	fi, err := os.Stat(path)
+	if err != nil || fi.IsDir() || fi.Size() > 100*1024 {
+		return "", errors.New("unsuitable for snippet")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var lines []string
+	count := 0
+	for scanner.Scan() && count < maxLines {
+		lines = append(lines, scanner.Text())
+		count++
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+// osListDirNames lists up to maxItems entries in dir.
+func osListDirNames(dir string, maxItems int) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for i, e := range entries {
+		if i >= maxItems {
+			break
+		}
+		names = append(names, e.Name())
+	}
+	return names
 }

@@ -1,11 +1,14 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path/filepath"
+	"time"
 
 	"yups/internal/config"
+	"yups/internal/llm"
 )
 
 // Install implements `yups --install-yups`:
@@ -82,6 +85,32 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		if cfg.Version == config.FloorVersion || cfg.Version == "" {
 			cfg.Version = Version
 		}
+
+		endpoint := cfg.InferenceEndpoint
+		if env.AskPrompt != nil {
+			endpoint = env.AskPrompt("Ollama inference endpoint", cfg.InferenceEndpoint)
+		}
+		cfg.InferenceEndpoint = endpoint
+
+		if env.HTTPClient != nil {
+			llmClient := llm.NewClient(env.HTTPClient(), endpoint)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			models, err := llmClient.ListModels(ctx)
+			cancel()
+			if err == nil {
+				if len(models) > 0 {
+					def, adv := llm.SelectBestModels(models)
+					cfg.DefaultModel = def
+					cfg.AdvancedModel = adv
+					fmt.Fprintf(stdout, "Connected to Ollama at %s (default-model: %s, advanced-model: %s).\n", endpoint, def, adv)
+				} else {
+					fmt.Fprintf(stdout, "Connected to Ollama at %s (no models found; run 'ollama pull qwen2.5-coder' to enable AI enhancements).\n", endpoint)
+				}
+			} else {
+				fmt.Fprintf(stdout, "Ollama is not reachable at %s; yups will operate in basic mode until Ollama is available.\n", endpoint)
+			}
+		}
+
 		_ = env.SaveConfig(cfgPath, cfg)
 	}
 

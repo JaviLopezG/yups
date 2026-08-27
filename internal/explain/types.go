@@ -14,17 +14,23 @@ type StageExplanation struct {
 
 // CommandExplanation holds the structured documentation for a single command.
 type CommandExplanation struct {
-	Name           string
-	Subcommand     string
-	EnvVars        []string
-	AliasInfo      string
-	BuiltinInfo    string
-	Summary        string
-	Found          bool
-	Wrappers       []WrapperExplanation
-	Flags          []FlagExplanation
-	PositionalArgs []ArgExplanation
-	Redirects      []RedirectExplanation
+	Name             string
+	Subcommand       string
+	EnvVars          []string
+	AliasInfo        string
+	BuiltinInfo      string
+	Summary          string
+	Found            bool
+	Wrappers         []WrapperExplanation
+	Flags            []FlagExplanation
+	PositionalArgs   []ArgExplanation
+	Redirects        []RedirectExplanation
+	LLMQueried       bool
+	LLMEndpoint      string
+	LLMExplanation   string
+	SuggestedCommand string
+	SuggestedScript  string
+	LLMError         string
 }
 
 // WrapperExplanation holds documentation for a command wrapper (e.g. sudo).

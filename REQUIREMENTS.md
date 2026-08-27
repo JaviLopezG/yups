@@ -1255,6 +1255,8 @@ acabar cualquier proceso.
     - [ ] `--advanced`
   - [ ] Fuente de datos: lo que está escrito en el prompt actualmente
   - [x] Fuente de datos: lista de comandos disponible en el sistema (help/man/whatis)
+  - [x] Fallback a inferencia LLM en Ollama por HTTP (recolección de contexto de bajo coste y propuestas de corrección)
+  - [x] Configuración de endpoint y selección de modelos Ollama en la instalación
   - [ ] Integración con Bash para disparadores `F1` o `Ctrl+g`
   - [ ] Tool: web-search con configuración opt in para que el usuario valore si
     quiere asumir el riesgo de que salgan datos fuera del sistema.

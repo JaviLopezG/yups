@@ -3,10 +3,15 @@ package explain
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"yups/internal/llm"
 )
 
 type fakeFileInfo struct {
@@ -155,6 +160,46 @@ func TestExplainFallbackToMan(t *testing.T) {
 		"ls - list directory contents",
 		"-l found:",
 		"use a long listing format",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q\nFull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestExplainUnknownCommandCallsLLM(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "'sl' is a joke program displaying a steam locomotive when you mistype 'ls'.\nSuggested command: ls -al",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"sl", "-al"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"No manual entry or help found for \"sl\"",
+		"LLM Explanation:",
+		"steam locomotive",
+		"Suggested command:",
+		"ls -al",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output does not contain %q\nFull output:\n%s", want, out)

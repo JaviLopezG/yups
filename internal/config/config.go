@@ -25,8 +25,11 @@ import (
 // exist. Forgejo is the canonical source of truth; GitHub is only a
 // fallback (approved design decision 3).
 const (
-	DefaultYUPSRepo         = "https://code.javilopezg.com/javilopezg/yups"
-	DefaultYUPSRepoFallback = "https://github.com/JaviLopezG/yups"
+	DefaultYUPSRepo          = "https://code.javilopezg.com/javilopezg/yups"
+	DefaultYUPSRepoFallback  = "https://github.com/JaviLopezG/yups"
+	DefaultInferenceEndpoint = "http://localhost:11434"
+	DefaultModel             = "qwen2.5-coder:latest"
+	DefaultAdvancedModel     = "gemma4:latest"
 	// FloorVersion is the placeholder recorded when no version has ever
 	// been registered yet. Any real release tag compares strictly newer,
 	// so the first update bump starts from here.
@@ -37,9 +40,12 @@ const (
 // YUPS_REPO and YUPS_REPO_FALLBACK were chosen by Javi to be reusable
 // beyond the update feature.
 type Config struct {
-	Version          string `toml:"version"`
-	YUPSRepo         string `toml:"YUPS_REPO"`
-	YUPSRepoFallback string `toml:"YUPS_REPO_FALLBACK"`
+	Version           string `toml:"version"`
+	YUPSRepo          string `toml:"YUPS_REPO"`
+	YUPSRepoFallback  string `toml:"YUPS_REPO_FALLBACK"`
+	InferenceEndpoint string `toml:"inference-endpoint"`
+	DefaultModel      string `toml:"default-model"`
+	AdvancedModel     string `toml:"advanced-model"`
 }
 
 // Dir returns the yups state directory under the given home directory.
@@ -57,9 +63,12 @@ func Path(home string) string {
 // run, and no version has run until something writes the file.
 func Defaults() Config {
 	return Config{
-		Version:          FloorVersion,
-		YUPSRepo:         DefaultYUPSRepo,
-		YUPSRepoFallback: DefaultYUPSRepoFallback,
+		Version:           FloorVersion,
+		YUPSRepo:          DefaultYUPSRepo,
+		YUPSRepoFallback:  DefaultYUPSRepoFallback,
+		InferenceEndpoint: DefaultInferenceEndpoint,
+		DefaultModel:      DefaultModel,
+		AdvancedModel:     DefaultAdvancedModel,
 	}
 }
 
@@ -74,6 +83,15 @@ func EnsureDefaults(c *Config) {
 	}
 	if c.YUPSRepoFallback == "" {
 		c.YUPSRepoFallback = DefaultYUPSRepoFallback
+	}
+	if c.InferenceEndpoint == "" {
+		c.InferenceEndpoint = DefaultInferenceEndpoint
+	}
+	if c.DefaultModel == "" {
+		c.DefaultModel = DefaultModel
+	}
+	if c.AdvancedModel == "" {
+		c.AdvancedModel = DefaultAdvancedModel
 	}
 }
 

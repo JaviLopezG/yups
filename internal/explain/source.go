@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"strings"
 	"time"
+
+	"yups/internal/llm"
 )
 
 // DocEnv defines the OS interface methods needed for documentation retrieval.
@@ -16,6 +18,12 @@ type DocEnv struct {
 	TypeCmd       func(ctx context.Context, cmd string) (string, error)
 	StatPath      func(path string) (fs.FileInfo, error)
 	LookupInPath  func(cmd string) bool
+
+	// LLM support
+	LLMClient     *llm.Client
+	LLMEnv        llm.LLMEnv
+	DefaultModel  string
+	AdvancedModel string
 }
 
 // Resolver coordinates documentation lookup across multiple sources.
@@ -154,6 +162,38 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 			Target:      redir.Target,
 			Description: describeRedirect(redir.Op, redir.Target),
 		})
+	}
+
+	// 7. Check for unknowns to trigger LLM fallback
+	missingItems := detectMissingItems(exp)
+	if len(missingItems) > 0 && r.env.LLMClient != nil {
+		exp.LLMQueried = true
+		exp.LLMEndpoint = r.env.LLMClient.BaseURL()
+		var sysCtx llm.SystemContext
+		if r.env.LLMEnv != nil {
+			sysCtx = llm.GatherContext(r.env.LLMEnv, cmd.Args)
+		}
+		basicSummary := buildBasicSummary(exp)
+		model := r.env.DefaultModel
+		if model == "" {
+			model = llm.FallbackDefaultModel
+		}
+
+		rawCmd := formatRawCommand(cmd)
+		chatReq := llm.BuildChatRequest(model, sysCtx, rawCmd, missingItems, basicSummary)
+
+		llmCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+
+		chatResp, err := r.env.LLMClient.Chat(llmCtx, chatReq)
+		if err == nil && chatResp.Message.Content != "" {
+			parsed := llm.ParseLLMResponse(chatResp.Message.Content)
+			exp.LLMExplanation = parsed.Explanation
+			exp.SuggestedCommand = parsed.SuggestedCommand
+			exp.SuggestedScript = parsed.SuggestedScript
+		} else if err != nil {
+			exp.LLMError = fmt.Sprintf("LLM server (%s) is not reachable", r.env.LLMClient.BaseURL())
+		}
 	}
 
 	return exp
@@ -338,4 +378,56 @@ func describeRedirect(op, target string) string {
 	default:
 		return fmt.Sprintf("Redirect %s %s", op, target)
 	}
+}
+
+func detectMissingItems(exp *CommandExplanation) []string {
+	var missing []string
+	if !exp.Found {
+		missing = append(missing, fmt.Sprintf("Command %q was not found in system PATH or manual entries", exp.Name))
+	}
+	for _, flag := range exp.Flags {
+		if !flag.Found {
+			missing = append(missing, fmt.Sprintf("Option %q was not found in %s documentation", flag.Flag.Name, exp.Name))
+		}
+	}
+	return missing
+}
+
+func buildBasicSummary(exp *CommandExplanation) string {
+	var sb strings.Builder
+	if exp.Summary != "" {
+		sb.WriteString(exp.Summary + "\n")
+	}
+	for _, flag := range exp.Flags {
+		if flag.Found {
+			sb.WriteString(flag.Flag.Name + ": " + strings.ReplaceAll(flag.Description, "\n", " ") + "\n")
+		}
+	}
+	return sb.String()
+}
+
+func formatRawCommand(cmd *Command) string {
+	var parts []string
+	parts = append(parts, cmd.EnvVars...)
+	for _, w := range cmd.Wrappers {
+		parts = append(parts, w.Name)
+		for _, f := range w.Flags {
+			parts = append(parts, f.Raw)
+		}
+		parts = append(parts, w.Args...)
+	}
+	if cmd.Name != "" {
+		parts = append(parts, cmd.Name)
+	}
+	if cmd.Subcommand != "" {
+		parts = append(parts, cmd.Subcommand)
+	}
+	for _, f := range cmd.Flags {
+		parts = append(parts, f.Raw)
+	}
+	parts = append(parts, cmd.Args...)
+	for _, r := range cmd.Redirects {
+		parts = append(parts, r.Op, r.Target)
+	}
+	return strings.Join(parts, " ")
 }

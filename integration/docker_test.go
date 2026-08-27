@@ -832,3 +832,16 @@ func TestUninstallDeletesConfigWhenConfirmed(t *testing.T) {
 		requireOutputContains(t, out, "Deleted /root/.yups")
 	})
 }
+
+func TestExplainCommandInsideContainers(t *testing.T) {
+	forEachImage(t, func(t *testing.T, d distro) {
+		id := newContainer(t, d)
+		out, code := sh(t, id, "root", "", "/opt/yups -- ls -a /root")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0\n%s", code, out)
+		}
+		requireOutputContains(t, out, "#_?")
+		requireOutputContains(t, out, "Found: ls")
+		requireOutputContains(t, out, "-a found:")
+	})
+}

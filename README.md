@@ -21,6 +21,12 @@ $ yups --update-yups
   wrappers (`sudo`, `time`...), inspects positional arguments on the filesystem,
   and fetches documentation prioritizing `<command> --help` before falling back
   to `man` and `whatis`.
+  When a command or flag is not found locally, it queries the configured Ollama
+  LLM inference endpoint via direct HTTP, providing low-cost system context
+  (OS distribution, working directory structure, referenced file snippets,
+  and recent shell history) to explain the missing items and suggest corrected
+  commands or scripts. If Ollama is unavailable, it gracefully degrades to local
+  basic mode without errors.
 
 - `--help`: shows the help.
 
@@ -43,8 +49,10 @@ $ yups --update-yups
      `sudoers`, `wheel` or `admin`—, or passwordless sudo rights) it suggests
      repeating the previous command with `sudo !!`; otherwise it reports that
      the installation is not possible.
-  5. If everything is fine, the executable is copied into that directory, and
-     `~/.yups/config.toml` is initialized if not present.
+  5. If everything is fine, the executable is copied into that directory, prompts
+     for the Ollama inference endpoint (`http://localhost:11434` by default),
+     automatically probes `/api/tags` to discover and configure models, and
+     initializes `~/.yups/config.toml`.
 
 - `--uninstall-yups`:
 
@@ -96,7 +104,8 @@ Where does yups look, and what does it consider an administrator?
 | Administrator groups         | `sudo`, `sudoer`, `sudoers` (Debian family), `wheel` (Fedora/RHEL/Arch/openSUSE), `admin` (historic Ubuntu, macOS) | The default administrator group of the mainstream distros.                                                                                                                |
 | Administrator probe fallback | `sudo -n true` succeeds                                                                                            | Covers NOPASSWD sudoers and root on single-user systems where no group matches.                                                                                           |
 | Write-permission probe       | Create + remove a temporary `.kk` file in the directory                                                            | More reliable than access(2) with ACLs, read-only mounts or sticky bits.                                                                                                  |
-| Config file                  | `~/.yups/config.toml`: `version`, `YUPS_REPO`, `YUPS_REPO_FALLBACK`                                                | `version` records the installed version; initialized during `--install-yups`; a corrupt file is an explicit error instead of silent defaults.                              |
+| Config file                  | `~/.yups/config.toml`: `version`, `YUPS_REPO`, `YUPS_REPO_FALLBACK`, `inference-endpoint`, `default-model`, `advanced-model` | `version` records the installed version; initialized during `--install-yups`; a corrupt file is an explicit error instead of silent defaults.                              |
+| Inference endpoint           | Default: `http://localhost:11434` (Ollama HTTP API)                                                                | Queried directly via HTTP without third-party libraries; models discovered via `/api/tags` with smart code-model prioritization.                                           |
 | Self-update sources          | Primary `YUPS_REPO` (Forgejo), fallback `YUPS_REPO_FALLBACK` (GitHub)                                              | Forgejo is the canonical source of truth; GitHub only rescues outages.                                                                                                    |
 | Binary swap                  | Copy to temp `.kk` file in the target dir, chmod 0755, rename                                                      | Same-directory rename is atomic and can never fail with EXDEV.                                                                                                            |
 | Multi-location anomaly       | First occurrence in `PATH` (matching `which`); informs user of duplicates                                         | Operates consistently with the binary the user would execute from shell. Duplicates are left untouched.                                                                    |

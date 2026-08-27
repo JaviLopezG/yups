@@ -70,7 +70,6 @@ func formatCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions) {
 		} else {
 			fmt.Fprintf(w, "No manual entry or help found for %q\n", cmd.Name)
 		}
-		return
 	}
 
 	// 2. Wrappers
@@ -130,6 +129,51 @@ func formatCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions) {
 		if redir.Description != "" {
 			fmt.Fprintf(w, "  %s\n", redir.Description)
 		}
+	}
+
+	// 10. LLM fallback notice & explanation
+	if cmd.LLMQueried {
+		fmt.Fprintln(w)
+		if opts.Color {
+			fmt.Fprintf(w, "%sAsking LLM at %s for more information...%s\n", ansiCyan, cmd.LLMEndpoint, ansiReset)
+		} else {
+			fmt.Fprintf(w, "Asking LLM at %s for more information...\n", cmd.LLMEndpoint)
+		}
+	}
+
+	if cmd.LLMExplanation != "" {
+		fmt.Fprintln(w)
+		if opts.Color {
+			fmt.Fprintf(w, "%sLLM Explanation:%s\n", ansiCyan, ansiReset)
+		} else {
+			fmt.Fprintln(w, "LLM Explanation:")
+		}
+		for _, line := range strings.Split(cmd.LLMExplanation, "\n") {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+	}
+
+	if cmd.SuggestedCommand != "" {
+		fmt.Fprintln(w)
+		if opts.Color {
+			fmt.Fprintf(w, "%sSuggested command:%s\n  \x1b[32m%s\x1b[0m\n", ansiBold, ansiReset, cmd.SuggestedCommand)
+		} else {
+			fmt.Fprintf(w, "Suggested command:\n  %s\n", cmd.SuggestedCommand)
+		}
+	}
+
+	if cmd.SuggestedScript != "" {
+		fmt.Fprintln(w)
+		if opts.Color {
+			fmt.Fprintf(w, "%sSuggested script:%s\n", ansiBold, ansiReset)
+		} else {
+			fmt.Fprintln(w, "Suggested script:")
+		}
+		fmt.Fprintln(w, "  ```bash")
+		for _, line := range strings.Split(cmd.SuggestedScript, "\n") {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+		fmt.Fprintln(w, "  ```")
 	}
 }
 
