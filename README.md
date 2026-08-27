@@ -58,8 +58,9 @@ $ yups --update-yups
      the installation is not possible.
   5. If everything is fine, the executable is copied into that directory, prompts
      for the Ollama inference endpoint (`http://localhost:11434` by default),
-     automatically probes `/api/tags` to discover and configure models, and
-     initializes `~/.yups/config.toml`.
+     automatically probes `/api/tags` to discover and configure models,
+     initializes `~/.yups/config.toml`, and downloads community cheatsheets
+     (`tldr-pages`, `navi`, `cheat.sh`, `cheat`) into `~/.yups/cheatsheets/`.
 
 - `--uninstall-yups`:
 
@@ -214,3 +215,13 @@ What a self-hosted worker needs (labels, docker daemon, security model) is
 documented in
 [configuration/forgejo-runner.md](configuration/forgejo-runner.md); other
 environment-specific knowledge lives next to it.
+
+## Acknowledgments & Data Sources
+
+`yups` integrates community-driven command documentation and cheatsheets to give users and local LLMs fast, offline, and accurate contextual assistance. We gratefully acknowledge and credit the creators and communities behind these indispensable resources:
+
+- **[tldr-pages](https://github.com/tldr-pages/tldr)**: Collaborative cheatsheets for console commands.
+- **[navi cheatsheets](https://github.com/denisidoro/cheats)** by Denis Isidoro and contributors.
+- **[cheat.sheets](https://github.com/chubin/cheat.sheets)** by Igor Chubin and the cheat.sh community.
+- **[cheatsheets](https://github.com/cheat/cheatsheets)** by Chris Allen Lane and the cheat community.
+

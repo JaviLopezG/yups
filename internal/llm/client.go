@@ -35,16 +35,82 @@ type tagsResponse struct {
 	} `json:"models"`
 }
 
+// ToolCall represents a tool invocation request made by the model.
+type ToolCall struct {
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction holds the name and arguments of a tool call.
+type ToolCallFunction struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+// Tool defines an available function tool according to Ollama / OpenAI tool schema.
+type Tool struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction defines the metadata and parameters of a tool.
+type ToolFunction struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Parameters  ToolParams `json:"parameters"`
+}
+
+// ToolParams defines the JSON schema parameters for a tool.
+type ToolParams struct {
+	Type       string              `json:"type"`
+	Properties map[string]ToolProp `json:"properties"`
+	Required   []string            `json:"required,omitempty"`
+}
+
+// ToolProp defines a single property in a tool's parameters schema.
+type ToolProp struct {
+	Type        string `json:"type"`
+	Description string `json:"description"`
+}
+
+// DefaultTools returns the standard tools available to the LLM.
+func DefaultTools() []Tool {
+	return []Tool{
+		{
+			Type: "function",
+			Function: ToolFunction{
+				Name:        "fetch_command_documentation",
+				Description: "Fetch detailed local manual page, --help output, and community cheatsheets (tldr-pages, navi, cheat.sh, cheat) for a specific command and optional subcommand.",
+				Parameters: ToolParams{
+					Type: "object",
+					Properties: map[string]ToolProp{
+						"command": {
+							Type:        "string",
+							Description: "The command name to look up (e.g. 'ls', 'tar', 'git', 'ip')",
+						},
+						"subcommand": {
+							Type:        "string",
+							Description: "Optional subcommand to look up (e.g. 'commit', 'checkout')",
+						},
+					},
+					Required: []string{"command"},
+				},
+			},
+		},
+	}
+}
+
 // Message represents a single chat turn for Ollama's /api/chat.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // ChatRequest is the payload sent to Ollama's /api/chat.
 type ChatRequest struct {
 	Model    string         `json:"model"`
 	Messages []Message      `json:"messages"`
+	Tools    []Tool         `json:"tools,omitempty"`
 	Stream   bool           `json:"stream"`
 	Options  map[string]any `json:"options,omitempty"`
 }
@@ -66,7 +132,7 @@ type Client struct {
 // NewClient initializes an Ollama HTTP client for baseURL (e.g. "http://localhost:11434").
 func NewClient(httpClient *http.Client, baseURL string) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
+		httpClient = &http.Client{Timeout: 90 * time.Second}
 	}
 	cleanURL := strings.TrimRight(baseURL, "/")
 	if cleanURL == "" {

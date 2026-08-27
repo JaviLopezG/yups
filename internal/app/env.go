@@ -20,6 +20,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"yups/internal/cheats"
 	"yups/internal/config"
 	"yups/internal/explain"
 	"yups/internal/llm"
@@ -74,6 +75,8 @@ type Env struct {
 	// HTTPClient returns the client used for release queries and asset
 	// downloads.
 	HTTPClient func() *http.Client
+	// LLMHTTPClient returns the client used for LLM inference calls.
+	LLMHTTPClient func() *http.Client
 	// StageBinary extracts a downloaded release archive into a fresh
 	// temporary staging directory, self-validates the extracted binary
 	// (--version must report the expected tag) and returns the path of
@@ -132,32 +135,50 @@ type Env struct {
 	ExecShell func(command string, stdout, stderr io.Writer) int
 	// IsInstalled reports whether yups is installed on the system.
 	IsInstalled func() bool
+	// DownloadCheatsheets downloads community cheatsheets to destDir.
+	DownloadCheatsheets func(client *http.Client, destDir string, stdout io.Writer) error
+	// CheatsheetsDir returns the directory where downloaded cheatsheets reside.
+	CheatsheetsDir func(home string) string
 }
 
 // DocEnv returns the explain.DocEnv adapter backed by this Env.
 func (e *Env) DocEnv() explain.DocEnv {
 	cfg := config.Defaults()
 	isInstalled := false
-	if e.IsInstalled != nil {
-		isInstalled = e.IsInstalled()
-	} else if e.UserHomeDir != nil && e.PathExists != nil {
+	cheatsDir := ""
+	if e.UserHomeDir != nil {
 		if home, err := e.UserHomeDir(); err == nil {
-			isInstalled = e.PathExists(config.Path(home))
-		}
-	}
-
-	if e.UserHomeDir != nil && e.LoadConfig != nil {
-		if home, err := e.UserHomeDir(); err == nil {
-			if loaded, err := e.LoadConfig(config.Path(home)); err == nil {
-				cfg = loaded
+			if e.CheatsheetsDir != nil {
+				cheatsDir = e.CheatsheetsDir(home)
+			} else {
+				cheatsDir = config.CheatsheetsDir(home)
+			}
+			if e.PathExists != nil {
+				isInstalled = e.PathExists(config.Path(home))
+			}
+			if e.LoadConfig != nil {
+				if loaded, err := e.LoadConfig(config.Path(home)); err == nil {
+					cfg = loaded
+				}
 			}
 		}
+	}
+	if e.IsInstalled != nil {
+		isInstalled = e.IsInstalled()
 	}
 	config.EnsureDefaults(&cfg)
 
 	var llmClient *llm.Client
-	if cfg.InferenceEndpoint != "" && e.HTTPClient != nil {
-		llmClient = llm.NewClient(e.HTTPClient(), cfg.InferenceEndpoint)
+	if cfg.InferenceEndpoint != "" {
+		var httpClient *http.Client
+		if e.LLMHTTPClient != nil {
+			httpClient = e.LLMHTTPClient()
+		} else if e.HTTPClient != nil {
+			httpClient = e.HTTPClient()
+		}
+		if httpClient != nil {
+			llmClient = llm.NewClient(httpClient, cfg.InferenceEndpoint)
+		}
 	}
 
 	return explain.DocEnv{
@@ -177,14 +198,15 @@ func (e *Env) DocEnv() explain.DocEnv {
 			}
 			return false
 		},
-		LLMClient:     llmClient,
-		LLMEnv:        e.LLMEnv(),
-		DefaultModel:  cfg.DefaultModel,
-		AdvancedModel: cfg.AdvancedModel,
-		IsInstalled:   isInstalled,
-		AskPrompt:     e.AskPrompt,
-		AskEditPrompt: e.AskEditPrompt,
-		ExecShell:     e.ExecShell,
+		LLMClient:      llmClient,
+		LLMEnv:         e.LLMEnv(),
+		DefaultModel:   cfg.DefaultModel,
+		AdvancedModel:  cfg.AdvancedModel,
+		IsInstalled:    isInstalled,
+		AskPrompt:      e.AskPrompt,
+		AskEditPrompt:  e.AskEditPrompt,
+		ExecShell:      e.ExecShell,
+		CheatsheetsDir: cheatsDir,
 	}
 }
 
@@ -250,6 +272,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 // terminal forever.
 var releaseHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// llmHTTPClient is the client used for LLM inference calls, which can
+// take longer during model prompt evaluations.
+var llmHTTPClient = &http.Client{Timeout: 90 * time.Second}
+
 // NewOSEnv returns an Env backed by the real operating system.
 func NewOSEnv() *Env {
 	return &Env{
@@ -268,6 +294,7 @@ func NewOSEnv() *Env {
 		LoadUpdateState:     osLoadUpdateState,
 		SaveUpdateState:     osSaveUpdateState,
 		HTTPClient:          func() *http.Client { return releaseHTTPClient },
+		LLMHTTPClient:       func() *http.Client { return llmHTTPClient },
 		StageBinary:         osStageBinary,
 		RemoveAll:           os.RemoveAll,
 		ExecSelf:            osExecSelf,
@@ -290,6 +317,8 @@ func NewOSEnv() *Env {
 		Getwd:               os.Getwd,
 		ExecShell:           osExecShell,
 		IsInstalled:         osIsInstalled,
+		DownloadCheatsheets: cheats.DownloadAll,
+		CheatsheetsDir:      config.CheatsheetsDir,
 	}
 }
 

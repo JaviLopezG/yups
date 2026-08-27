@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -517,6 +519,111 @@ func TestExplainKnownCommandWithCommentTriggersLLM(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output does not contain %q\nFull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestExplainWithToolCallFetchesDocumentation(t *testing.T) {
+	cheatsDir := t.TempDir()
+	tldrDir := filepath.Join(cheatsDir, "tldr", "pages", "common")
+	_ = os.MkdirAll(tldrDir, 0755)
+	_ = os.WriteFile(filepath.Join(tldrDir, "ls.md"), []byte("# ls\n> List directory contents.\n> List all:\n`ls -a`"), 0644)
+
+	var requestCount int
+	var receivedToolMsg string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+		if requestCount == 1 {
+			// First turn: LLM requests documentation for 'ls'
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "fetch_command_documentation",
+								Arguments: map[string]any{"command": "ls"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Second turn: capture tool response and return final answer
+		for _, m := range chatReq.Messages {
+			if m.Role == "tool" {
+				receivedToolMsg = m.Content
+			}
+		}
+
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Explanation based on cheatsheets.\nSuggested command: ls -a",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:      llm.NewClient(ts.Client(), ts.URL),
+		CheatsheetsDir: cheatsDir,
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			return "ls (1) - list directory contents", nil
+		},
+		ManPage: func(ctx context.Context, cmd string) (string, error) {
+			return "LS(1) manual page full text", nil
+		},
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("Usage: ls [OPTION]...\n  -a, --all  list all"), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknownflag"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if requestCount != 2 {
+		t.Errorf("requestCount = %d, want 2", requestCount)
+	}
+
+	for _, want := range []string{
+		"--- [ls] --help output ---",
+		"Usage: ls",
+		"--- [ls] man page ---",
+		"LS(1) manual page",
+		"--- [ls] tldr cheatsheet (ls.md) ---",
+		"List directory contents",
+	} {
+		if !strings.Contains(receivedToolMsg, want) {
+			t.Errorf("Tool message missing expected section %q\nFull tool payload:\n%s", want, receivedToolMsg)
+		}
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"LLM requested detailed documentation for 'ls'",
+		"Gathering manual pages, --help, and cheatsheets for 'ls'",
+		"Explanation based on cheatsheets.",
+		"Suggested command:",
+		"ls -a",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
 		}
 	}
 }

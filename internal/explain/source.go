@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"yups/internal/cheats"
 	"yups/internal/llm"
 )
 
@@ -21,14 +22,15 @@ type DocEnv struct {
 	LookupInPath  func(cmd string) bool
 
 	// LLM support
-	LLMClient     *llm.Client
-	LLMEnv        llm.LLMEnv
-	DefaultModel  string
-	AdvancedModel string
-	IsInstalled   bool
-	AskPrompt     func(prompt, defaultValue string) string
-	AskEditPrompt func(prompt, initialValue string) string
-	ExecShell     func(command string, stdout, stderr io.Writer) int
+	LLMClient      *llm.Client
+	LLMEnv         llm.LLMEnv
+	DefaultModel   string
+	AdvancedModel  string
+	IsInstalled    bool
+	AskPrompt      func(prompt, defaultValue string) string
+	AskEditPrompt  func(prompt, initialValue string) string
+	ExecShell      func(command string, stdout, stderr io.Writer) int
+	CheatsheetsDir string
 }
 
 // Resolver coordinates documentation lookup across multiple sources.
@@ -199,7 +201,8 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 }
 
 // QueryLLM executes or continues a conversation with the configured Ollama LLM.
-func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExplanation, userFollowup string) error {
+// If statusWriter is provided, informative progress about tool invocations will be displayed.
+func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExplanation, userFollowup string, statusWriter io.Writer) error {
 	if r.env.LLMClient == nil {
 		return fmt.Errorf("no LLM client configured")
 	}
@@ -228,16 +231,97 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 		})
 	}
 
-	llmCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	llmCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	chatResp, err := r.env.LLMClient.Chat(llmCtx, llm.ChatRequest{
 		Model:    model,
 		Messages: exp.Conversation,
+		Tools:    llm.DefaultTools(),
 	})
 	if err != nil {
 		exp.LLMError = err.Error()
 		return err
+	}
+
+	toolCalls := llm.ExtractToolCalls(chatResp.Message)
+	if len(toolCalls) > 0 {
+		exp.Conversation = append(exp.Conversation, chatResp.Message)
+
+		gatherDoc := func(cName, sName string) llm.CommandDoc {
+			doc := llm.CommandDoc{
+				Command:    cName,
+				Subcommand: sName,
+			}
+			help := r.getHelp(ctx, cName, sName)
+			if len(help) > 4096 {
+				help = help[:4096] + "\n... (truncated)"
+			}
+			doc.HelpOutput = help
+
+			man := r.getMan(ctx, cName, sName)
+			maxMan := 3072
+			if help != "" {
+				maxMan = 1536
+			}
+			if len(man) > maxMan {
+				man = man[:maxMan] + "\n... (truncated)"
+			}
+			doc.ManOutput = man
+
+			if r.env.CheatsheetsDir != "" {
+				entries := cheats.FindCheatsheets(r.env.CheatsheetsDir, cName, sName)
+				for _, e := range entries {
+					doc.Cheatsheets = append(doc.Cheatsheets, llm.CheatsheetDoc{
+						Source:  e.Source,
+						Name:    e.Name,
+						Content: e.Content,
+					})
+				}
+			}
+			return doc
+		}
+
+		for _, tc := range toolCalls {
+			if tc.Function.Name == "fetch_command_documentation" {
+				targetCmd := ""
+				targetSub := ""
+				if c, ok := tc.Function.Arguments["command"].(string); ok {
+					targetCmd = c
+				}
+				if s, ok := tc.Function.Arguments["subcommand"].(string); ok {
+					targetSub = s
+				}
+
+				if targetCmd != "" {
+					if statusWriter != nil {
+						displayName := targetCmd
+						if targetSub != "" {
+							displayName += " " + targetSub
+						}
+						fmt.Fprintf(statusWriter, "  LLM requested detailed documentation for '%s'...\n", displayName)
+						fmt.Fprintf(statusWriter, "  Gathering manual pages, --help, and cheatsheets for '%s'...\n", displayName)
+					}
+
+					doc := gatherDoc(targetCmd, targetSub)
+					toolContent := llm.FormatToolResponse(doc)
+					exp.Conversation = append(exp.Conversation, llm.Message{
+						Role:    "tool",
+						Content: toolContent,
+					})
+				}
+			}
+		}
+
+		followUpResp, err := r.env.LLMClient.Chat(llmCtx, llm.ChatRequest{
+			Model:    model,
+			Messages: exp.Conversation,
+		})
+		if err != nil {
+			exp.LLMError = err.Error()
+			return err
+		}
+		chatResp = followUpResp
 	}
 
 	if chatResp.Message.Content != "" {

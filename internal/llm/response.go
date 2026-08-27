@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -60,4 +61,80 @@ func ParseLLMResponse(raw string) LLMResult {
 
 	result.Explanation = strings.TrimSpace(strings.Join(cleanLines, "\n"))
 	return result
+}
+
+// ExtractToolCalls returns all tool calls from a message, whether delivered
+// through structured ToolCalls or embedded in plain text output.
+func ExtractToolCalls(msg Message) []ToolCall {
+	if len(msg.ToolCalls) > 0 {
+		return msg.ToolCalls
+	}
+
+	raw := strings.TrimSpace(msg.Content)
+	if raw == "" {
+		return nil
+	}
+
+	var calls []ToolCall
+
+	// 1. Check for XML style <tool_call>...</tool_call>
+	toolTagRegex := regexp.MustCompile(`(?s)<tool_call>(.*?)</tool_call>`)
+	if matches := toolTagRegex.FindAllStringSubmatch(raw, -1); len(matches) > 0 {
+		for _, m := range matches {
+			var rawObj struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+				Function  struct {
+					Name      string         `json:"name"`
+					Arguments map[string]any `json:"arguments"`
+				} `json:"function"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(m[1])), &rawObj); err == nil {
+				fnName := rawObj.Name
+				args := rawObj.Arguments
+				if fnName == "" {
+					fnName = rawObj.Function.Name
+					args = rawObj.Function.Arguments
+				}
+				if fnName != "" {
+					calls = append(calls, ToolCall{
+						Function: ToolCallFunction{
+							Name:      fnName,
+							Arguments: args,
+						},
+					})
+				}
+			}
+		}
+		if len(calls) > 0 {
+			return calls
+		}
+	}
+
+	// 2. Check for functional text call: fetch_command_documentation(command="...", subcommand="...")
+	funcRegex := regexp.MustCompile(`(?i)fetch_command_documentation\s*\(\s*command\s*=\s*["']([^"']+)["'](?:,\s*subcommand\s*=\s*["']([^"']*)["'])?\s*\)`)
+	if matches := funcRegex.FindAllStringSubmatch(raw, -1); len(matches) > 0 {
+		for _, m := range matches {
+			cmd := m[1]
+			subcmd := ""
+			if len(m) > 2 {
+				subcmd = m[2]
+			}
+			args := map[string]any{"command": cmd}
+			if subcmd != "" {
+				args["subcommand"] = subcmd
+			}
+			calls = append(calls, ToolCall{
+				Function: ToolCallFunction{
+					Name:      "fetch_command_documentation",
+					Arguments: args,
+				},
+			})
+		}
+		if len(calls) > 0 {
+			return calls
+		}
+	}
+
+	return nil
 }

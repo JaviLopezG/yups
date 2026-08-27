@@ -213,3 +213,102 @@ func TestParseLLMResponseWithScript(t *testing.T) {
 		t.Errorf("SuggestedScript = %q", res.SuggestedScript)
 	}
 }
+
+func TestBuildChatRequestIncludesTools(t *testing.T) {
+	sysCtx := SystemContext{
+		OSRelease: "Fedora 40",
+		CWD:       "/home/user",
+	}
+
+	req := BuildChatRequest("qwen2.5-coder:latest", sysCtx, "tar -czf archive.tar.gz dir", []string{"-czf"}, "tar summary")
+	if len(req.Messages) != 2 {
+		t.Fatalf("len(messages) = %d, want 2", len(req.Messages))
+	}
+	if len(req.Tools) == 0 {
+		t.Fatal("expected Tools to be populated in ChatRequest")
+	}
+	if req.Tools[0].Function.Name != "fetch_command_documentation" {
+		t.Errorf("tool name = %q, want 'fetch_command_documentation'", req.Tools[0].Function.Name)
+	}
+}
+
+func TestFormatToolResponse(t *testing.T) {
+	cmdDoc := CommandDoc{
+		Command:    "tar",
+		HelpOutput: "Usage: tar [OPTION...] [FILE]...\n  -c, --create",
+		ManOutput:  "TAR(1) - The GNU version of the tar archiving utility",
+		Cheatsheets: []CheatsheetDoc{
+			{
+				Source:  "tldr",
+				Name:    "tar.md",
+				Content: "# tar\n> Archiving utility.\n> Create archive:\n`tar -czvf target.tar.gz /path/to/dir`",
+			},
+			{
+				Source:  "cheat-sh",
+				Name:    "tar",
+				Content: "tar -xvf file.tar",
+			},
+		},
+	}
+
+	formatted := FormatToolResponse(cmdDoc)
+	for _, want := range []string{
+		"--- [tar] --help output ---",
+		"-c, --create",
+		"--- [tar] man page ---",
+		"TAR(1)",
+		"--- [tar] tldr cheatsheet (tar.md) ---",
+		"tar -czvf target.tar.gz",
+		"--- [tar] cheat-sh cheatsheet (tar) ---",
+		"tar -xvf file.tar",
+	} {
+		if !strings.Contains(formatted, want) {
+			t.Errorf("formatted tool response missing expected chunk %q\nFull output:\n%s", want, formatted)
+		}
+	}
+}
+
+func TestExtractToolCalls(t *testing.T) {
+	// 1. Structured ToolCalls in Message
+	msg1 := Message{
+		Role: "assistant",
+		ToolCalls: []ToolCall{
+			{
+				Function: ToolCallFunction{
+					Name:      "fetch_command_documentation",
+					Arguments: map[string]any{"command": "ls"},
+				},
+			},
+		},
+	}
+	calls1 := ExtractToolCalls(msg1)
+	if len(calls1) != 1 || calls1[0].Function.Name != "fetch_command_documentation" {
+		t.Errorf("calls1 = %+v, want 1 fetch_command_documentation call", calls1)
+	}
+
+	// 2. XML tag fallback: <tool_call>...</tool_call>
+	msg2 := Message{
+		Role:    "assistant",
+		Content: `<tool_call>{"name": "fetch_command_documentation", "arguments": {"command": "tar", "subcommand": "create"}}</tool_call>`,
+	}
+	calls2 := ExtractToolCalls(msg2)
+	if len(calls2) != 1 || calls2[0].Function.Name != "fetch_command_documentation" {
+		t.Fatalf("calls2 = %+v, want 1 call", calls2)
+	}
+	if calls2[0].Function.Arguments["command"] != "tar" {
+		t.Errorf("command = %v, want tar", calls2[0].Function.Arguments["command"])
+	}
+
+	// 3. Functional text fallback: fetch_command_documentation(command="git", subcommand="commit")
+	msg3 := Message{
+		Role:    "assistant",
+		Content: `Let me check the documentation: fetch_command_documentation(command="git", subcommand="commit")`,
+	}
+	calls3 := ExtractToolCalls(msg3)
+	if len(calls3) != 1 || calls3[0].Function.Name != "fetch_command_documentation" {
+		t.Fatalf("calls3 = %+v, want 1 call", calls3)
+	}
+	if calls3[0].Function.Arguments["command"] != "git" || calls3[0].Function.Arguments["subcommand"] != "commit" {
+		t.Errorf("args = %v, want git commit", calls3[0].Function.Arguments)
+	}
+}

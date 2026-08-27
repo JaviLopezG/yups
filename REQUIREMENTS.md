@@ -414,6 +414,20 @@ convierten a YUPS en un verdadero ayudante.
   comentario como la intención o pregunta explícita del usuario, permitiendo al
   LLM contrastar la orden con el objetivo y proponer el comando óptimo.
 
+- Fuentes de datos, cheatsheets comunitarias y llamada a herramientas bajo demanda:
+  Durante la instalación (`--install-yups`) y actualización (`--update-yups`), yups
+  descarga colecciones de cheatsheets en `~/.yups/cheatsheets/` dando explícito crédito
+  a sus creadores:
+  - **tldr-pages**: https://github.com/tldr-pages/tldr
+  - **navi cheatsheets**: https://github.com/denisidoro/cheats (Denis Isidoro)
+  - **cheat.sh**: https://github.com/chubin/cheat.sheets (Igor Chubin)
+  - **cheat**: https://github.com/cheat/cheatsheets (Chris Allen Lane)
+  Para mantener los tiempos de respuesta instantáneos en casos básicos, yups envía una
+  solicitud ligera inicial al LLM y le proporciona la herramienta `fetch_command_documentation`.
+  Si el LLM requiere detalles adicionales sobre un comando o flag, invoca la herramienta;
+  yups informa al usuario en tiempo real en la terminal, reúne `--help`, la página `man` y
+  las cheatsheets locales de dicho comando y se las envía para obtener la respuesta final.
+
 #### Del usuario
 
 - `--install-yups`: cuando se quiere lanzar el proceso de instalación.
@@ -1372,11 +1386,7 @@ acabar cualquier proceso.
 
 1. YUPS simplifica el trabajo habitual
 
-#### Criterios de aceptación
 
-1. Las interacciones de `yups` con el motor de inferencia son más rápidas
-2. Los usuarios de Zsh tienen una experiencia de usuario comparable a los de
-   Bash
 
 ## Glosario
 

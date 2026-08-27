@@ -112,6 +112,12 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		}
 
 		_ = env.SaveConfig(cfgPath, cfg)
+
+		// Download community cheatsheets
+		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
+			cheatsDir := config.CheatsheetsDir(home)
+			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+		}
 	}
 
 	fmt.Fprintf(stdout, "%s installed in %s.\n", ProgramName, destPath)

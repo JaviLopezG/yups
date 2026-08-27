@@ -225,6 +225,10 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 	}
 
 	if homeErr == nil {
+		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
+			cheatsDir := config.CheatsheetsDir(home)
+			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+		}
 		applied, err := RunMigrations(env, home, Version)
 		if err != nil {
 			fmt.Fprintf(stdout, "Warning: migration failed after updating: %v.\n", err)

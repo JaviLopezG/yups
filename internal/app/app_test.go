@@ -418,6 +418,30 @@ func TestInstallCopiesIntoFirstWritablePATHDirAndInitializesConfig(t *testing.T)
 	}
 }
 
+func TestInstallDownloadsCheatsheets(t *testing.T) {
+	fs := newFakeFS()
+	fs.writable["/usr/local/bin"] = true
+	var downloadedTo string
+	env := fs.env()
+	env.DownloadCheatsheets = func(client *http.Client, destDir string, stdout io.Writer) error {
+		downloadedTo = destDir
+		fmt.Fprintln(stdout, "Downloaded mock cheatsheets")
+		return nil
+	}
+
+	out, code := runDispatch(t, env, "--install-yups")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+	}
+	wantDir := config.CheatsheetsDir(fs.home)
+	if downloadedTo != wantDir {
+		t.Errorf("downloadedTo = %q, want %q", downloadedTo, wantDir)
+	}
+	if !strings.Contains(out, "Downloaded mock cheatsheets") {
+		t.Errorf("expected cheatsheet download message in output: %q", out)
+	}
+}
+
 func TestInstallWithoutPermissionsAndWithoutSudoFails(t *testing.T) {
 	fs := newFakeFS() // nothing writable, no groups
 	out, code := runDispatch(t, fs.env(), "--install-yups")

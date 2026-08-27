@@ -24,6 +24,22 @@ type SystemContext struct {
 	RecentHistory []string
 }
 
+// CheatsheetDoc represents a single cheatsheet snippet.
+type CheatsheetDoc struct {
+	Source  string
+	Name    string
+	Content string
+}
+
+// CommandDoc holds full help, man page, and cheatsheets for an identified command.
+type CommandDoc struct {
+	Command     string
+	Subcommand  string
+	HelpOutput  string
+	ManOutput   string
+	Cheatsheets []CheatsheetDoc
+}
+
 // GatherContext collects low-cost system context (distro, cwd, directory files,
 // referenced file snippets, and recent shell history) to give the LLM situational awareness.
 func GatherContext(env LLMEnv, referencedFiles []string) SystemContext {

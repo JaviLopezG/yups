@@ -61,7 +61,7 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 	FormatLLMNotice(stdout, endpoint, opts)
 
 	// 5. Query LLM
-	if err := resolver.QueryLLM(ctx, missingCmd, missingStage.Command, ""); err != nil {
+	if err := resolver.QueryLLM(ctx, missingCmd, missingStage.Command, "", stdout); err != nil {
 		FormatConnectionError(stdout, endpoint, err, env.IsInstalled, opts)
 		return 0
 	}
@@ -114,7 +114,7 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 				continue
 			}
 			FormatLLMNotice(stdout, endpoint, opts)
-			if err := resolver.QueryLLM(ctx, missingCmd, missingStage.Command, mod); err != nil {
+			if err := resolver.QueryLLM(ctx, missingCmd, missingStage.Command, mod, stdout); err != nil {
 				FormatConnectionError(stdout, endpoint, err, env.IsInstalled, opts)
 				return 0
 			}

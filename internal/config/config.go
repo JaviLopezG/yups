@@ -58,6 +58,11 @@ func Path(home string) string {
 	return filepath.Join(Dir(home), "config.toml")
 }
 
+// CheatsheetsDir returns the directory where downloaded cheatsheets live.
+func CheatsheetsDir(home string) string {
+	return filepath.Join(Dir(home), "cheatsheets")
+}
+
 // Defaults returns the configuration used when nothing has been stored
 // yet. Version starts at the floor: it records the highest version ever
 // run, and no version has run until something writes the file.
