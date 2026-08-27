@@ -69,6 +69,13 @@ func (r *Resolver) ExplainPipeline(ctx context.Context, pipeline *Pipeline) *Pip
 		result.Stages = append(result.Stages, stageExp)
 	}
 
+	result.RawCommandLine = formatRawPipeline(pipeline)
+	missingItems := detectPipelineMissingItems(result)
+	result.HasMissingItems = len(missingItems) > 0 || result.Comment != ""
+	if r.env.LLMClient != nil {
+		result.LLMEndpoint = r.env.LLMClient.BaseURL()
+	}
+
 	return result
 }
 
@@ -200,9 +207,10 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 	return exp
 }
 
-// QueryLLM executes or continues a conversation with the configured Ollama LLM.
-// If statusWriter is provided, informative progress about tool invocations will be displayed.
-func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExplanation, userFollowup string, statusWriter io.Writer) error {
+// QueryLLMPipeline executes or continues a conversation with the configured Ollama LLM
+// for an entire command pipeline, passing the full command line, composite summaries, and
+// supporting on-demand tool calls across all stages.
+func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp *PipelineExplanation, userFollowup string, statusWriter io.Writer) error {
 	if r.env.LLMClient == nil {
 		return fmt.Errorf("no LLM client configured")
 	}
@@ -216,13 +224,21 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 	}
 
 	if len(exp.Conversation) == 0 {
-		var sysCtx llm.SystemContext
-		if r.env.LLMEnv != nil && cmd != nil {
-			sysCtx = llm.GatherContext(r.env.LLMEnv, cmd.Args)
+		var allArgs []string
+		if pipeline != nil {
+			for _, st := range pipeline.Stages {
+				if st.Command != nil {
+					allArgs = append(allArgs, st.Command.Args...)
+				}
+			}
 		}
-		basicSummary := buildBasicSummary(exp)
-		missingItems := detectMissingItems(exp)
-		chatReq := llm.BuildChatRequest(model, sysCtx, exp.RawCommand, missingItems, basicSummary)
+		var sysCtx llm.SystemContext
+		if r.env.LLMEnv != nil {
+			sysCtx = llm.GatherContext(r.env.LLMEnv, allArgs)
+		}
+		basicSummary := buildPipelineBasicSummary(exp)
+		missingItems := detectPipelineMissingItems(exp)
+		chatReq := llm.BuildChatRequest(model, sysCtx, exp.RawCommandLine, missingItems, basicSummary)
 		exp.Conversation = chatReq.Messages
 	} else if userFollowup != "" {
 		exp.Conversation = append(exp.Conversation, llm.Message{
@@ -234,18 +250,26 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 	llmCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	chatResp, err := r.env.LLMClient.Chat(llmCtx, llm.ChatRequest{
-		Model:    model,
-		Messages: exp.Conversation,
-		Tools:    llm.DefaultTools(),
-	})
-	if err != nil {
-		exp.LLMError = err.Error()
-		return err
-	}
+	var chatResp llm.ChatResponse
+	maxToolTurns := 4
 
-	toolCalls := llm.ExtractToolCalls(chatResp.Message)
-	if len(toolCalls) > 0 {
+	for turn := 0; turn < maxToolTurns; turn++ {
+		resp, err := r.env.LLMClient.Chat(llmCtx, llm.ChatRequest{
+			Model:    model,
+			Messages: exp.Conversation,
+			Tools:    llm.DefaultTools(),
+		})
+		if err != nil {
+			exp.LLMError = err.Error()
+			return err
+		}
+		chatResp = resp
+
+		toolCalls := llm.ExtractToolCalls(chatResp.Message)
+		if len(toolCalls) == 0 {
+			break
+		}
+
 		exp.Conversation = append(exp.Conversation, chatResp.Message)
 
 		gatherDoc := func(cName, sName string) llm.CommandDoc {
@@ -312,16 +336,6 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 				}
 			}
 		}
-
-		followUpResp, err := r.env.LLMClient.Chat(llmCtx, llm.ChatRequest{
-			Model:    model,
-			Messages: exp.Conversation,
-		})
-		if err != nil {
-			exp.LLMError = err.Error()
-			return err
-		}
-		chatResp = followUpResp
 	}
 
 	if chatResp.Message.Content != "" {
@@ -334,6 +348,34 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 	}
 
 	return nil
+}
+
+// QueryLLM executes or continues a conversation with the configured Ollama LLM for a single command.
+func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExplanation, userFollowup string, statusWriter io.Writer) error {
+	p := &Pipeline{
+		Stages: []Stage{
+			{Command: cmd},
+		},
+		Comment: exp.Comment,
+	}
+	pExp := &PipelineExplanation{
+		Stages: []StageExplanation{
+			{Command: exp},
+		},
+		Comment:         exp.Comment,
+		HasMissingItems: exp.HasMissingItems,
+		RawCommandLine:  exp.RawCommand,
+		Conversation:    exp.Conversation,
+	}
+	err := r.QueryLLMPipeline(ctx, p, pExp, userFollowup, statusWriter)
+	exp.Conversation = pExp.Conversation
+	exp.LLMQueried = pExp.LLMQueried
+	exp.LLMEndpoint = pExp.LLMEndpoint
+	exp.LLMExplanation = pExp.LLMExplanation
+	exp.SuggestedCommand = pExp.SuggestedCommand
+	exp.SuggestedScript = pExp.SuggestedScript
+	exp.LLMError = pExp.LLMError
+	return err
 }
 
 func (r *Resolver) lookupSummary(ctx context.Context, cmd, subcmd string) string {
@@ -531,13 +573,19 @@ func detectMissingItems(exp *CommandExplanation) []string {
 }
 
 func buildBasicSummary(exp *CommandExplanation) string {
+	if exp == nil {
+		return ""
+	}
 	var sb strings.Builder
+	if exp.AliasInfo != "" {
+		sb.WriteString("  " + exp.AliasInfo + "\n")
+	}
 	if exp.Summary != "" {
-		sb.WriteString(exp.Summary + "\n")
+		sb.WriteString("  " + exp.Summary + "\n")
 	}
 	for _, flag := range exp.Flags {
 		if flag.Found {
-			sb.WriteString(flag.Flag.Name + ": " + strings.ReplaceAll(flag.Description, "\n", " ") + "\n")
+			sb.WriteString("  " + flag.Flag.Name + ": " + strings.ReplaceAll(flag.Description, "\n", " ") + "\n")
 		}
 	}
 	return sb.String()
@@ -548,9 +596,7 @@ func formatRawCommand(cmd *Command) string {
 	parts = append(parts, cmd.EnvVars...)
 	for _, w := range cmd.Wrappers {
 		parts = append(parts, w.Name)
-		for _, f := range w.Flags {
-			parts = append(parts, f.Raw)
-		}
+		parts = appendFlagsRaw(parts, w.Flags)
 		parts = append(parts, w.Args...)
 	}
 	if cmd.Name != "" {
@@ -559,9 +605,7 @@ func formatRawCommand(cmd *Command) string {
 	if cmd.Subcommand != "" {
 		parts = append(parts, cmd.Subcommand)
 	}
-	for _, f := range cmd.Flags {
-		parts = append(parts, f.Raw)
-	}
+	parts = appendFlagsRaw(parts, cmd.Flags)
 	parts = append(parts, cmd.Args...)
 	for _, r := range cmd.Redirects {
 		parts = append(parts, r.Op, r.Target)
@@ -575,4 +619,93 @@ func formatRawCommand(cmd *Command) string {
 		}
 	}
 	return res
+}
+
+func appendFlagsRaw(parts []string, flags []Flag) []string {
+	seen := make(map[string]bool)
+	for _, f := range flags {
+		if f.IsClustered {
+			if !seen[f.Raw] {
+				seen[f.Raw] = true
+				parts = append(parts, f.Raw)
+			}
+		} else {
+			parts = append(parts, f.Raw)
+		}
+	}
+	return parts
+}
+
+func formatRawPipeline(p *Pipeline) string {
+	if p == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for i, stage := range p.Stages {
+		if stage.Command != nil {
+			sb.WriteString(formatRawCommand(stage.Command))
+		}
+		if stage.Operator != OpNone {
+			sb.WriteString(" " + string(stage.Operator) + " ")
+		} else if i < len(p.Stages)-1 {
+			sb.WriteString(" ")
+		}
+	}
+	if p.Comment != "" {
+		if sb.Len() > 0 {
+			sb.WriteString(" #" + p.Comment)
+		} else {
+			sb.WriteString("#" + p.Comment)
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func buildPipelineBasicSummary(exp *PipelineExplanation) string {
+	if exp == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for i, stage := range exp.Stages {
+		if stage.Command != nil {
+			cmdExp := stage.Command
+			cmdName := cmdExp.Name
+			if cmdExp.Subcommand != "" {
+				cmdName += " " + cmdExp.Subcommand
+			}
+			if len(exp.Stages) > 1 && cmdName != "" {
+				fmt.Fprintf(&sb, "Command %d [%s]:\n", i+1, cmdName)
+			}
+			sb.WriteString(buildBasicSummary(cmdExp))
+		}
+		if stage.Operator != OpNone {
+			sb.WriteString(string(stage.Operator) + " (" + stage.OpSummary + ")\n")
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func detectPipelineMissingItems(exp *PipelineExplanation) []string {
+	if exp == nil {
+		return nil
+	}
+	var missing []string
+	for _, stage := range exp.Stages {
+		if stage.Command != nil {
+			cmdExp := stage.Command
+			prefix := ""
+			if len(exp.Stages) > 1 && cmdExp.Name != "" {
+				prefix = fmt.Sprintf("[%s] ", cmdExp.Name)
+			}
+			if !cmdExp.Found && cmdExp.Name != "" {
+				missing = append(missing, fmt.Sprintf("%sCommand %q was not found in system PATH or manual entries", prefix, cmdExp.Name))
+			}
+			for _, flag := range cmdExp.Flags {
+				if !flag.Found {
+					missing = append(missing, fmt.Sprintf("%sOption %q was not found in %s documentation", prefix, flag.Flag.Name, cmdExp.Name))
+				}
+			}
+		}
+	}
+	return missing
 }

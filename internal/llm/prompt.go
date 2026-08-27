@@ -10,7 +10,7 @@ import (
 func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, missingItems []string, basicSummary string) ChatRequest {
 	var sysSb strings.Builder
 	sysSb.WriteString("You are an expert Linux terminal assistant in the 'yups' CLI.\n")
-	sysSb.WriteString("Your mission is to analyze user shell commands, explain unknown commands or flags, and suggest concise corrections if you detect typos or mistakes.\n\n")
+	sysSb.WriteString("Your goal is to inspect the user's shell command line (which may contain multiple commands chained with &&, ||, |, ;, &).\n\n")
 
 	sysSb.WriteString("System Context:\n")
 	if sysCtx.OSRelease != "" {
@@ -39,13 +39,15 @@ func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, mi
 	}
 
 	sysSb.WriteString("\nInstructions:\n")
-	sysSb.WriteString("1. You are equipped with the tool 'fetch_command_documentation'. If you need detailed manual pages, --help output, or community cheatsheets (tldr-pages, navi, cheat.sh, cheat) to verify flags or syntax for any command, invoke fetch_command_documentation(command=\"<name>\", subcommand=\"<opt>\"). If you already know the answer, respond directly without calling the tool.\n")
-	sysSb.WriteString("2. Briefly explain what the unknown commands, flags, or syntax mean or were likely intended to be.\n")
-	sysSb.WriteString("3. If the user command line contains a comment (e.g. #...), treat it as an explicit user question or goal. Assess whether the command achieves that goal, explain any discrepancy, and suggest the ideal command or script to accomplish what the user asked in the comment.\n")
-	sysSb.WriteString("4. If you detect a typo, invalid flag, or alternative better command, clearly provide:\n")
-	sysSb.WriteString("   Suggested command: <corrected command>\n")
-	sysSb.WriteString("   (Or if a multiline script is required, wrap it inside a ```bash ... ``` code block).\n")
-	sysSb.WriteString("5. Keep explanations concise, clear, and without unnecessary filler.\n")
+	sysSb.WriteString("1. Tool calling: You have the tool 'fetch_command_documentation(command=\"...\", subcommand=\"...\")'. If any command in the input has unknown options or you need to inspect its options/cheatsheets, invoke this tool. You can invoke it multiple times (for multiple commands at once or across turns).\n")
+	sysSb.WriteString("2. Suggestion: If the command line has invalid options, typos, or mistakes, provide the entire corrected command line on a single line:\n")
+	sysSb.WriteString("   Suggested command: <full corrected command line>\n")
+	sysSb.WriteString("   (If a multiline script is truly necessary, wrap it in a single ```bash ... ``` code block).\n")
+	sysSb.WriteString("3. Explanation (OPTIONAL, STRICT MAXIMUM 256 CHARACTERS):\n")
+	sysSb.WriteString("   - The explanation is NOT mandatory. Use it ONLY to clarify the specific items listed under 'Unknown items' or to address user comments (#...).\n")
+	sysSb.WriteString("   - Do NOT explain known commands, known flags, or shell operators (like &&, ||).\n")
+	sysSb.WriteString("   - Do NOT include or repeat the suggested command inside the explanation; it will already be displayed to the user separately.\n")
+	sysSb.WriteString("   - Keep it direct, precise, and under 256 characters without conversational filler.\n")
 
 	var userSb strings.Builder
 	fmt.Fprintf(&userSb, "User command line: %s\n\n", commandLine)
@@ -62,7 +64,7 @@ func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, mi
 		userSb.WriteString("\n")
 	}
 
-	userSb.WriteString("Please explain the command/comment and suggest a correction or solution if appropriate.")
+	userSb.WriteString("Task: If needed, invoke 'fetch_command_documentation' for unknown commands/flags. Provide the full corrected 'Suggested command: ...' and an optional brief explanation (max 256 chars) covering ONLY the unknown items.")
 
 	return ChatRequest{
 		Model: model,

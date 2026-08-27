@@ -177,8 +177,8 @@ func FormatConnectionError(w io.Writer, endpoint string, err error, isInstalled 
 	}
 }
 
-// FormatLLMResult prints the explanation, suggested command, and script.
-func FormatLLMResult(w io.Writer, exp *CommandExplanation, opts FormatOptions) {
+// FormatLLMPipelineResult prints the explanation, suggested command, and script for a pipeline.
+func FormatLLMPipelineResult(w io.Writer, exp *PipelineExplanation, opts FormatOptions) {
 	if exp == nil {
 		return
 	}
@@ -217,6 +217,19 @@ func FormatLLMResult(w io.Writer, exp *CommandExplanation, opts FormatOptions) {
 		}
 		fmt.Fprintln(w, "  ```")
 	}
+}
+
+// FormatLLMResult prints the explanation, suggested command, and script for a single command.
+func FormatLLMResult(w io.Writer, exp *CommandExplanation, opts FormatOptions) {
+	if exp == nil {
+		return
+	}
+	pExp := &PipelineExplanation{
+		LLMExplanation:   exp.LLMExplanation,
+		SuggestedCommand: exp.SuggestedCommand,
+		SuggestedScript:  exp.SuggestedScript,
+	}
+	FormatLLMPipelineResult(w, pExp, opts)
 }
 
 // FormatPromptChoice renders the choice prompt [<u>Y</u>es/<u>n</u>o/<u>e</u>dit/<u>m</u>odifications].

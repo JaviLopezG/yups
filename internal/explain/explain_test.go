@@ -627,3 +627,245 @@ func TestExplainWithToolCallFetchesDocumentation(t *testing.T) {
 		}
 	}
 }
+
+func TestExplainCompoundPipelineWithMissingItemsQueriesEntirePipeline(t *testing.T) {
+	var capturedUserPrompt string
+	var capturedTools []llm.Tool
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+		if len(chatReq.Messages) > 1 {
+			capturedUserPrompt = chatReq.Messages[1].Content
+		}
+		capturedTools = chatReq.Tools
+
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Both commands explained.\nSuggested command: ls -a && yups --help",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			if cmd == "ls" {
+				return "ls (1) - list directory contents", nil
+			}
+			if cmd == "yups" {
+				return "yups - yups CLI assistant", nil
+			}
+			return "", nil
+		},
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			if name == "ls" {
+				return []byte("Usage: ls [OPTION]...\n  -a  all\n  -v  version"), nil
+			}
+			if name == "yups" {
+				return []byte("Usage: yups [flags]\n  -V, --version  version\n  --help  help"), nil
+			}
+			return nil, nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-javi", "&&", "yups", "-hV"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	// Verify the user prompt sent to LLM contains the full pipeline
+	if !strings.Contains(capturedUserPrompt, "User command line: ls -javi && yups -hV") {
+		t.Errorf("prompt does not contain full command line: %s", capturedUserPrompt)
+	}
+
+	// Verify summary includes both commands
+	if !strings.Contains(capturedUserPrompt, "Command 1 [ls]:") || !strings.Contains(capturedUserPrompt, "Command 2 [yups]:") {
+		t.Errorf("prompt missing command 1 or 2 in basic summary:\n%s", capturedUserPrompt)
+	}
+
+	// Verify missing items lists unknown options for both
+	if !strings.Contains(capturedUserPrompt, "[ls] Option \"-j\"") || !strings.Contains(capturedUserPrompt, "[yups] Option \"-h\"") {
+		t.Errorf("prompt missing specific missing items for both commands:\n%s", capturedUserPrompt)
+	}
+
+	// Verify tools were provided
+	if len(capturedTools) == 0 || capturedTools[0].Function.Name != "fetch_command_documentation" {
+		t.Errorf("expected tools in request, got %+v", capturedTools)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Suggested command:\n  ls -a && yups --help") {
+		t.Errorf("stdout does not contain full corrected pipeline suggestion:\n%s", out)
+	}
+}
+
+func TestExplainPipelineWithOrAndNotFoundCommand(t *testing.T) {
+	var capturedUserPrompt string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+		if len(chatReq.Messages) > 1 {
+			capturedUserPrompt = chatReq.Messages[1].Content
+		}
+
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Explanation for both ls and tree.\nSuggested command: ls -a || tree",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			if cmd == "ls" {
+				return "ls (1) - list directory contents", nil
+			}
+			return "", nil
+		},
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			if name == "ls" {
+				return []byte("Usage: ls [OPTION]...\n  -a  all"), nil
+			}
+			return nil, nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls -javi || tree"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if !strings.Contains(capturedUserPrompt, "User command line: ls -javi || tree") {
+		t.Errorf("prompt does not contain full command line: %s", capturedUserPrompt)
+	}
+	if !strings.Contains(capturedUserPrompt, "Command \"tree\" was not found in system PATH") {
+		t.Errorf("prompt missing tree not found error:\n%s", capturedUserPrompt)
+	}
+	if !strings.Contains(capturedUserPrompt, "|| (If the previous command fails") {
+		t.Errorf("prompt missing || operator explanation:\n%s", capturedUserPrompt)
+	}
+}
+
+func TestExplainMultiTurnToolCalls(t *testing.T) {
+	var requestCount int
+	var toolsProvidedInTurn2 bool
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+		if requestCount == 1 {
+			// Turn 1: request documentation for 'ls'
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "fetch_command_documentation",
+								Arguments: map[string]any{"command": "ls"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		if requestCount == 2 {
+			// Turn 2: verify tools are still provided, and request documentation for 'yups'
+			if len(chatReq.Tools) > 0 {
+				toolsProvidedInTurn2 = true
+			}
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "fetch_command_documentation",
+								Arguments: map[string]any{"command": "yups"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Turn 3: final answer
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Option -j does not exist for ls. For yups, use --help.\nSuggested command: ls -avi && yups --help",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			if cmd == "ls" {
+				return "ls (1) - list directory contents", nil
+			}
+			if cmd == "yups" {
+				return "yups - yups assistant", nil
+			}
+			return "", nil
+		},
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("Usage: " + name + " [options]"), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-javi", "&&", "yups", "-hV"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if requestCount != 3 {
+		t.Errorf("requestCount = %d, want 3", requestCount)
+	}
+	if !toolsProvidedInTurn2 {
+		t.Errorf("tools were not provided in turn 2 request")
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"LLM requested detailed documentation for 'ls'",
+		"LLM requested detailed documentation for 'yups'",
+		"Suggested command:\n  ls -avi && yups --help",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
+		}
+	}
+}

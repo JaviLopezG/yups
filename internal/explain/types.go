@@ -4,8 +4,17 @@ import "yups/internal/llm"
 
 // PipelineExplanation holds the structured explanation of an entire pipeline.
 type PipelineExplanation struct {
-	Stages  []StageExplanation
-	Comment string
+	Stages           []StageExplanation
+	Comment          string
+	HasMissingItems  bool
+	RawCommandLine   string
+	Conversation     []llm.Message
+	LLMQueried       bool
+	LLMEndpoint      string
+	LLMExplanation   string
+	SuggestedCommand string
+	SuggestedScript  string
+	LLMError         string
 }
 
 // StageExplanation holds the explanation of one pipeline stage and its connector.

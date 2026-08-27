@@ -27,20 +27,8 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 	// 1. Output basic local analysis immediately
 	FormatBasicPipeline(stdout, exp, opts)
 
-	// 2. Identify if any stage has missing items requiring LLM enhancement
-	var missingStage *StageExplanation
-	var missingCmd *Command
-	for i, stage := range exp.Stages {
-		if stage.Command != nil && stage.Command.HasMissingItems {
-			missingStage = &exp.Stages[i]
-			if i < len(pipeline.Stages) {
-				missingCmd = pipeline.Stages[i].Command
-			}
-			break
-		}
-	}
-
-	if missingStage == nil {
+	// 2. Identify if any part of the pipeline has missing items or comments requiring LLM enhancement
+	if !exp.HasMissingItems {
 		return 0
 	}
 
@@ -60,21 +48,21 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 	endpoint := env.LLMClient.BaseURL()
 	FormatLLMNotice(stdout, endpoint, opts)
 
-	// 5. Query LLM
-	if err := resolver.QueryLLM(ctx, missingCmd, missingStage.Command, "", stdout); err != nil {
+	// 5. Query LLM for the whole pipeline
+	if err := resolver.QueryLLMPipeline(ctx, pipeline, exp, "", stdout); err != nil {
 		FormatConnectionError(stdout, endpoint, err, env.IsInstalled, opts)
 		return 0
 	}
 
 	// 6. Print LLM result
-	FormatLLMResult(stdout, missingStage.Command, opts)
+	FormatLLMPipelineResult(stdout, exp, opts)
 
 	// 7. Interactive execution loop [y/n/e/m]
-	if missingStage.Command.SuggestedCommand == "" || env.AskPrompt == nil {
+	if exp.SuggestedCommand == "" || env.AskPrompt == nil {
 		return 0
 	}
 
-	currentCmd := missingStage.Command.SuggestedCommand
+	currentCmd := exp.SuggestedCommand
 	for {
 		promptStr := FormatPromptChoice(opts)
 		choice := env.AskPrompt(promptStr, "y")
@@ -114,13 +102,13 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 				continue
 			}
 			FormatLLMNotice(stdout, endpoint, opts)
-			if err := resolver.QueryLLM(ctx, missingCmd, missingStage.Command, mod, stdout); err != nil {
+			if err := resolver.QueryLLMPipeline(ctx, pipeline, exp, mod, stdout); err != nil {
 				FormatConnectionError(stdout, endpoint, err, env.IsInstalled, opts)
 				return 0
 			}
-			FormatLLMResult(stdout, missingStage.Command, opts)
-			if missingStage.Command.SuggestedCommand != "" {
-				currentCmd = missingStage.Command.SuggestedCommand
+			FormatLLMPipelineResult(stdout, exp, opts)
+			if exp.SuggestedCommand != "" {
+				currentCmd = exp.SuggestedCommand
 			}
 		default:
 			fmt.Fprintln(stdout, "Please answer y (yes), n (no), e (edit), or m (modifications).")
