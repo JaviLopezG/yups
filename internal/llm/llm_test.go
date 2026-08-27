@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -123,6 +124,17 @@ func TestSelectBestModels(t *testing.T) {
 			wantDefault:  "qwen2.5-coder:7b",
 			wantAdvanced: "gemma4:13b",
 		},
+		{
+			name: "qwen and gemma prioritized over codestral and others",
+			models: []ModelInfo{
+				{Name: "phi4:14b", Size: 8000000000},
+				{Name: "codestral:latest", Size: 14000000000},
+				{Name: "qwen3-coder:latest", Size: 7000000000},
+				{Name: "gemma4:latest", Size: 10000000000},
+			},
+			wantDefault:  "qwen3-coder:latest",
+			wantAdvanced: "gemma4:latest",
+		},
 	}
 
 	for _, tc := range tests {
@@ -135,6 +147,44 @@ func TestSelectBestModels(t *testing.T) {
 				t.Errorf("advanced model = %q, want %q", adv, tc.wantAdvanced)
 			}
 		})
+	}
+}
+
+func TestClientPullModel(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/pull" || r.Method != http.MethodPost {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload["name"] != "qwen2.5-coder:7b" {
+			t.Errorf("pull model name = %v, want qwen2.5-coder:7b", payload["name"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(PullProgress{
+			Status:    "pulling manifest",
+			Total:     100,
+			Completed: 50,
+		})
+		_ = json.NewEncoder(w).Encode(PullProgress{
+			Status:    "success",
+			Total:     100,
+			Completed: 100,
+		})
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.Client(), ts.URL)
+	var progress bytes.Buffer
+	err := client.PullModel(context.Background(), "qwen2.5-coder:7b", &progress)
+	if err != nil {
+		t.Fatalf("PullModel failed: %v", err)
+	}
+
+	out := progress.String()
+	if !strings.Contains(out, "pulling manifest") || !strings.Contains(out, "success") {
+		t.Errorf("unexpected progress output:\n%s", out)
 	}
 }
 

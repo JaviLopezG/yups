@@ -227,7 +227,7 @@ func TestExplainUnreachableLLMShowsErrorAndInstallHint(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"No manual entry or help found for \"sl\"",
-		"Asking LLM at http://127.0.0.1:54321 for more information...",
+		"Asking LLM (qwen2.5-coder:7b) at http://127.0.0.1:54321 for more information...",
 		"Cannot connect to Ollama at http://127.0.0.1:54321",
 		"Note: yups is using default settings because it is not installed or configured yet.",
 		"Run 'yups --install-yups'",
@@ -511,7 +511,7 @@ func TestExplainKnownCommandWithCommentTriggersLLM(t *testing.T) {
 		"Found: ls",
 		"-a found:",
 		"# Quiero listar todos los subdirectorios",
-		"Asking LLM at " + ts.URL,
+		"Asking advanced LLM (gemma3:latest) at " + ts.URL,
 		"LLM Explanation:",
 		"recursively",
 		"Suggested command:",
@@ -1127,3 +1127,191 @@ func TestExplainCommentQuestionWithMultiTurnInspection(t *testing.T) {
 	}
 }
 
+func TestExplainEscalatesToAdvancedModelOnToolCall(t *testing.T) {
+	var requestedModels []string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+		requestedModels = append(requestedModels, chatReq.Model)
+
+		if len(requestedModels) == 1 {
+			// Turn 1 with default model: request tool
+			resp := llm.ChatResponse{
+				Model: chatReq.Model,
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "fetch_command_documentation",
+								Arguments: map[string]any{"command": "ls"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Turn 2 with escalated model: final answer
+		resp := llm.ChatResponse{
+			Model: chatReq.Model,
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Explanation by advanced model.\nSuggested command: ls -la",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:     llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel:  "qwen2.5-coder:7b",
+		AdvancedModel: "gemma3:latest",
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("Usage: ls [OPTION]..."), nil
+		},
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			return "ls (1) - list directory contents", nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if len(requestedModels) != 2 {
+		t.Fatalf("len(requestedModels) = %d, want 2", len(requestedModels))
+	}
+	if requestedModels[0] != "qwen2.5-coder:7b" {
+		t.Errorf("turn 1 model = %q, want qwen2.5-coder:7b", requestedModels[0])
+	}
+	if requestedModels[1] != "gemma3:latest" {
+		t.Errorf("turn 2 model = %q, want gemma3:latest", requestedModels[1])
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Escalating to advanced model (gemma3:latest)") {
+		t.Errorf("stdout missing escalation notice:\n%s", out)
+	}
+}
+
+func TestExplainCommentUsesAdvancedModelFromStart(t *testing.T) {
+	var capturedModel string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+		capturedModel = chatReq.Model
+
+		resp := llm.ChatResponse{
+			Model: chatReq.Model,
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Answer by advanced model.",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:     llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel:  "qwen2.5-coder:7b",
+		AdvancedModel: "gemma3:latest",
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"# ¿Cómo listo archivos recursivamente?"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if capturedModel != "gemma3:latest" {
+		t.Errorf("captured model = %q, want gemma3:latest", capturedModel)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Asking advanced LLM (gemma3:latest) at") {
+		t.Errorf("stdout missing advanced notice:\n%s", out)
+	}
+}
+
+func TestExplainOverrideModelUsesSpecifiedModelWithoutEscalation(t *testing.T) {
+	var requestedModels []string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+		requestedModels = append(requestedModels, chatReq.Model)
+
+		if len(requestedModels) == 1 {
+			resp := llm.ChatResponse{
+				Model: chatReq.Model,
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "fetch_command_documentation",
+								Arguments: map[string]any{"command": "ls"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		resp := llm.ChatResponse{
+			Model: chatReq.Model,
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Done.\nSuggested command: ls -la",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:     llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel:  "qwen2.5-coder:7b",
+		AdvancedModel: "gemma3:latest",
+		OverrideModel: "my-pinned-model:v1",
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("Usage: ls"), nil
+		},
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			return "ls (1) - list directory contents", nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	for i, m := range requestedModels {
+		if m != "my-pinned-model:v1" {
+			t.Errorf("turn %d model = %q, want my-pinned-model:v1", i+1, m)
+		}
+	}
+
+	out := stdout.String()
+	if strings.Contains(out, "Escalating to advanced model") {
+		t.Errorf("expected no escalation when OverrideModel is set, got:\n%s", out)
+	}
+}

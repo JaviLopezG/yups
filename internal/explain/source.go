@@ -27,6 +27,8 @@ type DocEnv struct {
 	LLMEnv         llm.LLMEnv
 	DefaultModel   string
 	AdvancedModel  string
+	OverrideModel  string
+	UseAdvanced    bool
 	IsInstalled    bool
 	AskPrompt      func(prompt, defaultValue string) string
 	AskEditPrompt  func(prompt, initialValue string) string
@@ -219,9 +221,21 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 	exp.LLMQueried = true
 	exp.LLMEndpoint = r.env.LLMClient.BaseURL()
 
-	model := r.env.DefaultModel
-	if model == "" {
-		model = llm.FallbackDefaultModel
+	isAdvanced := false
+	model := ""
+	if r.env.OverrideModel != "" {
+		model = r.env.OverrideModel
+	} else if r.env.UseAdvanced || (pipeline != nil && pipeline.Comment != "") {
+		isAdvanced = true
+		model = r.env.AdvancedModel
+		if model == "" {
+			model = llm.FallbackAdvancedModel
+		}
+	} else {
+		model = r.env.DefaultModel
+		if model == "" {
+			model = llm.FallbackDefaultModel
+		}
 	}
 
 	if len(exp.Conversation) == 0 {
@@ -268,6 +282,21 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		toolCalls := llm.ExtractToolCalls(chatResp.Message)
 		if len(toolCalls) == 0 {
 			break
+		}
+
+		// Escalate to advanced model on tool call if no override model is set
+		if r.env.OverrideModel == "" && !isAdvanced {
+			advModel := r.env.AdvancedModel
+			if advModel == "" {
+				advModel = llm.FallbackAdvancedModel
+			}
+			if advModel != model {
+				if statusWriter != nil {
+					fmt.Fprintf(statusWriter, "  Escalating to advanced model (%s) for detailed analysis...\n", advModel)
+				}
+				model = advModel
+				isAdvanced = true
+			}
 		}
 
 		exp.Conversation = append(exp.Conversation, chatResp.Message)

@@ -157,12 +157,27 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 }
 
 // FormatLLMNotice prints the query announcement before calling the LLM.
-func FormatLLMNotice(w io.Writer, endpoint string, opts FormatOptions) {
+func FormatLLMNotice(w io.Writer, endpoint, model string, isAdvanced bool, opts FormatOptions) {
 	fmt.Fprintln(w)
-	if opts.Color {
-		fmt.Fprintf(w, "%sAsking LLM at %s for more information...%s\n", ansiCyan, endpoint, ansiReset)
+	var msg string
+	if isAdvanced {
+		if model != "" {
+			msg = fmt.Sprintf("Asking advanced LLM (%s) at %s for more information (this may take longer)...", model, endpoint)
+		} else {
+			msg = fmt.Sprintf("Asking advanced LLM at %s for more information (this may take longer)...", endpoint)
+		}
 	} else {
-		fmt.Fprintf(w, "Asking LLM at %s for more information...\n", endpoint)
+		if model != "" {
+			msg = fmt.Sprintf("Asking LLM (%s) at %s for more information...", model, endpoint)
+		} else {
+			msg = fmt.Sprintf("Asking LLM at %s for more information...", endpoint)
+		}
+	}
+
+	if opts.Color {
+		fmt.Fprintf(w, "%s%s%s\n", ansiCyan, msg, ansiReset)
+	} else {
+		fmt.Fprintln(w, msg)
 	}
 }
 

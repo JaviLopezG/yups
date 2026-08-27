@@ -441,13 +441,12 @@ convierten a YUPS en un verdadero ayudante.
   también es un comando `yups` (si no lo es, se procesará la última línea
   ejecutada).
 - `--update-yups`: lanza la auto actualización.
+- `--model <tag>`: fuerza el uso de un modelo específico de Ollama para toda la ejecución (anula el escalado a modelo avanzado).
+- `--advanced`: se usa el modelo avanzado configurado desde el principio (avisando al usuario del mayor tiempo de respuesta estimado).
+- `--test-models`: ejecuta una prueba de latencia y benchmark en todos los modelos instalados en Ollama (`ls -javi && yups -hV`), mostrando los resultados en vivo y una tabla resumen ordenada de menor a mayor tiempo.
 - `--config param1=value..paramN=value`: permite cambiar el valor de algún campo
   existente en el archivo de configuración como `default-model`, o forzar
   valores para campos calculados como `model`.
-- `--advanced`: se usa el modelo avanzado que esté configurado. No tiene efecto
-  si se fuerza un modelo con `--config model=elmodelo`. También se usarán todas
-  las fuentes de información disponibles (implementadas e instaladas en el
-  sistema) y no sólo la principal.
 - `--query`: pregunta directamente al motor de inferencia lo que está escrito
   sin intentar valorar si es un comando o no.
 - `--logs file1..fileN`: pregunta a la IA el significado de los logs. Si no se

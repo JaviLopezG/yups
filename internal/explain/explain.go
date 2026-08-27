@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"yups/internal/llm"
 )
 
 // Explain parses and explains the provided command line arguments, writing
@@ -46,7 +48,22 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 
 	// 4. Announce LLM query
 	endpoint := env.LLMClient.BaseURL()
-	FormatLLMNotice(stdout, endpoint, opts)
+	isAdvanced := false
+	model := env.DefaultModel
+	if env.OverrideModel != "" {
+		model = env.OverrideModel
+	} else if env.UseAdvanced || (pipeline != nil && pipeline.Comment != "") {
+		isAdvanced = true
+		model = env.AdvancedModel
+		if model == "" {
+			model = llm.FallbackAdvancedModel
+		}
+	} else {
+		if model == "" {
+			model = llm.FallbackDefaultModel
+		}
+	}
+	FormatLLMNotice(stdout, endpoint, model, isAdvanced, opts)
 
 	// 5. Query LLM for the whole pipeline
 	if err := resolver.QueryLLMPipeline(ctx, pipeline, exp, "", stdout); err != nil {
@@ -101,7 +118,20 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 			if strings.TrimSpace(mod) == "" {
 				continue
 			}
-			FormatLLMNotice(stdout, endpoint, opts)
+			if env.OverrideModel == "" {
+				resolver.env.UseAdvanced = true
+			}
+			modAdv := resolver.env.UseAdvanced
+			modModel := env.DefaultModel
+			if env.OverrideModel != "" {
+				modModel = env.OverrideModel
+			} else if modAdv {
+				modModel = env.AdvancedModel
+				if modModel == "" {
+					modModel = llm.FallbackAdvancedModel
+				}
+			}
+			FormatLLMNotice(stdout, endpoint, modModel, modAdv, opts)
 			if err := resolver.QueryLLMPipeline(ctx, pipeline, exp, mod, stdout); err != nil {
 				FormatConnectionError(stdout, endpoint, err, env.IsInstalled, opts)
 				return 0

@@ -246,3 +246,67 @@ func (c *Client) Chat(ctx context.Context, chatReq ChatRequest) (ChatResponse, e
 
 	return chatResp, nil
 }
+
+// PullProgress represents status updates from Ollama's /api/pull endpoint.
+type PullProgress struct {
+	Status    string `json:"status"`
+	Digest    string `json:"digest,omitempty"`
+	Total     int64  `json:"total,omitempty"`
+	Completed int64  `json:"completed,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// PullModel requests Ollama to download/pull a model by name, writing progress updates to progressWriter.
+func (c *Client) PullModel(ctx context.Context, modelName string, progressWriter io.Writer) error {
+	url := c.baseURL + "/api/pull"
+	payload, err := json.Marshal(map[string]any{
+		"name":   modelName,
+		"stream": true,
+	})
+	if err != nil {
+		return fmt.Errorf("encoding pull request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("creating pull request for %s: %w", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sending pull request to %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("Ollama pull returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	dec := json.NewDecoder(resp.Body)
+	var lastStatus string
+	for {
+		var p PullProgress
+		if err := dec.Decode(&p); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("decoding pull stream: %w", err)
+		}
+		if p.Error != "" {
+			return fmt.Errorf("Ollama pull error: %s", p.Error)
+		}
+		if progressWriter != nil && p.Status != "" && p.Status != lastStatus {
+			if p.Total > 0 && p.Completed > 0 {
+				pct := float64(p.Completed) / float64(p.Total) * 100
+				fmt.Fprintf(progressWriter, "  %s: %.1f%%\n", p.Status, pct)
+			} else {
+				fmt.Fprintf(progressWriter, "  %s\n", p.Status)
+			}
+			lastStatus = p.Status
+		}
+	}
+
+	return nil
+}

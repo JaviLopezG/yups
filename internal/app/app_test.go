@@ -343,7 +343,8 @@ func TestDispatchUnknownFlagFallsBackToLLM(t *testing.T) {
 		"#_?",
 		"Found: ls",
 		"-j: No description found.",
-		"Asking LLM at " + ts.URL,
+		"Asking LLM",
+		" at " + ts.URL,
 		"LLM Explanation:",
 		"Flag -javi does not exist",
 		"Suggested command:",
@@ -631,5 +632,75 @@ func TestOSAskConfirmationSharesStdinAcrossQuestions(t *testing.T) {
 	}
 	if !osAskConfirmation("second question?", false) {
 		t.Error("second answer was lost: the stdin reader is not shared between questions")
+	}
+}
+
+func TestDispatchFlagsHelpAndVersion(t *testing.T) {
+	fs := newFakeFS()
+	env := fs.env()
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{"--help"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Errorf("Dispatch(--help) = %d, want %d", code, ExitOK)
+	}
+	if !strings.Contains(stdout.String(), "--model") || !strings.Contains(stdout.String(), "--test-models") {
+		t.Errorf("helpText missing new flags:\n%s", stdout.String())
+	}
+}
+
+func TestDispatchTestModelsBenchmark(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			resp := map[string]any{
+				"models": []map[string]any{
+					{"name": "qwen2.5-coder:7b", "size": 4500000000},
+					{"name": "gemma3:latest", "size": 6000000000},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "mock",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Sample response for benchmark",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
+	env.LoadConfig = func(path string) (config.Config, error) {
+		cfg := config.Defaults()
+		cfg.InferenceEndpoint = ts.URL
+		return cfg, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{"--test-models"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("Dispatch(--test-models) = %d, want %d", code, ExitOK)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"Discovered 2 installed model(s)",
+		"MODEL BENCHMARK SUMMARY",
+		"qwen2.5-coder:7b",
+		"gemma3:latest",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
+		}
 	}
 }

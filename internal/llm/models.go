@@ -5,59 +5,116 @@ import (
 )
 
 const (
-	FallbackDefaultModel  = "qwen2.5-coder:latest"
-	FallbackAdvancedModel = "gemma4:latest"
+	FallbackDefaultModel  = "qwen2.5-coder:7b"
+	FallbackAdvancedModel = "gemma3:latest"
 )
 
+// RecommendedDefaultModelNames lists preferred default model prefixes in priority order.
+var RecommendedDefaultModelNames = []string{
+	"qwen3.8-coder",
+	"qwen3-coder",
+	"qwen3.5-coder",
+	"qwen2.5-coder",
+	"qwen2-coder",
+	"qwen",
+}
+
+// RecommendedAdvancedModelNames lists preferred advanced model prefixes in priority order.
+var RecommendedAdvancedModelNames = []string{
+	"gemma4",
+	"gemma3",
+	"gemma2",
+	"gemma",
+	"codegemma",
+}
+
 // SelectBestModels evaluates a list of discovered Ollama models and picks
-// appropriate default and advanced model identifiers.
+// appropriate default (tool-capable fast model) and advanced (stronger reasoning model) identifiers.
 func SelectBestModels(models []ModelInfo) (defaultModel, advancedModel string) {
 	if len(models) == 0 {
 		return FallbackDefaultModel, FallbackAdvancedModel
 	}
 
-	var codeModels []ModelInfo
-	var generalModels []ModelInfo
-
-	for _, m := range models {
-		lower := strings.ToLower(m.Name)
-		if strings.Contains(lower, "coder") || strings.Contains(lower, "code") {
-			codeModels = append(codeModels, m)
-		} else {
-			generalModels = append(generalModels, m)
+	// 1. Choose default model:
+	// Prioritize Qwen family first (tested with tools in Ollama)
+	for _, pref := range RecommendedDefaultModelNames {
+		for _, m := range models {
+			lower := strings.ToLower(m.Name)
+			if strings.HasPrefix(lower, pref) || strings.Contains(lower, pref) {
+				defaultModel = m.Name
+				break
+			}
+		}
+		if defaultModel != "" {
+			break
 		}
 	}
 
-	// 1. Choose default model: prefer code-oriented models
-	if len(codeModels) > 0 {
-		defaultModel = codeModels[0].Name
-	} else if len(generalModels) > 0 {
-		defaultModel = generalModels[0].Name
-	} else {
+	// If no Qwen model, look for other coding models that are NOT codestral (which lacks tool calling)
+	if defaultModel == "" {
+		for _, m := range models {
+			lower := strings.ToLower(m.Name)
+			if (strings.Contains(lower, "coder") || strings.Contains(lower, "code")) && !strings.Contains(lower, "codestral") {
+				defaultModel = m.Name
+				break
+			}
+		}
+	}
+
+	// If still empty, look for non-codestral general models (llama3, dolphin, phi4, etc.)
+	if defaultModel == "" {
+		for _, m := range models {
+			lower := strings.ToLower(m.Name)
+			if !strings.Contains(lower, "codestral") {
+				defaultModel = m.Name
+				break
+			}
+		}
+	}
+
+	// Fallback to first available model if all are codestral or non-preferred
+	if defaultModel == "" {
 		defaultModel = models[0].Name
 	}
 
-	// 2. Choose advanced model: look for larger/stronger model or alternative
+	// 2. Choose advanced model:
 	if len(models) == 1 {
-		advancedModel = defaultModel
-		return defaultModel, advancedModel
+		return defaultModel, defaultModel
 	}
 
-	// Pick the largest model by byte size or the first non-default model
-	var largest ModelInfo
-	for _, m := range models {
-		if m.Size > largest.Size {
-			largest = m
+	// Prioritize Gemma family for advanced reasoning/modifications
+	for _, pref := range RecommendedAdvancedModelNames {
+		for _, m := range models {
+			if m.Name == defaultModel {
+				continue
+			}
+			lower := strings.ToLower(m.Name)
+			if strings.HasPrefix(lower, pref) || strings.Contains(lower, pref) {
+				advancedModel = m.Name
+				break
+			}
+		}
+		if advancedModel != "" {
+			break
 		}
 	}
 
-	if largest.Name != "" && largest.Name != defaultModel {
-		advancedModel = largest.Name
-	} else {
+	// If no Gemma model found, pick the largest model by byte size (or first non-default)
+	if advancedModel == "" {
+		var largest ModelInfo
 		for _, m := range models {
-			if m.Name != defaultModel {
-				advancedModel = m.Name
-				break
+			if m.Name != defaultModel && m.Size > largest.Size {
+				largest = m
+			}
+		}
+		if largest.Name != "" {
+			advancedModel = largest.Name
+		} else {
+			for _, m := range models {
+				if m.Name != defaultModel {
+					advancedModel = m.Name
+					break
+				}
 			}
 		}
 	}
