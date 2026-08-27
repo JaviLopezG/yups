@@ -94,7 +94,12 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 			if color {
 				editPrompt = "\x1b[1mEdit command\x1b[0m"
 			}
-			edited := env.AskPrompt(editPrompt, currentCmd)
+			var edited string
+			if env.AskEditPrompt != nil {
+				edited = env.AskEditPrompt(editPrompt, currentCmd)
+			} else if env.AskPrompt != nil {
+				edited = env.AskPrompt(editPrompt, currentCmd)
+			}
 			if strings.TrimSpace(edited) != "" {
 				currentCmd = strings.TrimSpace(edited)
 			}

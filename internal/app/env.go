@@ -105,6 +105,8 @@ type Env struct {
 	AskConfirmation func(prompt string, defaultYes bool) bool
 	// AskPrompt prompts the user for text input with a default hint.
 	AskPrompt func(prompt, defaultValue string) string
+	// AskEditPrompt allows inline editing with a pre-filled editable string on terminals.
+	AskEditPrompt func(prompt, initialValue string) string
 
 	// RunCmdTimeout runs name with args, bounded by the given timeout.
 	RunCmdTimeout func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error)
@@ -181,6 +183,7 @@ func (e *Env) DocEnv() explain.DocEnv {
 		AdvancedModel: cfg.AdvancedModel,
 		IsInstalled:   isInstalled,
 		AskPrompt:     e.AskPrompt,
+		AskEditPrompt: e.AskEditPrompt,
 		ExecShell:     e.ExecShell,
 	}
 }
@@ -273,6 +276,7 @@ func NewOSEnv() *Env {
 		EvalSymlinks:        filepath.EvalSymlinks,
 		AskConfirmation:     osAskConfirmation,
 		AskPrompt:           osAskPrompt,
+		AskEditPrompt:       osAskEditPrompt,
 		RunCmdTimeout:       osRunCmdTimeout,
 		Whatis:              osWhatis,
 		ManPage:             osManPage,
@@ -705,4 +709,156 @@ func osIsInstalled() bool {
 		return false
 	}
 	return osPathExists(config.Path(home))
+}
+
+// osAskEditPrompt provides interactive inline editing with pre-filled initialText.
+func osAskEditPrompt(prompt, initialText string) string {
+	return editLineTerminal(prompt, initialText, os.Stdin, os.Stdout)
+}
+
+func editLineTerminal(prompt, initialText string, stdin io.Reader, stdout io.Writer) string {
+	fIn, okIn := stdin.(*os.File)
+	fOut, okOut := stdout.(*os.File)
+	isTerm := okIn && okOut && osIsTerminalOutput(fIn) && osIsTerminalOutput(fOut)
+
+	if !isTerm {
+		if prompt != "" {
+			fmt.Fprintf(stdout, "%s [%s]: ", prompt, initialText)
+		}
+		reader := stdinReader()
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return initialText
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			return initialText
+		}
+		return trimmed
+	}
+
+	// Capture terminal state and configure cbreak mode
+	sttyStateCmd := exec.Command("stty", "-g")
+	sttyStateCmd.Stdin = fIn
+	stateBytes, err := sttyStateCmd.Output()
+	if err != nil {
+		return osAskPrompt(prompt, initialText)
+	}
+	savedState := strings.TrimSpace(string(stateBytes))
+	defer func() {
+		restoreCmd := exec.Command("stty", savedState)
+		restoreCmd.Stdin = fIn
+		_ = restoreCmd.Run()
+	}()
+
+	rawCmd := exec.Command("stty", "cbreak", "-echo")
+	rawCmd.Stdin = fIn
+	if err := rawCmd.Run(); err != nil {
+		return osAskPrompt(prompt, initialText)
+	}
+
+	if prompt != "" {
+		fmt.Fprintf(stdout, "%s:\n", prompt)
+	}
+
+	buf := []rune(initialText)
+	pos := len(buf)
+
+	redraw := func() {
+		fmt.Fprintf(stdout, "\r\x1b[K%s", string(buf))
+		fmt.Fprintf(stdout, "\r")
+		if pos > 0 {
+			fmt.Fprintf(stdout, "\x1b[%dC", pos)
+		}
+	}
+
+	redraw()
+
+	inputReader := bufio.NewReader(fIn)
+	for {
+		r, _, err := inputReader.ReadRune()
+		if err != nil {
+			break
+		}
+
+		switch r {
+		case '\r', '\n':
+			fmt.Fprintln(stdout)
+			return string(buf)
+		case '\x03': // Ctrl+C
+			fmt.Fprintln(stdout)
+			return initialText
+		case '\x04': // Ctrl+D
+			if len(buf) == 0 {
+				fmt.Fprintln(stdout)
+				return ""
+			}
+		case '\x01': // Ctrl+A (Home)
+			pos = 0
+			redraw()
+		case '\x05': // Ctrl+E (End)
+			pos = len(buf)
+			redraw()
+		case '\x0b': // Ctrl+K (Kill to end)
+			buf = buf[:pos]
+			redraw()
+		case '\x15': // Ctrl+U (Kill to start)
+			buf = buf[pos:]
+			pos = 0
+			redraw()
+		case '\x7f', '\b': // Backspace
+			if pos > 0 {
+				buf = append(buf[:pos-1], buf[pos:]...)
+				pos--
+				redraw()
+			}
+		case '\x1b': // Escape sequence
+			b, err := inputReader.ReadByte()
+			if err != nil {
+				break
+			}
+			if b == '[' {
+				b2, err := inputReader.ReadByte()
+				if err != nil {
+					break
+				}
+				switch b2 {
+				case 'D': // Left arrow
+					if pos > 0 {
+						pos--
+						redraw()
+					}
+				case 'C': // Right arrow
+					if pos < len(buf) {
+						pos++
+						redraw()
+					}
+				case 'H', '1': // Home
+					pos = 0
+					redraw()
+				case 'F', '4': // End
+					pos = len(buf)
+					redraw()
+				case '3': // Delete
+					_, _ = inputReader.ReadByte() // consume '~'
+					if pos < len(buf) {
+						buf = append(buf[:pos], buf[pos+1:]...)
+						redraw()
+					}
+				}
+			}
+		default:
+			if r >= 32 {
+				newBuf := make([]rune, 0, len(buf)+1)
+				newBuf = append(newBuf, buf[:pos]...)
+				newBuf = append(newBuf, r)
+				newBuf = append(newBuf, buf[pos:]...)
+				buf = newBuf
+				pos++
+				redraw()
+			}
+		}
+	}
+
+	return string(buf)
 }

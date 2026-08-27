@@ -322,7 +322,7 @@ func TestExplainInteractiveExecutionEdit(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	prompts := []string{"e", "ls -lav /var/log", "y"}
+	prompts := []string{"e", "y"}
 	promptIdx := 0
 
 	var executedCmd string
@@ -336,6 +336,9 @@ func TestExplainInteractiveExecutionEdit(t *testing.T) {
 			}
 			return "n"
 		},
+		AskEditPrompt: func(prompt, initialValue string) string {
+			return initialValue + " > output.txt"
+		},
 		ExecShell: func(cmd string, stdout, stderr io.Writer) int {
 			executedCmd = cmd
 			return 0
@@ -347,8 +350,8 @@ func TestExplainInteractiveExecutionEdit(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if executedCmd != "ls -lav /var/log" {
-		t.Errorf("executedCmd = %q, want %q", executedCmd, "ls -lav /var/log")
+	if executedCmd != "ls -av > output.txt" {
+		t.Errorf("executedCmd = %q, want %q", executedCmd, "ls -av > output.txt")
 	}
 }
 

@@ -27,6 +27,7 @@ type DocEnv struct {
 	AdvancedModel string
 	IsInstalled   bool
 	AskPrompt     func(prompt, defaultValue string) string
+	AskEditPrompt func(prompt, initialValue string) string
 	ExecShell     func(command string, stdout, stderr io.Writer) int
 }
 
