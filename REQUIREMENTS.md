@@ -1297,6 +1297,8 @@ acabar cualquier proceso.
   - [x] Menú interactivo de ejecución (`[y/n/e/m]` Yes/no/edit/modifications) con edición inline de la línea propuesta.
   - [x] Comportamiento adaptativo cuando no está instalado (sugerencia de instalación con tiempo estimado de ~3 minutos).
   - [x] Flags `--query`, `--advanced`, `--model` y benchmark de modelos `--test-models`.
+  - [ ] Configurar un bind (si el usuario quiere) en el proceso de instalación que lanzará `"yups -- " + $READLINE_LINE` de lo que haya en ese momento en la línea de comandos y al acabar si no se ha ejecutado ninguna recomendación de yups, dejará en la línea de comandos el mismo comando que estaba.
+  - [ ] Autocomplete de los flags en bash para facilitar el uso de yups.
 
 #### Criterios de aceptación
 
@@ -1305,19 +1307,27 @@ acabar cualquier proceso.
 
 ---
 
-### v1.1.0 (Command Line Robustness & Safety)
+### v1.1.0 (Command Not Found)
 
 - [ ] Búsqueda y reacción ante Command Not Found:
   - [ ] Flag `--cnf-handle <command_name>` (captura de código de salida 127).
   - [ ] Integración mediante hooks en Bash para sugerir paquetes o comandos alternativos.
+
+### v1.2.0 (Command Error)
 - [ ] Diagnóstico de errores de ejecución de comandos:
   - [ ] Flag `--ce-handle <error_code> <command_line>` (captura de códigos de retorno distintos de cero).
   - [ ] Análisis contextual con IA del motivo del fallo y propuesta de corrección.
+
+### v1.3.0 (Dry Run)
 - [ ] Simulación de ejecución `--dry-run`:
   - [ ] Usar el LLM para obtener una simulación estimada de la salida y efectos que generaría un comando antes de lanzarlo.
+
+### v1.4.0 (Transaction)
 - [ ] Ejecución transaccional protegida `--transaction`:
   - [ ] Consultar al LLM qué archivos o directorios estima que se podrían modificar o verse afectados.
   - [ ] Realizar copias de seguridad temporales de dichos archivos antes de la ejecución para permitir revertir cambios en caso de fallo.
+
+### v1.5.0 (Auto-update)  
 - [ ] Sistema de actualización asíncrona desatendida / aviso diario en background.
 
 #### Criterios de aceptación
