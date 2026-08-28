@@ -53,10 +53,10 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
-	case "-h", "--help":
+	case "-h", "--help", "help":
 		fmt.Fprint(stdout, helpText)
 		return ExitOK
-	case "-V", "--version":
+	case "-V", "--version", "version":
 		fmt.Fprintf(stdout, "%s %s\n", ProgramName, Version)
 		return ExitOK
 	case "-i", "--install-yups":
