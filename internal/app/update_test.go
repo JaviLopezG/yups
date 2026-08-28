@@ -688,7 +688,7 @@ func TestUpdateWithoutStateDirWarnsAndOffersPerUserInstall(t *testing.T) {
 	fs := newFakeFS()
 	serveLatestRelease(fs, "v1.0.0", "payload")
 	fs.writable["/usr/local/bin"] = true // so the offered install can succeed
-	fs.askScript = []bool{true}          // accept the per-user install
+	fs.askScript = []bool{true, true}    // accept the per-user install and Ollama confirmation
 
 	out, code := runDispatch(t, fs.env(), "--update-yups")
 	if code != ExitOK {
@@ -701,8 +701,8 @@ func TestUpdateWithoutStateDirWarnsAndOffersPerUserInstall(t *testing.T) {
 	if fs.installedDst != "/usr/local/bin/yups" {
 		t.Errorf("per-user install did not run (installed to %q)", fs.installedDst)
 	}
-	if len(fs.askedQuestions) != 1 || !strings.Contains(fs.askedQuestions[0], "per-user installation") {
-		t.Errorf("asked = %v, want exactly the per-user install offer", fs.askedQuestions)
+	if len(fs.askedQuestions) < 1 || !strings.Contains(fs.askedQuestions[0], "per-user installation") {
+		t.Errorf("asked = %v, want per-user install offer", fs.askedQuestions)
 	}
 }
 

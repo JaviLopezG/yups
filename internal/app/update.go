@@ -67,6 +67,12 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	cmp := semver.Compare(release.Tag, Version)
 	if cmp == 0 {
 		fmt.Fprintf(stdout, "%s %s is up to date (latest release: %s).\n", ProgramName, Version, release.Tag)
+		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
+			if home, err := env.UserHomeDir(); err == nil {
+				cheatsDir := config.CheatsheetsDir(home)
+				_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+			}
+		}
 		return ExitOK
 	}
 	if cmp < 0 {

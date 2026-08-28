@@ -320,6 +320,8 @@ func TestDispatchUnknownFlagFallsBackToLLM(t *testing.T) {
 	defer ts.Close()
 
 	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
 	fs.configs[config.Path(fs.home)] = config.Config{
 		InferenceEndpoint: ts.URL,
 		DefaultModel:      "qwen2.5-coder:latest",
@@ -677,6 +679,8 @@ func TestDispatchTestModelsBenchmark(t *testing.T) {
 	defer ts.Close()
 
 	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
 	env := fs.env()
 	env.HTTPClient = func() *http.Client { return ts.Client() }
 	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
@@ -758,6 +762,8 @@ func TestDispatchTestModelsBenchmarkIncludesToolCallingTime(t *testing.T) {
 	defer ts.Close()
 
 	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
 	env := fs.env()
 	env.HTTPClient = func() *http.Client { return ts.Client() }
 	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
@@ -782,6 +788,102 @@ func TestDispatchTestModelsBenchmarkIncludesToolCallingTime(t *testing.T) {
 		"LLM requested detailed documentation for 'ls'",
 		"MODEL BENCHMARK SUMMARY",
 		"qwen2.5-coder:7b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestDispatchQueryFlag(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "gemma3:latest",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Use df -h to see free disk space.\nSuggested command: df -h",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.LoadConfig = func(path string) (config.Config, error) {
+		cfg := config.Defaults()
+		cfg.InferenceEndpoint = ts.URL
+		return cfg, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{"--query", "como", "ver", "el", "espacio", "en", "disco"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("Dispatch(--query) = %d, want %d", code, ExitOK)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"# como ver el espacio en disco",
+		"Asking advanced LLM",
+		"Use df -h to see free disk space",
+		"Suggested command:",
+		"df -h",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestDispatchNaturalLanguageQuestionDirectly(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "gemma3:latest",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Use ip addr to see your IP address.\nSuggested command: ip addr",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.LoadConfig = func(path string) (config.Config, error) {
+		cfg := config.Defaults()
+		cfg.InferenceEndpoint = ts.URL
+		return cfg, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{"¿cual es mi ip?"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("Dispatch(question) = %d, want %d", code, ExitOK)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"# ¿cual es mi ip?",
+		"Asking advanced LLM",
+		"Use ip addr to see your IP address",
+		"Suggested command:",
+		"ip addr",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)

@@ -117,6 +117,20 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "yups: --model requires a model name argument")
 			return ExitUsage
 		}
+		if arg == "--query" {
+			queryArgs := args[i+1:]
+			queryText := strings.TrimSpace(strings.Join(queryArgs, " "))
+			if queryText == "" {
+				fmt.Fprintln(stderr, "yups: --query requires a question or prompt argument")
+				return ExitUsage
+			}
+			docEnv := env.DocEnv()
+			docEnv.UseAdvanced = true
+			if overrideModel != "" {
+				docEnv.OverrideModel = overrideModel
+			}
+			return explain.Explain(context.Background(), docEnv, []string{"# " + queryText}, stdout, stderr, color)
+		}
 		if strings.HasPrefix(arg, "-") {
 			fmt.Fprintf(stderr, "yups: unknown option %q\n\n", arg)
 			fmt.Fprint(stderr, helpText)

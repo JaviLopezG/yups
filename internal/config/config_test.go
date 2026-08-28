@@ -88,12 +88,17 @@ func TestLoadCorruptFileReturnsExplicitError(t *testing.T) {
 func TestSaveThenLoadRoundtripCreatesParentDirs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".yups", "config.toml")
 	want := Config{
-		Version:           "v9.9.9",
-		YUPSRepo:          "https://r.example/x",
-		YUPSRepoFallback:  "https://f.example/y",
-		InferenceEndpoint: "http://custom:11434",
-		DefaultModel:      "custom-coder:latest",
-		AdvancedModel:     "custom-adv:latest",
+		Version:                     "v9.9.9",
+		YUPSRepo:                    "https://r.example/x",
+		YUPSRepoFallback:            "https://f.example/y",
+		InferenceEndpoint:           "http://custom:11434",
+		DefaultModel:                "custom-coder:latest",
+		AdvancedModel:               "custom-adv:latest",
+		LLMDisabled:                 false,
+		LLMTimeoutSeconds:           DefaultLLMTimeoutSeconds,
+		ToolExecutionTimeoutSeconds: DefaultToolExecutionTimeoutSeconds,
+		MaxToolTurns:                DefaultMaxToolTurns,
+		MaxToolOutputBytes:          DefaultMaxToolOutputBytes,
 	}
 
 	if err := Save(path, want); err != nil {
@@ -105,6 +110,21 @@ func TestSaveThenLoadRoundtripCreatesParentDirs(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("roundtrip = %+v, want %+v", got, want)
+	}
+}
+
+func TestLLMDisabledConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "llm-disabled = true\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.IsLLMEnabled() {
+		t.Error("expected LLM to be disabled, got enabled")
 	}
 }
 

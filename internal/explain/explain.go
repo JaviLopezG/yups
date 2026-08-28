@@ -39,9 +39,14 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 		fmt.Fprintln(stdout)
 		if !env.IsInstalled {
 			fmt.Fprintln(stdout, "Note: yups is running in basic mode because it is not installed or configured yet.")
+			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the installation process now? (estimated time ~3 minutes)", false) {
+				if env.ExecShell != nil {
+					return env.ExecShell("yups --install-yups", stdout, stderr)
+				}
+			}
 			fmt.Fprintln(stdout, "Run 'yups --install-yups' to configure an Ollama LLM endpoint (e.g. http://localhost:11434).")
 		} else {
-			fmt.Fprintln(stdout, "Note: No LLM inference endpoint is configured.")
+			fmt.Fprintln(stdout, "Note: AI assistance is disabled or no LLM endpoint is configured (running in local documentation mode).")
 		}
 		return 0
 	}

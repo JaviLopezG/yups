@@ -25,11 +25,16 @@ import (
 // exist. Forgejo is the canonical source of truth; GitHub is only a
 // fallback (approved design decision 3).
 const (
-	DefaultYUPSRepo          = "https://code.javilopezg.com/javilopezg/yups"
-	DefaultYUPSRepoFallback  = "https://github.com/JaviLopezG/yups"
-	DefaultInferenceEndpoint = "http://localhost:11434"
-	DefaultModel             = "qwen2.5-coder:latest"
-	DefaultAdvancedModel     = "gemma4:latest"
+	DefaultYUPSRepo                    = "https://code.javilopezg.com/javilopezg/yups"
+	DefaultYUPSRepoFallback            = "https://github.com/JaviLopezG/yups"
+	DefaultInferenceEndpoint           = "http://localhost:11434"
+	DefaultModel                       = "qwen2.5-coder:latest"
+	DefaultAdvancedModel               = "gemma4:latest"
+	DefaultLLMEnabled                  = true
+	DefaultLLMTimeoutSeconds           = 60
+	DefaultToolExecutionTimeoutSeconds = 30
+	DefaultMaxToolTurns                = 10
+	DefaultMaxToolOutputBytes          = 4096
 	// FloorVersion is the placeholder recorded when no version has ever
 	// been registered yet. Any real release tag compares strictly newer,
 	// so the first update bump starts from here.
@@ -40,12 +45,54 @@ const (
 // YUPS_REPO and YUPS_REPO_FALLBACK were chosen by Javi to be reusable
 // beyond the update feature.
 type Config struct {
-	Version           string `toml:"version"`
-	YUPSRepo          string `toml:"YUPS_REPO"`
-	YUPSRepoFallback  string `toml:"YUPS_REPO_FALLBACK"`
-	InferenceEndpoint string `toml:"inference-endpoint"`
-	DefaultModel      string `toml:"default-model"`
-	AdvancedModel     string `toml:"advanced-model"`
+	Version                     string `toml:"version"`
+	YUPSRepo                    string `toml:"YUPS_REPO"`
+	YUPSRepoFallback            string `toml:"YUPS_REPO_FALLBACK"`
+	InferenceEndpoint           string `toml:"inference-endpoint"`
+	DefaultModel                string `toml:"default-model"`
+	AdvancedModel               string `toml:"advanced-model"`
+	LLMDisabled                 bool   `toml:"llm-disabled,omitempty"`
+	LLMTimeoutSeconds           int    `toml:"llm-timeout-seconds,omitempty"`
+	ToolExecutionTimeoutSeconds int    `toml:"tool-execution-timeout-seconds,omitempty"`
+	MaxToolTurns                int    `toml:"max-tool-turns,omitempty"`
+	MaxToolOutputBytes          int    `toml:"max-tool-output-bytes,omitempty"`
+}
+
+// IsLLMEnabled reports whether AI inference is enabled.
+func (c Config) IsLLMEnabled() bool {
+	return !c.LLMDisabled
+}
+
+// GetLLMTimeoutSeconds returns the configured LLM timeout in seconds.
+func (c Config) GetLLMTimeoutSeconds() int {
+	if c.LLMTimeoutSeconds <= 0 {
+		return DefaultLLMTimeoutSeconds
+	}
+	return c.LLMTimeoutSeconds
+}
+
+// GetToolExecutionTimeoutSeconds returns the configured tool timeout in seconds.
+func (c Config) GetToolExecutionTimeoutSeconds() int {
+	if c.ToolExecutionTimeoutSeconds <= 0 {
+		return DefaultToolExecutionTimeoutSeconds
+	}
+	return c.ToolExecutionTimeoutSeconds
+}
+
+// GetMaxToolTurns returns the maximum intermediate tool turns allowed.
+func (c Config) GetMaxToolTurns() int {
+	if c.MaxToolTurns <= 0 {
+		return DefaultMaxToolTurns
+	}
+	return c.MaxToolTurns
+}
+
+// GetMaxToolOutputBytes returns the maximum output bytes per documentation source.
+func (c Config) GetMaxToolOutputBytes() int {
+	if c.MaxToolOutputBytes <= 0 {
+		return DefaultMaxToolOutputBytes
+	}
+	return c.MaxToolOutputBytes
 }
 
 // Dir returns the yups state directory under the given home directory.
@@ -68,12 +115,17 @@ func CheatsheetsDir(home string) string {
 // run, and no version has run until something writes the file.
 func Defaults() Config {
 	return Config{
-		Version:           FloorVersion,
-		YUPSRepo:          DefaultYUPSRepo,
-		YUPSRepoFallback:  DefaultYUPSRepoFallback,
-		InferenceEndpoint: DefaultInferenceEndpoint,
-		DefaultModel:      DefaultModel,
-		AdvancedModel:     DefaultAdvancedModel,
+		Version:                     FloorVersion,
+		YUPSRepo:                    DefaultYUPSRepo,
+		YUPSRepoFallback:            DefaultYUPSRepoFallback,
+		InferenceEndpoint:           DefaultInferenceEndpoint,
+		DefaultModel:                DefaultModel,
+		AdvancedModel:               DefaultAdvancedModel,
+		LLMDisabled:                 false,
+		LLMTimeoutSeconds:           DefaultLLMTimeoutSeconds,
+		ToolExecutionTimeoutSeconds: DefaultToolExecutionTimeoutSeconds,
+		MaxToolTurns:                DefaultMaxToolTurns,
+		MaxToolOutputBytes:          DefaultMaxToolOutputBytes,
 	}
 }
 
@@ -97,6 +149,18 @@ func EnsureDefaults(c *Config) {
 	}
 	if c.AdvancedModel == "" {
 		c.AdvancedModel = DefaultAdvancedModel
+	}
+	if c.LLMTimeoutSeconds <= 0 {
+		c.LLMTimeoutSeconds = DefaultLLMTimeoutSeconds
+	}
+	if c.ToolExecutionTimeoutSeconds <= 0 {
+		c.ToolExecutionTimeoutSeconds = DefaultToolExecutionTimeoutSeconds
+	}
+	if c.MaxToolTurns <= 0 {
+		c.MaxToolTurns = DefaultMaxToolTurns
+	}
+	if c.MaxToolOutputBytes <= 0 {
+		c.MaxToolOutputBytes = DefaultMaxToolOutputBytes
 	}
 }
 

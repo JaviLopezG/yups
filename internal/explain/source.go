@@ -24,19 +24,24 @@ type DocEnv struct {
 	LookupInPath  func(cmd string) bool
 
 	// LLM support
-	LLMClient        *llm.Client
-	LLMEnv           llm.LLMEnv
-	DefaultModel     string
-	AdvancedModel    string
-	OverrideModel    string
-	UseAdvanced      bool
-	IsInstalled      bool
-	IsTerminalOutput func(w io.Writer) bool
-	AskConfirmation  func(prompt string, defaultYes bool) bool
-	AskPrompt        func(prompt, defaultValue string) string
-	AskEditPrompt    func(prompt, initialValue string) string
-	ExecShell        func(command string, stdout, stderr io.Writer) int
-	CheatsheetsDir   string
+	LLMClient            *llm.Client
+	LLMEnv               llm.LLMEnv
+	DefaultModel         string
+	AdvancedModel        string
+	OverrideModel        string
+	UseAdvanced          bool
+	IsInstalled          bool
+	LLMEnabled           bool
+	LLMTimeout           time.Duration
+	ToolExecutionTimeout time.Duration
+	MaxToolTurns         int
+	MaxToolOutputBytes   int
+	IsTerminalOutput     func(w io.Writer) bool
+	AskConfirmation      func(prompt string, defaultYes bool) bool
+	AskPrompt            func(prompt, defaultValue string) string
+	AskEditPrompt        func(prompt, initialValue string) string
+	ExecShell            func(command string, stdout, stderr io.Writer) int
+	CheatsheetsDir       string
 }
 
 // Resolver coordinates documentation lookup across multiple sources.
@@ -280,7 +285,18 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 	}
 
 	var chatResp llm.ChatResponse
-	maxToolTurns := 10
+	maxToolTurns := r.env.MaxToolTurns
+	if maxToolTurns <= 0 {
+		maxToolTurns = 10
+	}
+	llmTimeout := r.env.LLMTimeout
+	if llmTimeout <= 0 {
+		llmTimeout = 60 * time.Second
+	}
+	maxOutputBytes := r.env.MaxToolOutputBytes
+	if maxOutputBytes <= 0 {
+		maxOutputBytes = 4096
+	}
 
 	isTTY := r.env.IsTerminalOutput != nil && statusWriter != nil && r.env.IsTerminalOutput(statusWriter)
 	color := isTTY
@@ -292,7 +308,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		}
 		spinner := ui.StartSpinner(statusWriter, spinMsg, isTTY, color)
 
-		turnCtx, turnCancel := context.WithTimeout(ctx, 60*time.Second)
+		turnCtx, turnCancel := context.WithTimeout(ctx, llmTimeout)
 		resp, err := r.env.LLMClient.Chat(turnCtx, llm.ChatRequest{
 			Model:    model,
 			Messages: exp.Conversation,
@@ -335,15 +351,15 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 				Subcommand: sName,
 			}
 			help := r.getHelp(ctx, cName, sName)
-			if len(help) > 4096 {
-				help = help[:4096] + "\n... (truncated)"
+			if len(help) > maxOutputBytes {
+				help = help[:maxOutputBytes] + "\n... (truncated)"
 			}
 			doc.HelpOutput = help
 
 			man := r.getMan(ctx, cName, sName)
-			maxMan := 3072
+			maxMan := maxOutputBytes * 3 / 4
 			if help != "" {
-				maxMan = 1536
+				maxMan = maxOutputBytes * 3 / 8
 			}
 			if len(man) > maxMan {
 				man = man[:maxMan] + "\n... (truncated)"
@@ -420,8 +436,8 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 							output = []byte(fmt.Sprintf("Error executing command: %v", err))
 						}
 						outStr := string(output)
-						if len(outStr) > 4096 {
-							outStr = outStr[:4096] + "\n... (truncated)"
+						if len(outStr) > maxOutputBytes {
+							outStr = outStr[:maxOutputBytes] + "\n... (truncated)"
 						}
 						exp.Conversation = append(exp.Conversation, llm.Message{
 							Role:    "tool",
@@ -434,7 +450,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 
 		// If this was the last allowed tool turn, request the final conclusion from the model
 		if turn == maxToolTurns-1 {
-			finalCtx, finalCancel := context.WithTimeout(ctx, 60*time.Second)
+			finalCtx, finalCancel := context.WithTimeout(ctx, llmTimeout)
 			finalResp, finalErr := r.env.LLMClient.Chat(finalCtx, llm.ChatRequest{
 				Model:    model,
 				Messages: exp.Conversation,
@@ -487,10 +503,14 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 }
 
 func (r *Resolver) execWhitelisted(ctx context.Context, cmdStr string) ([]byte, error) {
-	if r.env.RunCmdTimeout != nil {
-		return r.env.RunCmdTimeout(ctx, 10*time.Second, "bash", "-c", cmdStr)
+	toolTimeout := r.env.ToolExecutionTimeout
+	if toolTimeout <= 0 {
+		toolTimeout = 30 * time.Second
 	}
-	execCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	if r.env.RunCmdTimeout != nil {
+		return r.env.RunCmdTimeout(ctx, toolTimeout, "bash", "-c", cmdStr)
+	}
+	execCtx, cancel := context.WithTimeout(ctx, toolTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(execCtx, "bash", "-c", cmdStr)
 	return cmd.CombinedOutput()

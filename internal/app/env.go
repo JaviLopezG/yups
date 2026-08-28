@@ -146,6 +146,7 @@ func (e *Env) DocEnv() explain.DocEnv {
 	cfg := config.Defaults()
 	isInstalled := false
 	cheatsDir := ""
+	stateDirExists := false
 	if e.UserHomeDir != nil {
 		if home, err := e.UserHomeDir(); err == nil {
 			if e.CheatsheetsDir != nil {
@@ -154,7 +155,7 @@ func (e *Env) DocEnv() explain.DocEnv {
 				cheatsDir = config.CheatsheetsDir(home)
 			}
 			if e.PathExists != nil {
-				isInstalled = e.PathExists(config.Path(home))
+				stateDirExists = e.PathExists(config.Dir(home))
 			}
 			if e.LoadConfig != nil {
 				if loaded, err := e.LoadConfig(config.Path(home)); err == nil {
@@ -163,13 +164,25 @@ func (e *Env) DocEnv() explain.DocEnv {
 			}
 		}
 	}
+
+	inPath := false
+	if e.PathDirs != nil && e.LookupExecutable != nil {
+		for _, dir := range e.PathDirs() {
+			if e.LookupExecutable(dir, ProgramName) {
+				inPath = true
+				break
+			}
+		}
+	}
+
+	isInstalled = inPath && stateDirExists
 	if e.IsInstalled != nil {
 		isInstalled = e.IsInstalled()
 	}
 	config.EnsureDefaults(&cfg)
 
 	var llmClient *llm.Client
-	if cfg.InferenceEndpoint != "" {
+	if isInstalled && cfg.IsLLMEnabled() && cfg.InferenceEndpoint != "" {
 		var httpClient *http.Client
 		if e.LLMHTTPClient != nil {
 			httpClient = e.LLMHTTPClient()
@@ -198,16 +211,22 @@ func (e *Env) DocEnv() explain.DocEnv {
 			}
 			return false
 		},
-		LLMClient:        llmClient,
-		LLMEnv:           e.LLMEnv(),
-		DefaultModel:     cfg.DefaultModel,
-		AdvancedModel:    cfg.AdvancedModel,
-		IsInstalled:      isInstalled,
-		IsTerminalOutput: e.IsTerminalOutput,
-		AskPrompt:        e.AskPrompt,
-		AskEditPrompt:    e.AskEditPrompt,
-		ExecShell:        e.ExecShell,
-		CheatsheetsDir:   cheatsDir,
+		LLMClient:            llmClient,
+		LLMEnv:               e.LLMEnv(),
+		DefaultModel:         cfg.DefaultModel,
+		AdvancedModel:        cfg.AdvancedModel,
+		IsInstalled:          isInstalled,
+		LLMEnabled:           cfg.IsLLMEnabled(),
+		LLMTimeout:           time.Duration(cfg.GetLLMTimeoutSeconds()) * time.Second,
+		ToolExecutionTimeout: time.Duration(cfg.GetToolExecutionTimeoutSeconds()) * time.Second,
+		MaxToolTurns:         cfg.GetMaxToolTurns(),
+		MaxToolOutputBytes:   cfg.GetMaxToolOutputBytes(),
+		IsTerminalOutput:     e.IsTerminalOutput,
+		AskConfirmation:      e.AskConfirmation,
+		AskPrompt:            e.AskPrompt,
+		AskEditPrompt:        e.AskEditPrompt,
+		ExecShell:            e.ExecShell,
+		CheatsheetsDir:       cheatsDir,
 	}
 }
 
@@ -754,13 +773,23 @@ func osExecShell(command string, stdout, stderr io.Writer) int {
 	return ExitOK
 }
 
-// osIsInstalled reports whether ~/.yups/config.toml exists on the system.
+// osIsInstalled reports whether yups is properly installed:
+// 1. ~/.yups state directory exists
+// 2. yups executable is present in PATH
 func osIsInstalled() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
 	}
-	return osPathExists(config.Path(home))
+	if !osPathExists(config.Dir(home)) {
+		return false
+	}
+	for _, dir := range osPathDirs() {
+		if osLookupExecutable(dir, ProgramName) {
+			return true
+		}
+	}
+	return false
 }
 
 // osAskEditPrompt provides interactive inline editing with pre-filled initialText.

@@ -1236,29 +1236,31 @@ Do you want to run ~/.yups/scripts/2026-08-13-12-32-54.sh? (Y/n)
 > usuario o de una instalación previa, se usarán como valores por defecto los de
 > ese archivo, informando siempre al usuario de este hecho.
 
-### Configuración
+#### Configuración
 
 Estos son los valores a configurar durante el proceso de instalación que se
-guardarán en el archivo de configuración. Todos tienen sus valores por
-defecto/recomendados. Todos pueden ser remplazados al invocar a `yups`usando el
-flag `--config param1="new value 1" param2=new-value2`.
+guardarán en el archivo de configuración `~/.yups/config.toml`. Todos tienen sus
+valores por defecto/recomendados.
 
+- `YUPS_REPO` (https://code.javilopezg.com/javilopezg/yups): Repositorio principal
+  para comprobación y descarga de actualizaciones y cheatsheets.
+- `YUPS_REPO_FALLBACK` (https://github.com/JaviLopezG/yups): Repositorio de
+  respaldo en caso de caída del principal.
 - `inference-endpoint` (http://localhost:11434): Establece el endpoint en el que
   están expuestos el middleware u ollama.
-- `default-model` (qwen3-coder:latest): El modelo para indicar en las
-  solicitudes a ollama o el middleware.
-- `advanced-model` (gemma4:latest): El modelo que se indicará cuando se quiere
-  más potencia. NOTA: Si no se fuerza un modelo específico, al míddleware se le
-  pasa la lista de modelos `[default, advanced]` y se le dice que elija el
-  primero cargado (advanced si está cargado, y si no default).
-- `main-source` (man): la fuente principal de conocimiento a ser usada. Las
-  opciones dependerán de lo que se llegue a implementar y de lo que tenga
-  instalado el sistema (man, tldr...).
-- `alike-commands` (3): número de comandos los últimos comandos que hay que
-  revisar para que si se parecen lanzar la ejecución de tarea repetitiva.
-- `repeated-commands` (5, 20): el número de comandos que se tienen que repetir
-  exactos (5) en los últimos comandos (20) para determinar que se está
-  realizando una tarea repetitiva.
+- `default-model` (qwen2.5-coder:latest): El modelo por defecto para análisis
+  rápido y propuestas de comandos.
+- `advanced-model` (gemma4:latest): El modelo que se indicará cuando se escala
+  para consultas complejas o preguntas en lenguaje natural.
+- `llm-enabled` (true): Indica si la asistencia de Inteligencia Artificial está
+  activada (`true`) o desactivada (`false`, funcionando en modo documentación
+  local rápido con manpages, `--help` y cheatsheets).
+- `llm-timeout-seconds` (60): Límite de tiempo por turno de consulta al LLM.
+- `tool-execution-timeout-seconds` (30): Límite de tiempo para la ejecución de
+  cada comando de inspección en la lista blanca.
+- `max-tool-turns` (10): Número máximo de turnos de tool interactivos permitidos.
+- `max-tool-output-bytes` (4096): Límite de bytes de salida por comando o manual
+  recopilado para el contexto del LLM.
 
 ### Actualización <a name="actualizacion"></a>
 
@@ -1270,127 +1272,74 @@ acabar cualquier proceso.
 
 ## Roadmap
 
-### v1.0.0
+### v1.0.0 (Command Line & Core Assistance)
 
-- [x] Cliente Go
-- [x] Ayuda inline `--help`
-- [x] Proceso de [instalación](#instalacion) `--install-yups`
-- [x] Proceso de desinstalación `--uninstall-yups`
-- [x] Proceso de [actualización](#actualizacion) sin comprobación, bajo demanda
-  `--update-yups`
-- [x] Consulta de una [línea que parece un comando](#linea-comando)
-    - [ ] `--advanced`
-  - [ ] Fuente de datos: lo que está escrito en el prompt actualmente
-  - [x] Fuente de datos: lista de comandos disponible en el sistema (help/man/whatis)
-  - [x] Fallback a inferencia LLM en Ollama por HTTP (recolección de contexto de bajo coste y propuestas de corrección)
-  - [x] Configuración de endpoint y selección de modelos Ollama en la instalación
-  - [ ] Integración con Bash para disparadores `F1` o `Ctrl+g`
-  - [ ] Tool: web-search con configuración opt in para que el usuario valore si
-    quiere asumir el riesgo de que salgan datos fuera del sistema.
-  - [x] `--ask-run` sólo para command line (`[y/n/e/m]` Yes/no/edit/modifications)
-  - [ ] `--test`
-- [x] Readme
-- [x] Worker de Goreleaser para generar el ejecutable automáticamente con cada
-  nueva versión.
-- [ ] Test de otras fuentes de información como tldr, cheatsheets navi o Arch
-  Wiki
+- [x] Cliente Go compilado nativamente.
+- [x] Ayuda inline `--help` y versión `--version`.
+- [x] Proceso de instalación interactiva `--install-yups` con detección de Ollama y selección/descarga de modelos recomendados (qwen / gemma).
+- [x] Proceso de desinstalación limpia `--uninstall-yups`.
+- [x] Proceso de actualización bajo demanda `--update-yups` con soporte multi-repositorio (Forgejo y GitHub), verificación SHA256 y descarga automática de cheatsheets.
+- [x] Consulta y análisis de líneas de comandos (`#_?`):
+  - [x] Extracción local rápida de documentación: `whatis`, `man` pages, aliases y `--help`.
+  - [x] Base de conocimiento local: descarga y búsqueda de cheatsheets especializadas.
+  - [x] Detección de opciones desconocidas, errores sintácticos y preguntas de usuario.
+- [x] Asistencia con LLM (Ollama):
+  - [x] Fallback inteligente al modelo cuando faltan flags o se formulan preguntas directas.
+  - [x] Tool calling multi-turno: herramienta `fetch_command_documentation` para lectura profunda de manuales y cheatsheets.
+  - [x] Tool calling con lista blanca de comandos: herramienta `run_command` para inspección segura del sistema (validación con AST de combinadores bash).
+  - [x] Escalado automático al modelo avanzado (`advanced-model`) al invocar tools o en preguntas en lenguaje natural.
+- [x] Experiencia de usuario (UX / Look & Feel):
+  - [x] Colores corporativos y decoración ANSI (preguntas e interacciones en color naranja YUPS).
+  - [x] Spinners animados para esperas indeterminadas y barras de progreso para descargas de modelos.
+  - [x] Menú interactivo de ejecución (`[y/n/e/m]` Yes/no/edit/modifications) con edición inline de la línea propuesta.
+  - [x] Comportamiento adaptativo cuando no está instalado (sugerencia de instalación con tiempo estimado de ~3 minutos).
+  - [x] Flags `--query`, `--advanced`, `--model` y benchmark de modelos `--test-models`.
 
 #### Criterios de aceptación
 
-1. Un usuario puede descubrir, instalar, probar y desinstalar YUPS sin ayuda
-   externa.
+1. Un usuario puede descubrir, instalar, consultar y actualizar YUPS sin fricción ni dependencias externas.
+2. Respuestas instantáneas en casos documentados localmente y asistencia profunda con herramientas ante incidencias o preguntas complejas.
 
-### v1.1.0
+---
 
-- [ ] Consulta de una línea que no parece un comando
-  - [ ] `--query`
-- [ ] Continuación de consultas
-  - [ ] `--continue`
-- [ ] Marcador de final de flags `--`
-- [ ] Tool: run-command
+### v1.1.0 (Command Line Robustness & Safety)
 
-#### Criterios de aceptación
-
-1. YUPS funciona con cualquier cosa que tenga escrita el usuario en su prompt
-   del sistema
-
-### v1.2.0
-
-- [ ] Consulta de un script
-  - [ ] `--script`
-  - [ ] `--ask-run script.sh`
-- [ ] Uso de mvdan
+- [ ] Búsqueda y reacción ante Command Not Found:
+  - [ ] Flag `--cnf-handle <command_name>` (captura de código de salida 127).
+  - [ ] Integración mediante hooks en Bash para sugerir paquetes o comandos alternativos.
+- [ ] Diagnóstico de errores de ejecución de comandos:
+  - [ ] Flag `--ce-handle <error_code> <command_line>` (captura de códigos de retorno distintos de cero).
+  - [ ] Análisis contextual con IA del motivo del fallo y propuesta de corrección.
+- [ ] Simulación de ejecución `--dry-run`:
+  - [ ] Usar el LLM para obtener una simulación estimada de la salida y efectos que generaría un comando antes de lanzarlo.
+- [ ] Ejecución transaccional protegida `--transaction`:
+  - [ ] Consultar al LLM qué archivos o directorios estima que se podrían modificar o verse afectados.
+  - [ ] Realizar copias de seguridad temporales de dichos archivos antes de la ejecución para permitir revertir cambios en caso de fallo.
+- [ ] Sistema de actualización asíncrona desatendida / aviso diario en background.
 
 #### Criterios de aceptación
 
-1. YUPS puede trabajar con scripts
+1. YUPS protege al usuario de fallos imprevistos y ayuda a resolver errores y comandos no encontrados en la terminal de forma proactiva.
 
-### v1.3.0
+---
 
-- [ ] Búsqueda de un command not found
-  - [ ] `--cnf-handle command_name`
-- [ ] Integración en Bash para captura de los cnf (error 127)
-- [ ] Evaluación de la introducción de la eurística de thefuck
-- [ ] Introducción de comandos con dry-run al whitelist
+### v2.0.0 (Scripts & Monitoreo Avanzado con eBPF)
 
-#### Criterios de aceptación
-
-1. YUPS reacciona de un modo útil cuando el intérprete de comandos no encuentra
-   un comando
-
-### v1.4.0
-
-- [ ] Investigación de errores de un comando
-  - [ ] `--ce-handle error_code command_name`
-- [ ] Integración en Bash para la captura de cualquier error
-- [ ] Evaluación de eBPF para monitorización del standard error
+- [ ] Soporte completo para scripts (`--script <script_file>`):
+  - [ ] Análisis sintáctico y AST de scripts en Bash usando la librería `mvdan/sh`.
+  - [ ] Validación de seguridad y propuesta de correcciones en scripts multilínea.
+  - [ ] Ejecución de scripts con interacción y confirmación paso a paso.
+- [ ] Ejecución monitorizada con eBPF:
+  - [ ] Monitorización transparente tanto en modo interactivo como mediante shebang `#!/usr/bin/env yups`.
+  - [ ] Captura independiente de `stdout` y `stderr` a nivel de kernel mediante eBPF sin alterar los descriptores del proceso.
+  - [ ] Referencias e implementación: librería Go [ebpf-go](https://ebpf-go.dev/) e inspección de puntos de enganche con monitores de escritura [bpf_write_monitor](https://github.com/hparadiz/bpf_write_monitor).
+- [ ] Diagnóstico inteligente de fallos en scripts:
+  - [ ] Si un script falla, YUPS recopila el código del script y la salida de `stderr` capturada para solicitar una explicación y corrección a la IA.
+  - [ ] Si la IA requiere mayor contexto, puede solicitar la salida estándar (`stdout`) mediante tool calling.
 
 #### Criterios de aceptación
 
-1. YUPS es útil cuando un comando acaba con un error del tipo que sea
-
-### v1.5.0
-
-- [ ] Interpretación de logs
-  - [ ] `--logs`
-- [ ] Evaluación del sistema de anonimización de logs
-
-#### Criterios de aceptación
-
-1. YUPS es capaz de evaluar cualquier evento que se haya producido en el pasado
-
-### v1.6.0
-
-- [ ] Proceso de onboarding
-- [ ] Generación de prompt a medida
-- [ ] Generación de título a medida
-- [ ] Manejo del flag `--notify`
-
-#### Criterios de aceptación
-
-1. Un usuario puede usar YUPS y tener su momento 'Wow!' sin necesidad de
-   consultar nada adicional
-2. La integración de YUPS con el intérprete de comandos es total y no se
-   encuentra distinción entre dónde acaba YUPS y empieza el shell
-
-### v1.7.0
-
-- [ ] Sistema completo de actualización asíncrona desatendida.
-
-#### Criterios de aceptación
-
-1. YUPS se mantiene actualizado siempre por si sólo
-
-### v1.8.0
-
-- [ ] Recomendación de automatización
-  - [ ] `--repetitive-process`
-  - [ ] Búsqueda difusa de comandos
-- [ ] Integración en Bash para la detección de tareas repetitivas
-
-#### Criterios de aceptación
-
-1. YUPS simplifica el trabajo habitual
+1. YUPS permite depurar, supervisar y ejecutar scripts complejos de forma segura y automatizada con diagnóstico asistido por IA.
 
 
 
