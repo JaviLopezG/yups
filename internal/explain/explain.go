@@ -17,7 +17,7 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 	}
 
 	pipeline := Parse(args)
-	if len(pipeline.Stages) == 0 {
+	if len(pipeline.Stages) == 0 && pipeline.Comment == "" {
 		return 0
 	}
 
@@ -97,7 +97,7 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 		case "e", "edit":
 			editPrompt := "Edit command"
 			if color {
-				editPrompt = "\x1b[1mEdit command\x1b[0m"
+				editPrompt = "\x1b[38;5;214mEdit command\x1b[0m"
 			}
 			var edited string
 			if env.AskEditPrompt != nil {
@@ -112,7 +112,7 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 		case "m", "modifications":
 			modPrompt := "Enter modifications or additional context for LLM"
 			if color {
-				modPrompt = "\x1b[1;36mEnter modifications or additional context for LLM\x1b[0m"
+				modPrompt = "\x1b[38;5;214mEnter modifications or additional context for LLM\x1b[0m"
 			}
 			mod := env.AskPrompt(modPrompt, "")
 			if strings.TrimSpace(mod) == "" {

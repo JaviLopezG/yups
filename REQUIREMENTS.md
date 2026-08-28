@@ -629,12 +629,18 @@ edit ~/.yups/scripts/2026-08-12-19-31-24.sh && yups --ask-run ~/.yups/scripts/20
 > Se puede incluir un archivo README con un disclaimer en las carpetas en las
 > que el usuario no debería tocar.
 
-#### Consulta de una línea que no parece un comando
+#### Consulta de una línea que no parece un comando o lenguaje natural
 
-Cuando `yups` recibe una línea que no parece un comando, se la pasa al motor de
-inferencia configurado proporcionándole la información de contexto básica,
-esperando que la salida del modelo pueda cumplir las expectativas del usuario
-mediante una explicación (y una corrección si fuese precisa).
+Cuando `yups` recibe una línea que no parece un comando (por ejemplo preguntas que
+comienzan por signos de interrogación `¿` o palabras interrogativas como `cómo`, `how`,
+`what`, `where`, `ayuda`, etc.) o cuando se invoca explícitamente mediante `--query`,
+el sistema la reconoce automáticamente como una consulta en lenguaje natural. En
+lugar de intentar resolver manuales para palabras del lenguaje humano, muestra el
+prompt `#_?` con la pregunta en gris (`# ¿cómo puedo ver los puertos abiertos?`) y
+la transmite directamente al modelo avanzado del motor de inferencia con todo el
+contexto del sistema. El modelo puede entonces apoyarse en herramientas de
+inspección (`command-run`, `fetch_command_documentation`) y devolver una explicación
+didáctica junto con el comando sugerido en verde listo para ser ejecutado.
 
 #### Consulta de un script
 
@@ -710,13 +716,12 @@ Cosas que hay que cuidar en todo momento:
   LLM se puede establecer una estimación de 15s y en las sucesivas mostrar una
   estimación usando la mediana de tiempo de las request previas al motor de
   inferencia.
-- En los procesos de espera es importante mostrar al usuario que el proceso no
-  se ha colgado. Por ejemplo, mientras se está esperando al motor de inferencia
-  se puede mostrar un byte de 0s y 1s aleatorios que van cambiando, o en los
-  procesos de pasos que es más fácil calcular el porcentaje completado, se puede
-  mostrar una barra de progreso braille. Ver
-  [ejemplos](https://unicode.framer.website/) de animaciones con caracteres
-  unicode.
+- En los procesos de espera es vital mostrar al usuario que el proceso sigue vivo
+  y en ejecución activa. Durante la inferencia con el LLM y la resolución de herramientas,
+  `yups` muestra un spinner dinámico con los caracteres unicode (`⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏`)
+  junto al tiempo transcurrido en vivo en segundos `(Xs)`. En los procesos de pasos
+  o de descarga (como `--test-models` y la descarga de cheatsheets o modelos),
+  `yups` renderiza barras de progreso visuales con porcentaje y contador (`[████████░░░░] 60.0% (3/5)`).
 - Cualquier información que se pueda conseguir de un modo automático no debe
   preguntársele al usuario sin al menos sugerir por defecto la respuesta que se
   ha podido obtener de manera automática.

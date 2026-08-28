@@ -63,20 +63,6 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer) ([]ModelBenchmarkResu
 	testCmdLine := "ls -javi && yups -hV"
 	pipeline := explain.Parse([]string{"ls", "-javi", "&&", "yups", "-hV"})
 
-	var allArgs []string
-	for _, st := range pipeline.Stages {
-		if st.Command != nil {
-			allArgs = append(allArgs, st.Command.Args...)
-		}
-	}
-
-	var sysCtx llm.SystemContext
-	if docEnv.LLMEnv != nil {
-		sysCtx = llm.GatherContext(docEnv.LLMEnv, allArgs)
-	}
-	missingItems := []string{"ls: -j", "yups: -h", "yups: -V"}
-	basicSummary := "ls: -a found, -v found, -i found"
-
 	var results []ModelBenchmarkResult
 
 	fmt.Fprintln(stdout, "\nStarting model benchmark...")
@@ -84,15 +70,21 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer) ([]ModelBenchmarkResu
 
 	for i, m := range models {
 		fmt.Fprintf(stdout, "\n[%d/%d] Testing model '%s'...\n", i+1, len(models), m.Name)
+
+		modelDocEnv := docEnv
+		modelDocEnv.OverrideModel = m.Name
+		resolver := explain.NewResolver(modelDocEnv)
+
+		exp := &explain.PipelineExplanation{
+			RawCommandLine: testCmdLine,
+		}
+
 		start := time.Now()
-
-		chatReq := llm.BuildChatRequest(m.Name, sysCtx, testCmdLine, missingItems, basicSummary)
-
-		benchCtx, benchCancel := context.WithTimeout(context.Background(), 90*time.Second)
-		resp, err := docEnv.LLMClient.Chat(benchCtx, chatReq)
+		benchCtx, benchCancel := context.WithTimeout(context.Background(), 120*time.Second)
+		err := resolver.QueryLLMPipeline(benchCtx, pipeline, exp, "", stdout)
 		benchCancel()
-
 		elapsed := time.Since(start)
+
 		res := ModelBenchmarkResult{
 			Model:    m.Name,
 			Duration: elapsed,
@@ -102,7 +94,15 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer) ([]ModelBenchmarkResu
 			res.Error = err.Error()
 			fmt.Fprintf(stdout, "  Status: Failed (%v) [%.2fs]\n", err, elapsed.Seconds())
 		} else {
-			res.Response = strings.TrimSpace(resp.Message.Content)
+			responseText := exp.LLMExplanation
+			if exp.SuggestedCommand != "" {
+				if responseText != "" {
+					responseText += "\nSuggested command: " + exp.SuggestedCommand
+				} else {
+					responseText = "Suggested command: " + exp.SuggestedCommand
+				}
+			}
+			res.Response = strings.TrimSpace(responseText)
 			fmt.Fprintf(stdout, "  Status: Success [%.2fs]\n", elapsed.Seconds())
 			if res.Response != "" {
 				lines := strings.Split(res.Response, "\n")

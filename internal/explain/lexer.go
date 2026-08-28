@@ -27,7 +27,7 @@ type Token struct {
 }
 
 // Tokenize splits a shell command line or list of arguments into normalized
-// tokens, recognizing quotes, escapes, and shell operators.
+// tokens, recognizing quotes, escapes, shell operators, and natural language queries.
 func Tokenize(args []string) []Token {
 	if len(args) == 0 {
 		return nil
@@ -36,7 +36,37 @@ func Tokenize(args []string) []Token {
 	// If a single argument is passed and contains spaces or shell operators,
 	// parse it as a shell line.
 	raw := joinArgs(args)
+	trimmed := strings.TrimSpace(raw)
+	if isNaturalLanguageQuery(trimmed) && !strings.HasPrefix(trimmed, "#") {
+		return []Token{
+			{Type: TokenComment, Value: trimmed},
+		}
+	}
+
 	return tokenizeString(raw)
+}
+
+func isNaturalLanguageQuery(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "¿") || strings.HasPrefix(trimmed, "?") {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	prefixes := []string{
+		"cómo ", "como ", "how ", "how to ", "what ", "what is ", "where ",
+		"why ", "quién ", "quien ", "cual ", "cuál ", "dónde ", "donde ",
+		"ayuda ", "help ", "explicar ", "explain ", "muéstrame ", "show me ",
+		"dime ", "tell me ",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // joinArgs intelligently rebuilds the raw command line while preserving quotes

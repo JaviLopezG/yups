@@ -704,3 +704,87 @@ func TestDispatchTestModelsBenchmark(t *testing.T) {
 		}
 	}
 }
+
+func TestDispatchTestModelsBenchmarkIncludesToolCallingTime(t *testing.T) {
+	var chatCalls int
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			resp := map[string]any{
+				"models": []map[string]any{
+					{"name": "qwen2.5-coder:7b", "size": 4500000000},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		if r.URL.Path == "/api/chat" {
+			chatCalls++
+			if chatCalls == 1 {
+				// Turn 1: tool call
+				time.Sleep(10 * time.Millisecond)
+				resp := llm.ChatResponse{
+					Model: "qwen2.5-coder:7b",
+					Message: llm.Message{
+						Role: "assistant",
+						ToolCalls: []llm.ToolCall{
+							{
+								Function: llm.ToolCallFunction{
+									Name:      "fetch_command_documentation",
+									Arguments: map[string]any{"command": "ls"},
+								},
+							},
+						},
+					},
+					Done: true,
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			// Turn 2: final answer
+			time.Sleep(10 * time.Millisecond)
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Done after tool inspection.\nSuggested command: ls -la",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
+	env.LoadConfig = func(path string) (config.Config, error) {
+		cfg := config.Defaults()
+		cfg.InferenceEndpoint = ts.URL
+		return cfg, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{"--test-models"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("Dispatch(--test-models) = %d, want %d", code, ExitOK)
+	}
+
+	if chatCalls != 2 {
+		t.Errorf("chatCalls = %d, want 2 (initial query + tool resolution)", chatCalls)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"LLM requested detailed documentation for 'ls'",
+		"MODEL BENCHMARK SUMMARY",
+		"qwen2.5-coder:7b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
+		}
+	}
+}

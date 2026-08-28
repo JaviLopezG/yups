@@ -198,15 +198,16 @@ func (e *Env) DocEnv() explain.DocEnv {
 			}
 			return false
 		},
-		LLMClient:      llmClient,
-		LLMEnv:         e.LLMEnv(),
-		DefaultModel:   cfg.DefaultModel,
-		AdvancedModel:  cfg.AdvancedModel,
-		IsInstalled:    isInstalled,
-		AskPrompt:      e.AskPrompt,
-		AskEditPrompt:  e.AskEditPrompt,
-		ExecShell:      e.ExecShell,
-		CheatsheetsDir: cheatsDir,
+		LLMClient:        llmClient,
+		LLMEnv:           e.LLMEnv(),
+		DefaultModel:     cfg.DefaultModel,
+		AdvancedModel:    cfg.AdvancedModel,
+		IsInstalled:      isInstalled,
+		IsTerminalOutput: e.IsTerminalOutput,
+		AskPrompt:        e.AskPrompt,
+		AskEditPrompt:    e.AskEditPrompt,
+		ExecShell:        e.ExecShell,
+		CheatsheetsDir:   cheatsDir,
 	}
 }
 
@@ -541,8 +542,13 @@ func osAskConfirmation(prompt string, defaultYes bool) bool {
 	}
 
 	reader := stdinReader()
+	isTerm := osIsTerminalOutput(os.Stdout)
 	for attempt := 0; attempt < 3; attempt++ {
-		fmt.Printf("%s %s ", prompt, hint)
+		if isTerm {
+			fmt.Printf("\x1b[38;5;214m%s\x1b[0m %s ", prompt, hint)
+		} else {
+			fmt.Printf("%s %s ", prompt, hint)
+		}
 		line, err := reader.ReadString('\n')
 		switch answer := strings.ToLower(strings.TrimSpace(line)); {
 		case answer == "":
@@ -621,10 +627,19 @@ func osIsTerminalOutput(w io.Writer) bool {
 
 // osAskPrompt prompts for user text input, returning defaultValue if empty.
 func osAskPrompt(prompt, defaultValue string) string {
+	isTerm := osIsTerminalOutput(os.Stdout)
 	if defaultValue != "" {
-		fmt.Printf("%s [%s]: ", prompt, defaultValue)
+		if isTerm {
+			fmt.Printf("\x1b[38;5;214m%s\x1b[0m [%s]: ", prompt, defaultValue)
+		} else {
+			fmt.Printf("%s [%s]: ", prompt, defaultValue)
+		}
 	} else {
-		fmt.Printf("%s: ", prompt)
+		if isTerm {
+			fmt.Printf("\x1b[38;5;214m%s\x1b[0m: ", prompt)
+		} else {
+			fmt.Printf("%s: ", prompt)
+		}
 	}
 	reader := stdinReader()
 	line, err := reader.ReadString('\n')

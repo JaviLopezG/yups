@@ -12,10 +12,11 @@ const (
 	ansiBold      = "\x1b[1m"
 	ansiUnderline = "\x1b[4m"
 	ansiOrange    = "\x1b[38;5;214m"
+	ansiBlue      = "\x1b[38;5;39m"
+	ansiCyan      = "\x1b[1;36m"
+	ansiGreen     = "\x1b[1;32m"
 	ansiYellow    = "\x1b[1;33m"
 	ansiRed       = "\x1b[1;31m"
-	ansiGreen     = "\x1b[32m"
-	ansiCyan      = "\x1b[1;36m"
 	ansiGray      = "\x1b[90m"
 )
 
@@ -36,7 +37,7 @@ func FormatPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions) {
 
 // FormatBasicPipeline writes the basic local documentation for all pipeline stages.
 func FormatBasicPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions) {
-	if p == nil || len(p.Stages) == 0 {
+	if p == nil {
 		return
 	}
 
@@ -45,6 +46,14 @@ func FormatBasicPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions
 		fmt.Fprintln(w, ansiOrange+"#_?"+ansiReset)
 	} else {
 		fmt.Fprintln(w, "#_?")
+	}
+
+	if len(p.Stages) == 0 && p.Comment != "" {
+		if opts.Color {
+			fmt.Fprintf(w, "  %s# %s%s\n", ansiGray, p.Comment, ansiReset)
+		} else {
+			fmt.Fprintf(w, "  # %s\n", p.Comment)
+		}
 	}
 
 	for i, stage := range p.Stages {
@@ -74,7 +83,7 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 	if cmd.Name != "" {
 		if cmd.Found {
 			if opts.Color {
-				fmt.Fprintf(w, "%sFound:%s %s%s%s\n", ansiBold, ansiReset, ansiOrange, cmd.Name, ansiReset)
+				fmt.Fprintf(w, "%sFound:%s %s%s%s\n", ansiBold, ansiReset, ansiBlue, cmd.Name, ansiReset)
 			} else {
 				fmt.Fprintf(w, "Found: %s\n", cmd.Name)
 			}
@@ -89,10 +98,18 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 
 	// 2. Wrappers
 	for _, wrapper := range cmd.Wrappers {
-		if wrapper.Summary != "" {
-			fmt.Fprintf(w, "  Wrapper: %s - %s\n", wrapper.Name, wrapper.Summary)
+		if opts.Color {
+			if wrapper.Summary != "" {
+				fmt.Fprintf(w, "  %sWrapper:%s %s%s%s - %s\n", ansiBold, ansiReset, ansiBlue, wrapper.Name, ansiReset, wrapper.Summary)
+			} else {
+				fmt.Fprintf(w, "  %sWrapper:%s %s%s%s\n", ansiBold, ansiReset, ansiBlue, wrapper.Name, ansiReset)
+			}
 		} else {
-			fmt.Fprintf(w, "  Wrapper: %s\n", wrapper.Name)
+			if wrapper.Summary != "" {
+				fmt.Fprintf(w, "  Wrapper: %s - %s\n", wrapper.Name, wrapper.Summary)
+			} else {
+				fmt.Fprintf(w, "  Wrapper: %s\n", wrapper.Name)
+			}
 		}
 		for _, flag := range wrapper.Flags {
 			formatFlag(w, flag, opts)
@@ -247,11 +264,14 @@ func FormatLLMResult(w io.Writer, exp *CommandExplanation, opts FormatOptions) {
 	FormatLLMPipelineResult(w, pExp, opts)
 }
 
-// FormatPromptChoice renders the choice prompt [<u>Y</u>es/<u>n</u>o/<u>e</u>dit/<u>m</u>odifications].
+// FormatPromptChoice renders the choice prompt in yups orange with underlined options.
 func FormatPromptChoice(opts FormatOptions) string {
 	if opts.Color {
-		return fmt.Sprintf("Do you want to run this command? [%sY%ses/%sn%so/%se%sdit/%sm%sodifications] (default: Yes): ",
-			ansiUnderline, ansiReset, ansiUnderline, ansiReset, ansiUnderline, ansiReset, ansiUnderline, ansiReset)
+		return ansiOrange + "Do you want to run this command? [" +
+			ansiUnderline + "Y" + ansiReset + ansiOrange + "es/" +
+			ansiUnderline + "n" + ansiReset + ansiOrange + "o/" +
+			ansiUnderline + "e" + ansiReset + ansiOrange + "dit/" +
+			ansiUnderline + "m" + ansiReset + ansiOrange + "odifications] (default: Yes): " + ansiReset
 	}
 	return "Do you want to run this command? [Yes/no/edit/modifications] (default: Yes): "
 }

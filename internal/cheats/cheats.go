@@ -85,8 +85,8 @@ func DownloadAll(client *http.Client, destBaseDir string, stdout io.Writer) erro
 		return fmt.Errorf("cannot create cheatsheet directory %s: %w", destBaseDir, err)
 	}
 
-	for _, src := range DefaultSources {
-		fmt.Fprintf(stdout, "Downloading cheatsheets from %s...\n", src.Name)
+	for idx, src := range DefaultSources {
+		fmt.Fprintf(stdout, "[%d/%d] Downloading cheatsheets from %s...\n", idx+1, len(DefaultSources), src.Name)
 		fmt.Fprintf(stdout, "  %s\n", src.Credit)
 
 		data, err := fetchWithRedirects(client, src.URL)
@@ -124,6 +124,8 @@ func DownloadAll(client *http.Client, destBaseDir string, stdout io.Writer) erro
 			fmt.Fprintf(stdout, "  Warning: could not install %s cheatsheets: %v\n", src.Name, err)
 			continue
 		}
+
+		fmt.Fprintf(stdout, "  Extracted %d KB successfully.\n", len(data)/1024)
 	}
 
 	return nil

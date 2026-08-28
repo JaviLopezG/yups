@@ -11,6 +11,7 @@ import (
 
 	"yups/internal/cheats"
 	"yups/internal/llm"
+	"yups/internal/ui"
 )
 
 // DocEnv defines the OS interface methods needed for documentation retrieval.
@@ -23,17 +24,19 @@ type DocEnv struct {
 	LookupInPath  func(cmd string) bool
 
 	// LLM support
-	LLMClient      *llm.Client
-	LLMEnv         llm.LLMEnv
-	DefaultModel   string
-	AdvancedModel  string
-	OverrideModel  string
-	UseAdvanced    bool
-	IsInstalled    bool
-	AskPrompt      func(prompt, defaultValue string) string
-	AskEditPrompt  func(prompt, initialValue string) string
-	ExecShell      func(command string, stdout, stderr io.Writer) int
-	CheatsheetsDir string
+	LLMClient        *llm.Client
+	LLMEnv           llm.LLMEnv
+	DefaultModel     string
+	AdvancedModel    string
+	OverrideModel    string
+	UseAdvanced      bool
+	IsInstalled      bool
+	IsTerminalOutput func(w io.Writer) bool
+	AskConfirmation  func(prompt string, defaultYes bool) bool
+	AskPrompt        func(prompt, defaultValue string) string
+	AskEditPrompt    func(prompt, initialValue string) string
+	ExecShell        func(command string, stdout, stderr io.Writer) int
+	CheatsheetsDir   string
 }
 
 // Resolver coordinates documentation lookup across multiple sources.
@@ -54,7 +57,21 @@ func NewResolver(env DocEnv) *Resolver {
 
 // ExplainPipeline resolves local documentation for an entire parsed Pipeline.
 func (r *Resolver) ExplainPipeline(ctx context.Context, pipeline *Pipeline) *PipelineExplanation {
-	if pipeline == nil || len(pipeline.Stages) == 0 {
+	if pipeline == nil {
+		return &PipelineExplanation{}
+	}
+	if len(pipeline.Stages) == 0 {
+		if pipeline.Comment != "" {
+			res := &PipelineExplanation{
+				Comment:         pipeline.Comment,
+				RawCommandLine:  "# " + pipeline.Comment,
+				HasMissingItems: true,
+			}
+			if r.env.LLMClient != nil {
+				res.LLMEndpoint = r.env.LLMClient.BaseURL()
+			}
+			return res
+		}
 		return &PipelineExplanation{}
 	}
 
@@ -265,7 +282,16 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 	var chatResp llm.ChatResponse
 	maxToolTurns := 10
 
+	isTTY := r.env.IsTerminalOutput != nil && statusWriter != nil && r.env.IsTerminalOutput(statusWriter)
+	color := isTTY
+
 	for turn := 0; turn < maxToolTurns; turn++ {
+		spinMsg := fmt.Sprintf("Querying model (%s)...", model)
+		if isAdvanced {
+			spinMsg = fmt.Sprintf("Querying advanced model (%s)...", model)
+		}
+		spinner := ui.StartSpinner(statusWriter, spinMsg, isTTY, color)
+
 		turnCtx, turnCancel := context.WithTimeout(ctx, 60*time.Second)
 		resp, err := r.env.LLMClient.Chat(turnCtx, llm.ChatRequest{
 			Model:    model,
@@ -273,6 +299,8 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 			Tools:    llm.DefaultTools(),
 		})
 		turnCancel()
+		spinner.Stop()
+
 		if err != nil {
 			exp.LLMError = err.Error()
 			return err

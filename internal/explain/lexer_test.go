@@ -81,3 +81,51 @@ func TestTokenizeSimple(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenizeNaturalLanguageQueries(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []Token
+	}{
+		{
+			name: "question in spanish starting with question mark",
+			args: []string{"¿cómo puedo ver los puertos abiertos?"},
+			want: []Token{
+				{Type: TokenComment, Value: "¿cómo puedo ver los puertos abiertos?"},
+			},
+		},
+		{
+			name: "question in spanish without initial question mark",
+			args: []string{"como", "ver", "la", "memoria", "libre"},
+			want: []Token{
+				{Type: TokenComment, Value: "como ver la memoria libre"},
+			},
+		},
+		{
+			name: "question in english starting with how to",
+			args: []string{"how to find large files in /home"},
+			want: []Token{
+				{Type: TokenComment, Value: "how to find large files in /home"},
+			},
+		},
+		{
+			name: "command with comment is not treated as pure natural language",
+			args: []string{"ls -a # como listar"},
+			want: []Token{
+				{Type: TokenWord, Value: "ls"},
+				{Type: TokenWord, Value: "-a"},
+				{Type: TokenComment, Value: "como listar"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Tokenize(tc.args)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Tokenize(%v) =\n%#v\nwant:\n%#v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
