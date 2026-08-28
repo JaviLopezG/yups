@@ -445,6 +445,35 @@ func TestInstallDownloadsCheatsheets(t *testing.T) {
 	}
 }
 
+func TestInstallReviewConfigFileOpensEditor(t *testing.T) {
+	fs := newFakeFS()
+	fs.writable["/usr/local/bin"] = true
+	var openedEditorPath string
+	env := fs.env()
+	env.AskConfirmation = func(prompt string, defaultYes bool) bool {
+		if strings.Contains(prompt, "review the configuration file") {
+			return true
+		}
+		return defaultYes
+	}
+	env.OpenEditor = func(path string, stdin io.Reader, stdout, stderr io.Writer) error {
+		openedEditorPath = path
+		return nil
+	}
+
+	out, code := runDispatch(t, env, "--install-yups")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+	}
+	wantPath := config.Path(fs.home)
+	if openedEditorPath != wantPath {
+		t.Errorf("openedEditorPath = %q, want %q", openedEditorPath, wantPath)
+	}
+	if !strings.Contains(out, "Configuration saved to") {
+		t.Errorf("expected config location in output: %q", out)
+	}
+}
+
 func TestInstallWithoutPermissionsAndWithoutSudoFails(t *testing.T) {
 	fs := newFakeFS() // nothing writable, no groups
 	out, code := runDispatch(t, fs.env(), "--install-yups")

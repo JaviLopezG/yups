@@ -511,7 +511,7 @@ func TestExplainKnownCommandWithCommentTriggersLLM(t *testing.T) {
 		"Found: ls",
 		"-a found:",
 		"# Quiero listar todos los subdirectorios",
-		"Asking advanced LLM (gemma3:latest) at " + ts.URL,
+		"Asking advanced LLM (" + llm.FallbackAdvancedModel + ") at " + ts.URL,
 		"LLM Explanation:",
 		"recursively",
 		"Suggested command:",
@@ -1313,5 +1313,64 @@ func TestExplainOverrideModelUsesSpecifiedModelWithoutEscalation(t *testing.T) {
 	out := stdout.String()
 	if strings.Contains(out, "Escalating to advanced model") {
 		t.Errorf("expected no escalation when OverrideModel is set, got:\n%s", out)
+	}
+}
+
+func TestExplainUsesAdvancedModelIfLoadedInMemoryViaPS(t *testing.T) {
+	var requestedModel string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			resp := map[string]any{
+				"models": []map[string]any{
+					{"name": "qwen3.8:latest", "model": "qwen3.8:latest", "size_vram": 5000000000},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		if r.URL.Path == "/api/chat" {
+			var req llm.ChatRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			requestedModel = req.Model
+			resp := llm.ChatResponse{
+				Model: req.Model,
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Done.\nSuggested command: ls -la",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:     llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel:  "qwen2.5-coder:7b",
+		AdvancedModel: "qwen3.8:latest",
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("Usage: ls"), nil
+		},
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			return "ls (1) - list directory contents", nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if requestedModel != "qwen3.8:latest" {
+		t.Errorf("requestedModel = %q, want qwen3.8:latest because it was loaded in /api/ps", requestedModel)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Asking advanced LLM (qwen3.8:latest)") {
+		t.Errorf("stdout missing advanced notice when loaded in memory:\n%s", out)
 	}
 }

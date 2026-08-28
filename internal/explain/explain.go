@@ -53,21 +53,8 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 
 	// 4. Announce LLM query
 	endpoint := env.LLMClient.BaseURL()
-	isAdvanced := false
-	model := env.DefaultModel
-	if env.OverrideModel != "" {
-		model = env.OverrideModel
-	} else if env.UseAdvanced || (pipeline != nil && pipeline.Comment != "") {
-		isAdvanced = true
-		model = env.AdvancedModel
-		if model == "" {
-			model = llm.FallbackAdvancedModel
-		}
-	} else {
-		if model == "" {
-			model = llm.FallbackDefaultModel
-		}
-	}
+	isComment := pipeline != nil && pipeline.Comment != ""
+	model, isAdvanced := ResolveTargetModel(ctx, env, isComment)
 	FormatLLMNotice(stdout, endpoint, model, isAdvanced, opts)
 
 	// 5. Query LLM for the whole pipeline

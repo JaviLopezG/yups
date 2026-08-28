@@ -40,7 +40,7 @@ func TestClientListModels(t *testing.T) {
 					Details: struct {
 						Family        string `json:"family"`
 						ParameterSize string `json:"parameter_size"`
-					}{Family: "gemma", ParameterSize: "9B"},
+					}{Family: "gemma", ParameterSize: "13B"},
 				},
 			},
 		}
@@ -48,16 +48,64 @@ func TestClientListModels(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.Client(), ts.URL)
-	models, err := client.ListModels(context.Background())
+	c := NewClient(ts.Client(), ts.URL)
+	models, err := c.ListModels(context.Background())
 	if err != nil {
-		t.Fatalf("ListModels failed: %v", err)
+		t.Fatalf("ListModels: %v", err)
 	}
 	if len(models) != 2 {
-		t.Fatalf("models count = %d, want 2", len(models))
+		t.Fatalf("got %d models, want 2", len(models))
 	}
 	if models[0].Name != "qwen2.5-coder:7b" {
-		t.Errorf("model 0 name = %q, want qwen2.5-coder:7b", models[0].Name)
+		t.Errorf("models[0] = %q, want qwen2.5-coder:7b", models[0].Name)
+	}
+}
+
+func TestClientListRunningModelsAndIsModelLoaded(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/ps" {
+			t.Errorf("path = %q, want /api/ps", r.URL.Path)
+		}
+		data := psResponse{
+			Models: []struct {
+				Name     string `json:"name"`
+				Model    string `json:"model"`
+				Size     int64  `json:"size"`
+				SizeVRAM int64  `json:"size_vram"`
+				Digest   string `json:"digest"`
+			}{
+				{
+					Name:     "qwen3.8:latest",
+					Model:    "qwen3.8:latest",
+					Size:     5000000000,
+					SizeVRAM: 5000000000,
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(data)
+	}))
+	defer ts.Close()
+
+	c := NewClient(ts.Client(), ts.URL)
+	running, err := c.ListRunningModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListRunningModels: %v", err)
+	}
+	if len(running) != 1 {
+		t.Fatalf("got %d running models, want 1", len(running))
+	}
+	if running[0].Name != "qwen3.8:latest" {
+		t.Errorf("running[0] = %q, want qwen3.8:latest", running[0].Name)
+	}
+
+	if !c.IsModelLoaded(context.Background(), "qwen3.8:latest") {
+		t.Error("expected qwen3.8:latest to be loaded")
+	}
+	if !c.IsModelLoaded(context.Background(), "qwen3.8") {
+		t.Error("expected qwen3.8 without tag to be reported loaded")
+	}
+	if c.IsModelLoaded(context.Background(), "nonexistent:latest") {
+		t.Error("expected nonexistent model to NOT be loaded")
 	}
 }
 
@@ -134,6 +182,16 @@ func TestSelectBestModels(t *testing.T) {
 			},
 			wantDefault:  "qwen3-coder:latest",
 			wantAdvanced: "gemma4:latest",
+		},
+		{
+			name: "qwen3.8 prioritized for advanced",
+			models: []ModelInfo{
+				{Name: "qwen2.5-coder:7b", Size: 4500000000},
+				{Name: "qwen3.8:latest", Size: 12000000000},
+				{Name: "gemma4:latest", Size: 10000000000},
+			},
+			wantDefault:  "qwen2.5-coder:7b",
+			wantAdvanced: "qwen3.8:latest",
 		},
 	}
 

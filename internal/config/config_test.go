@@ -47,8 +47,8 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 func TestLoadParsesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	content := "version = \"v1.2.3\"\n" +
-		"YUPS_REPO = \"https://example.com/a/b\"\n" +
-		"YUPS_REPO_FALLBACK = \"https://example.org/c/d\"\n"
+		"yups-repo = \"https://example.com/a/b\"\n" +
+		"yups-repo-fallback = \"https://example.org/c/d\"\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing fixture: %v", err)
 	}

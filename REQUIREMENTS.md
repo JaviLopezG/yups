@@ -1242,15 +1242,18 @@ Estos son los valores a configurar durante el proceso de instalación que se
 guardarán en el archivo de configuración `~/.yups/config.toml`. Todos tienen sus
 valores por defecto/recomendados.
 
-- `YUPS_REPO` (https://code.javilopezg.com/javilopezg/yups): Repositorio principal
+- `yups-repo` (https://code.javilopezg.com/javilopezg/yups): Repositorio principal
   para comprobación y descarga de actualizaciones y cheatsheets.
-- `YUPS_REPO_FALLBACK` (https://github.com/JaviLopezG/yups): Repositorio de
+- `yups-repo-fallback` (https://github.com/JaviLopezG/yups): Repositorio de
   respaldo en caso de caída del principal.
 - `inference-endpoint` (http://localhost:11434): Establece el endpoint en el que
   están expuestos el middleware u ollama.
 - `default-model` (qwen2.5-coder:latest): El modelo por defecto para análisis
-  rápido y propuestas de comandos.
-- `advanced-model` (gemma4:latest): El modelo que se indicará cuando se escala
+  rápido y propuestas de comandos. Si en una consulta regular el modelo avanzado
+  (`advanced-model`) ya se encuentra cargado en la memoria de Ollama (detectado
+  vía `/api/ps`), se utilizará directamente dicho modelo avanzado aprovechando
+  que no tiene latencia de carga en frío.
+- `advanced-model` (qwen3.8:latest): El modelo que se indicará cuando se escala
   para consultas complejas o preguntas en lenguaje natural.
 - `llm-enabled` (true): Indica si la asistencia de Inteligencia Artificial está
   activada (`true`) o desactivada (`false`, funcionando en modo documentación

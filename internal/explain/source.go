@@ -232,9 +232,43 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 	return exp
 }
 
-// QueryLLMPipeline executes or continues a conversation with the configured Ollama LLM
-// for an entire command pipeline, passing the full command line, composite summaries, and
-// supporting on-demand tool calls across all stages.
+// ResolveTargetModel resolves the model to use for inference:
+// 1. If an override model is given via --model, it is used directly.
+// 2. If --advanced or a comment query (# ...) is present, the advanced model is used.
+// 3. Otherwise, check Ollama's /api/ps endpoint: if the advanced model is already loaded in memory, use it.
+// 4. Otherwise, use the configured default model.
+func ResolveTargetModel(ctx context.Context, env DocEnv, isComment bool) (model string, isAdvanced bool) {
+	if env.OverrideModel != "" {
+		return env.OverrideModel, false
+	}
+	if env.UseAdvanced || isComment {
+		advModel := env.AdvancedModel
+		if advModel == "" {
+			advModel = llm.FallbackAdvancedModel
+		}
+		return advModel, true
+	}
+
+	advModel := env.AdvancedModel
+	if advModel == "" {
+		advModel = llm.FallbackAdvancedModel
+	}
+	if advModel != "" && env.LLMClient != nil {
+		psCtx, psCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer psCancel()
+		if env.LLMClient.IsModelLoaded(psCtx, advModel) {
+			return advModel, true
+		}
+	}
+
+	defModel := env.DefaultModel
+	if defModel == "" {
+		defModel = llm.FallbackDefaultModel
+	}
+	return defModel, false
+}
+
+// QueryLLMPipeline executes or continues a conversation with the configured Ollama LLM for a whole pipeline.
 func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp *PipelineExplanation, userFollowup string, statusWriter io.Writer) error {
 	if r.env.LLMClient == nil {
 		return fmt.Errorf("no LLM client configured")
@@ -243,22 +277,8 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 	exp.LLMQueried = true
 	exp.LLMEndpoint = r.env.LLMClient.BaseURL()
 
-	isAdvanced := false
-	model := ""
-	if r.env.OverrideModel != "" {
-		model = r.env.OverrideModel
-	} else if r.env.UseAdvanced || (pipeline != nil && pipeline.Comment != "") {
-		isAdvanced = true
-		model = r.env.AdvancedModel
-		if model == "" {
-			model = llm.FallbackAdvancedModel
-		}
-	} else {
-		model = r.env.DefaultModel
-		if model == "" {
-			model = llm.FallbackDefaultModel
-		}
-	}
+	isComment := pipeline != nil && pipeline.Comment != ""
+	model, isAdvanced := ResolveTargetModel(ctx, r.env, isComment)
 
 	if len(exp.Conversation) == 0 {
 		var allArgs []string

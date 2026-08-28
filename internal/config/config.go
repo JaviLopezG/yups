@@ -29,7 +29,7 @@ const (
 	DefaultYUPSRepoFallback            = "https://github.com/JaviLopezG/yups"
 	DefaultInferenceEndpoint           = "http://localhost:11434"
 	DefaultModel                       = "qwen2.5-coder:latest"
-	DefaultAdvancedModel               = "gemma4:latest"
+	DefaultAdvancedModel               = "qwen3.8:latest"
 	DefaultLLMEnabled                  = true
 	DefaultLLMTimeoutSeconds           = 60
 	DefaultToolExecutionTimeoutSeconds = 30
@@ -41,13 +41,11 @@ const (
 	FloorVersion = "v0.0.0"
 )
 
-// Config mirrors the on-disk config.toml. The TOML key names are literal:
-// YUPS_REPO and YUPS_REPO_FALLBACK were chosen by Javi to be reusable
-// beyond the update feature.
+// Config mirrors the on-disk config.toml.
 type Config struct {
 	Version                     string `toml:"version"`
-	YUPSRepo                    string `toml:"YUPS_REPO"`
-	YUPSRepoFallback            string `toml:"YUPS_REPO_FALLBACK"`
+	YUPSRepo                    string `toml:"yups-repo"`
+	YUPSRepoFallback            string `toml:"yups-repo-fallback"`
 	InferenceEndpoint           string `toml:"inference-endpoint"`
 	DefaultModel                string `toml:"default-model"`
 	AdvancedModel               string `toml:"advanced-model"`

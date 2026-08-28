@@ -6,7 +6,7 @@ import (
 
 const (
 	FallbackDefaultModel  = "qwen2.5-coder:7b"
-	FallbackAdvancedModel = "gemma3:latest"
+	FallbackAdvancedModel = "qwen3.8:latest"
 )
 
 // RecommendedDefaultModelNames lists preferred default model prefixes in priority order.
@@ -21,6 +21,8 @@ var RecommendedDefaultModelNames = []string{
 
 // RecommendedAdvancedModelNames lists preferred advanced model prefixes in priority order.
 var RecommendedAdvancedModelNames = []string{
+	"qwen3.8",
+	"qwen3",
 	"gemma4",
 	"gemma3",
 	"gemma2",

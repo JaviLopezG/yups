@@ -688,7 +688,7 @@ func writeUserConfig(t *testing.T, id, user, repoURL, version string) {
 		home = "/home/" + user
 	}
 	script := fmt.Sprintf(
-		"mkdir -p %[1]s/.yups && printf 'version = \"%[2]s\"\\nYUPS_REPO = \"%[3]s\"\\nYUPS_REPO_FALLBACK = \"http://fallback.invalid/a/b\"\\n' > %[1]s/.yups/config.toml",
+		"mkdir -p %[1]s/.yups && printf 'version = \"%[2]s\"\\nyups-repo = \"%[3]s\"\\nyups-repo-fallback = \"http://fallback.invalid/a/b\"\\n' > %[1]s/.yups/config.toml",
 		home, version, repoURL)
 	asUser := ""
 	if user != "" && user != "root" {

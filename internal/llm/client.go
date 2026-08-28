@@ -209,6 +209,76 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return models, nil
 }
 
+// psResponse matches Ollama's /api/ps JSON output.
+type psResponse struct {
+	Models []struct {
+		Name     string `json:"name"`
+		Model    string `json:"model"`
+		Size     int64  `json:"size"`
+		SizeVRAM int64  `json:"size_vram"`
+		Digest   string `json:"digest"`
+	} `json:"models"`
+}
+
+// ListRunningModels queries GET /api/ps to discover models currently loaded in memory.
+func (c *Client) ListRunningModels(ctx context.Context) ([]ModelInfo, error) {
+	url := c.baseURL + "/api/ps"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request for %s: %w", url, err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("querying Ollama ps from %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("Ollama ps returned status %d from %s: %s", resp.StatusCode, url, string(body))
+	}
+
+	var data psResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("decoding Ollama ps response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(data.Models))
+	for _, m := range data.Models {
+		name := m.Name
+		if name == "" {
+			name = m.Model
+		}
+		models = append(models, ModelInfo{
+			Name:   name,
+			Model:  m.Model,
+			Size:   m.Size,
+			Digest: m.Digest,
+		})
+	}
+	return models, nil
+}
+
+// IsModelLoaded checks whether the given model is currently loaded in Ollama's memory via /api/ps.
+func (c *Client) IsModelLoaded(ctx context.Context, targetModel string) bool {
+	if targetModel == "" {
+		return false
+	}
+	running, err := c.ListRunningModels(ctx)
+	if err != nil {
+		return false
+	}
+	cleanTarget := strings.ToLower(strings.TrimSuffix(targetModel, ":latest"))
+	for _, m := range running {
+		cleanName := strings.ToLower(strings.TrimSuffix(m.Name, ":latest"))
+		if cleanName == cleanTarget || strings.EqualFold(m.Name, targetModel) || strings.EqualFold(m.Model, targetModel) {
+			return true
+		}
+	}
+	return false
+}
+
 // Chat queries POST /api/chat with a prompt and returns the generated message.
 func (c *Client) Chat(ctx context.Context, chatReq ChatRequest) (ChatResponse, error) {
 	url := c.baseURL + "/api/chat"

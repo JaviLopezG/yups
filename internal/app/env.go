@@ -139,6 +139,8 @@ type Env struct {
 	DownloadCheatsheets func(client *http.Client, destDir string, stdout io.Writer) error
 	// CheatsheetsDir returns the directory where downloaded cheatsheets reside.
 	CheatsheetsDir func(home string) string
+	// OpenEditor opens path in the configured default text editor.
+	OpenEditor func(path string, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
 // DocEnv returns the explain.DocEnv adapter backed by this Env.
@@ -339,6 +341,7 @@ func NewOSEnv() *Env {
 		IsInstalled:         osIsInstalled,
 		DownloadCheatsheets: cheats.DownloadAll,
 		CheatsheetsDir:      config.CheatsheetsDir,
+		OpenEditor:          osOpenEditor,
 	}
 }
 
@@ -942,4 +945,49 @@ func editLineTerminal(prompt, initialText string, stdin io.Reader, stdout io.Wri
 	}
 
 	return string(buf)
+}
+
+// osOpenEditor launches the preferred text editor for path, looking at VISUAL, EDITOR,
+// or probing common system editors (nano, vim, vi, editor, micro, emacs).
+func osOpenEditor(path string, stdin io.Reader, stdout, stderr io.Writer) error {
+	editor := os.Getenv("VISUAL")
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		for _, candidate := range []string{"nano", "vim", "vi", "editor", "micro", "emacs"} {
+			if p, err := exec.LookPath(candidate); err == nil && p != "" {
+				editor = candidate
+				break
+			}
+		}
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		parts = []string{"vi"}
+	}
+	bin := parts[0]
+	args := append(parts[1:], path)
+
+	cmd := exec.Command(bin, args...)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	} else {
+		cmd.Stdin = os.Stdin
+	}
+	if stdout != nil {
+		cmd.Stdout = stdout
+	} else {
+		cmd.Stdout = os.Stdout
+	}
+	if stderr != nil {
+		cmd.Stderr = stderr
+	} else {
+		cmd.Stderr = os.Stderr
+	}
+	return cmd.Run()
 }

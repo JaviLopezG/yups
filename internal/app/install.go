@@ -127,8 +127,8 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 						fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
 
 						if env.AskPrompt != nil && (!hasQwen || !hasGemma) {
-							fmt.Fprintln(stdout, "\nRecommended models (qwen for default, gemma for advanced) are not fully available:")
-							fmt.Fprintln(stdout, "  [1] Pull recommended models (qwen2.5-coder:7b and gemma3:latest)")
+							fmt.Fprintln(stdout, "\nRecommended models (qwen2.5-coder for default, qwen3.8 for advanced) are not fully available:")
+							fmt.Fprintln(stdout, "  [1] Pull recommended models (qwen2.5-coder:7b and qwen3.8:latest)")
 							fmt.Fprintln(stdout, "  [2] Choose models from your installed list")
 							fmt.Fprintln(stdout, "  [3] Run model benchmark test (--test-models) and choose")
 							fmt.Fprintf(stdout, "  [4] Use automatic selection (%s / %s)\n", def, adv)
@@ -142,11 +142,11 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 								pullCancel()
 								def = "qwen2.5-coder:7b"
 
-								fmt.Fprintln(stdout, "Pulling gemma3:latest...")
+								fmt.Fprintln(stdout, "Pulling qwen3.8:latest...")
 								pullCtx2, pullCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
-								_ = llmClient.PullModel(pullCtx2, "gemma3:latest", stdout)
+								_ = llmClient.PullModel(pullCtx2, "qwen3.8:latest", stdout)
 								pullCancel2()
-								adv = "gemma3:latest"
+								adv = "qwen3.8:latest"
 
 							case "2":
 								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
@@ -185,6 +185,15 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
 			cheatsDir := config.CheatsheetsDir(home)
 			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+		}
+
+		fmt.Fprintf(stdout, "\nConfiguration saved to %s.\n", cfgPath)
+		if env.AskConfirmation != nil && env.AskConfirmation("Do you want to review the configuration file?", false) {
+			if env.OpenEditor != nil {
+				if err := env.OpenEditor(cfgPath, nil, stdout, stderr); err != nil {
+					fmt.Fprintf(stderr, "Could not open editor: %v\n", err)
+				}
+			}
 		}
 	}
 
