@@ -7,6 +7,7 @@ type PipelineExplanation struct {
 	Stages           []StageExplanation
 	Comment          string
 	HasMissingItems  bool
+	InvocationFlags  string
 	RawCommandLine   string
 	Conversation     []llm.Message
 	LLMQueried       bool

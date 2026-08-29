@@ -424,7 +424,7 @@ convierten a YUPS en un verdadero ayudante.
   - **cheat**: https://github.com/cheat/cheatsheets (Chris Allen Lane)
   Para mantener los tiempos de respuesta instantáneos en casos básicos, yups envía una
   solicitud ligera inicial al LLM y le proporciona las herramientas:
-  - `fetch_command_documentation`: reúne `--help`, página `man` y cheatsheets de cualquier comando.
+  - `fetch-command-documentation`: reúne `--help`, página `man` y cheatsheets de cualquier comando.
   - `command-run`: permite al LLM ejecutar de forma segura comandos de inspección del sistema
     validados contra la [lista blanca](#whitelist) (ej. `ls`, `stat`, `find`, `cat`, `grep`, etc.,
     combinables mediante cualquier operador de Bash).
@@ -639,7 +639,7 @@ lugar de intentar resolver manuales para palabras del lenguaje humano, muestra e
 prompt `#_?` con la pregunta en gris (`# ¿cómo puedo ver los puertos abiertos?`) y
 la transmite directamente al modelo avanzado del motor de inferencia con todo el
 contexto del sistema. El modelo puede entonces apoyarse en herramientas de
-inspección (`command-run`, `fetch_command_documentation`) y devolver una explicación
+inspección (`command-run`, `fetch-command-documentation`) y devolver una explicación
 didáctica junto con el comando sugerido en verde listo para ser ejecutado.
 
 #### Consulta de un script
@@ -1288,7 +1288,7 @@ acabar cualquier proceso.
   - [x] Detección de opciones desconocidas, errores sintácticos y preguntas de usuario.
 - [x] Asistencia con LLM (Ollama):
   - [x] Fallback inteligente al modelo cuando faltan flags o se formulan preguntas directas.
-  - [x] Tool calling multi-turno: herramienta `fetch_command_documentation` para lectura profunda de manuales y cheatsheets.
+  - [x] Tool calling multi-turno: herramienta `fetch-command-documentation` para lectura profunda de manuales y cheatsheets.
   - [x] Tool calling con lista blanca de comandos: herramienta `run_command` para inspección segura del sistema (validación con AST de combinadores bash).
   - [x] Escalado automático al modelo avanzado (`advanced-model`) al invocar tools o en preguntas en lenguaje natural.
 - [x] Experiencia de usuario (UX / Look & Feel):

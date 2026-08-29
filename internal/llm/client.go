@@ -78,7 +78,7 @@ func DefaultTools() []Tool {
 		{
 			Type: "function",
 			Function: ToolFunction{
-				Name:        "fetch_command_documentation",
+				Name:        "fetch-command-documentation",
 				Description: "Fetch detailed local manual page, --help output, and community cheatsheets (tldr-pages, navi, cheat.sh, cheat) for a specific command and optional subcommand.",
 				Parameters: ToolParams{
 					Type: "object",

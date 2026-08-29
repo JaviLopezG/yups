@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -152,7 +153,7 @@ func (e *Env) DocEnv() explain.DocEnv {
 	cfg := config.Defaults()
 	isInstalled := false
 	cheatsDir := ""
-	stateDirExists := false
+	configFileExists := false
 	if e.UserHomeDir != nil {
 		if home, err := e.UserHomeDir(); err == nil {
 			if e.CheatsheetsDir != nil {
@@ -161,7 +162,7 @@ func (e *Env) DocEnv() explain.DocEnv {
 				cheatsDir = config.CheatsheetsDir(home)
 			}
 			if e.PathExists != nil {
-				stateDirExists = e.PathExists(config.Dir(home))
+				configFileExists = e.PathExists(config.Path(home))
 			}
 			if e.LoadConfig != nil {
 				if loaded, err := e.LoadConfig(config.Path(home)); err == nil {
@@ -181,14 +182,14 @@ func (e *Env) DocEnv() explain.DocEnv {
 		}
 	}
 
-	isInstalled = inPath && stateDirExists
+	isInstalled = inPath && configFileExists
 	if e.IsInstalled != nil {
 		isInstalled = e.IsInstalled()
 	}
 	config.EnsureDefaults(&cfg)
 
 	var llmClient *llm.Client
-	if isInstalled && cfg.IsLLMEnabled() && cfg.InferenceEndpoint != "" {
+	if isInstalled && cfg.IsLLMEnabled() && cfg.GetInferenceEndpoint() != "" {
 		var httpClient *http.Client
 		if e.LLMHTTPClient != nil {
 			httpClient = e.LLMHTTPClient()
@@ -196,7 +197,7 @@ func (e *Env) DocEnv() explain.DocEnv {
 			httpClient = e.HTTPClient()
 		}
 		if httpClient != nil {
-			llmClient = llm.NewClient(httpClient, cfg.InferenceEndpoint)
+			llmClient = llm.NewClient(httpClient, cfg.GetInferenceEndpoint())
 		}
 	}
 
@@ -219,8 +220,8 @@ func (e *Env) DocEnv() explain.DocEnv {
 		},
 		LLMClient:            llmClient,
 		LLMEnv:               e.LLMEnv(),
-		DefaultModel:         cfg.DefaultModel,
-		AdvancedModel:        cfg.AdvancedModel,
+		DefaultModel:         cfg.GetDefaultModel(),
+		AdvancedModel:        cfg.GetAdvancedModel(),
 		IsInstalled:          isInstalled,
 		LLMEnabled:           cfg.IsLLMEnabled(),
 		LLMTimeout:           time.Duration(cfg.GetLLMTimeoutSeconds()) * time.Second,
@@ -626,23 +627,33 @@ func readSingleLine(r *bufio.Reader) (string, error) {
 }
 
 // osRunCmdTimeout executes name with args and returns its output, bounded by timeout.
+// It sets process group isolation so any child processes spawned by shell pipelines
+// are cleanly terminated on timeout.
 func osRunCmdTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil && cmd.Process.Pid > 0 {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
 	return cmd.CombinedOutput()
 }
 
-// osWhatis queries whatis (and falls back to apropos -s 1,8) for cmd.
+// osWhatis queries whatis for cmd. It rejects command names with spaces or shell characters
+// to avoid false positives.
 func osWhatis(ctx context.Context, cmd string) (string, error) {
+	if strings.ContainsAny(cmd, " \t\r\n|&;<>()`$#") {
+		return "", fmt.Errorf("invalid command name %q", cmd)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "whatis", cmd).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "whatis", "--", cmd).CombinedOutput()
 	if err != nil || len(bytes.TrimSpace(out)) == 0 {
-		out, err = exec.CommandContext(ctx, "apropos", "-s", "1,8", cmd).CombinedOutput()
-	}
-	if err != nil {
-		return "", err
+		return "", fmt.Errorf("whatis not found for %s", cmd)
 	}
 	return string(out), nil
 }
@@ -728,32 +739,80 @@ func osReadOSRelease() string {
 	return "Linux"
 }
 
-// osReadHistory reads up to maxLines from shell history file.
+var (
+	historyNumRegex = regexp.MustCompile(`^\s*\d+\s+`)
+	zshHistoryRegex = regexp.MustCompile(`^:\s*\d+:\d+;`)
+)
+
+// osReadHistory reads up to maxLines of shell history. It prioritizes live session history
+// passed via YUPS_SESSION_HISTORY before falling back to HISTFILE and ~/.bash_history.
 func osReadHistory(home string, maxLines int) []string {
-	if home == "" {
+	if maxLines <= 0 {
+		maxLines = 10
+	}
+
+	var data []byte
+	var err error
+
+	// 1. Check live session history file passed by yups shell wrapper or readline binding
+	if sessionHist := os.Getenv("YUPS_SESSION_HISTORY"); sessionHist != "" {
+		data, err = os.ReadFile(sessionHist)
+	}
+
+	// 2. Check explicit HISTFILE environment variable
+	if (err != nil || len(data) == 0) && os.Getenv("HISTFILE") != "" {
+		data, err = os.ReadFile(os.Getenv("HISTFILE"))
+	}
+
+	// 3. Check ~/.bash_history
+	if (err != nil || len(data) == 0) && home != "" {
+		data, err = os.ReadFile(filepath.Join(home, ".bash_history"))
+	}
+
+	// 4. Check ~/.zsh_history
+	if (err != nil || len(data) == 0) && home != "" {
+		data, err = os.ReadFile(filepath.Join(home, ".zsh_history"))
+	}
+
+	if err != nil || len(data) == 0 {
 		return nil
 	}
-	histPath := filepath.Join(home, ".bash_history")
-	data, err := os.ReadFile(histPath)
-	if err != nil {
-		histPath = filepath.Join(home, ".zsh_history")
-		data, err = os.ReadFile(histPath)
-	}
-	if err != nil {
-		return nil
-	}
+
 	rawLines := strings.Split(string(data), "\n")
 	var valid []string
 	for _, l := range rawLines {
 		trimmed := strings.TrimSpace(l)
-		if trimmed != "" {
-			valid = append(valid, trimmed)
+		if trimmed == "" {
+			continue
 		}
+		// Strip leading bash history line numbers e.g. "  972  ls -la"
+		trimmed = historyNumRegex.ReplaceAllString(trimmed, "")
+		// Strip zsh extended history timestamp e.g. ": 1629837264:0;ls -la"
+		trimmed = zshHistoryRegex.ReplaceAllString(trimmed, "")
+		// Skip timestamp comment lines (e.g. bash "#1629837264")
+		if strings.HasPrefix(trimmed, "#") && len(trimmed) > 1 && isNumeric(trimmed[1:]) {
+			continue
+		}
+		// Skip history command noise
+		if strings.HasPrefix(trimmed, "history") || strings.HasPrefix(trimmed, "HISTTIMEFORMAT=") {
+			continue
+		}
+		valid = append(valid, trimmed)
 	}
+
 	if len(valid) > maxLines {
 		valid = valid[len(valid)-maxLines:]
 	}
 	return valid
+}
+
+func isNumeric(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // osReadFileSnippet reads up to maxLines from path if size is under 100KB.
@@ -775,7 +834,8 @@ func osReadFileSnippet(path string, maxLines int) (string, error) {
 		lines = append(lines, scanner.Text())
 		count++
 	}
-	return strings.Join(lines, "\n"), nil
+
+	return strings.Join(lines, "\n"), scanner.Err()
 }
 
 // osListDirNames lists up to maxItems entries in dir.
@@ -814,14 +874,14 @@ func osExecShell(command string, stdout, stderr io.Writer) int {
 }
 
 // osIsInstalled reports whether yups is properly installed:
-// 1. ~/.yups state directory exists
+// 1. ~/.yups/config.toml configuration file exists
 // 2. yups executable is present in PATH
 func osIsInstalled() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
 	}
-	if !osPathExists(config.Dir(home)) {
+	if !osPathExists(config.Path(home)) {
 		return false
 	}
 	for _, dir := range osPathDirs() {

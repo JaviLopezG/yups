@@ -32,6 +32,9 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 
 	// 2. Identify if any part of the pipeline has missing items or comments requiring LLM enhancement
 	if !exp.HasMissingItems {
+		if env.Logger != nil {
+			env.Logger.LogConclusion("", "", "", "LOCAL_DOC_OK", 0)
+		}
 		return 0
 	}
 
@@ -40,14 +43,24 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 		fmt.Fprintln(stdout)
 		if !env.IsInstalled {
 			fmt.Fprintln(stdout, "Note: yups is running in basic mode because it is not installed or configured yet.")
-			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the installation process now? (estimated time ~3 minutes)", false) {
+			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the automatic installation process now? (estimated time ~1-3 minutes)", true) {
 				if env.ExecShell != nil {
+					if env.Logger != nil {
+						env.Logger.LogConclusion("", "", "", "LAUNCH_INSTALL", 0)
+					}
+					exe, err := os.Executable()
+					if err == nil {
+						return env.ExecShell(fmt.Sprintf("%q --install-yups", exe), stdout, stderr)
+					}
 					return env.ExecShell("yups --install-yups", stdout, stderr)
 				}
 			}
 			fmt.Fprintln(stdout, "Run 'yups --install-yups' to configure an Ollama LLM endpoint (e.g. http://localhost:11434).")
 		} else {
 			fmt.Fprintln(stdout, "Note: AI assistance is disabled or no LLM endpoint is configured (running in local documentation mode).")
+		}
+		if env.Logger != nil {
+			env.Logger.LogConclusion("", "", "", "LLM_DISABLED_OR_NOT_CONFIGURED", 0)
 		}
 		return 0
 	}

@@ -2,15 +2,18 @@ package explain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"yups/internal/cheats"
 	"yups/internal/llm"
+	"yups/internal/sessionlog"
 	"yups/internal/ui"
 )
 
@@ -22,6 +25,10 @@ type DocEnv struct {
 	TypeCmd       func(ctx context.Context, cmd string) (string, error)
 	StatPath      func(path string) (fs.FileInfo, error)
 	LookupInPath  func(cmd string) bool
+
+	// CLI flags and logging
+	InvocationFlags string
+	Logger          *sessionlog.SessionLogger
 
 	// LLM support
 	LLMClient            *llm.Client
@@ -70,11 +77,17 @@ func (r *Resolver) ExplainPipeline(ctx context.Context, pipeline *Pipeline) *Pip
 		if pipeline.Comment != "" {
 			res := &PipelineExplanation{
 				Comment:         pipeline.Comment,
+				InvocationFlags: r.env.InvocationFlags,
 				RawCommandLine:  "# " + pipeline.Comment,
 				HasMissingItems: true,
 			}
 			if r.env.LLMClient != nil {
 				res.LLMEndpoint = r.env.LLMClient.BaseURL()
+			}
+			if r.env.Logger != nil {
+				r.env.Logger.LogSection("LOCAL PIPELINE ANALYSIS")
+				r.env.Logger.LogInfo("Comment query: %q, raw command: %q, invocation flags: %q",
+					pipeline.Comment, res.RawCommandLine, res.InvocationFlags)
 			}
 			return res
 		}
@@ -82,7 +95,8 @@ func (r *Resolver) ExplainPipeline(ctx context.Context, pipeline *Pipeline) *Pip
 	}
 
 	result := &PipelineExplanation{
-		Comment: pipeline.Comment,
+		Comment:         pipeline.Comment,
+		InvocationFlags: r.env.InvocationFlags,
 	}
 	for _, stage := range pipeline.Stages {
 		stageExp := StageExplanation{
@@ -100,6 +114,19 @@ func (r *Resolver) ExplainPipeline(ctx context.Context, pipeline *Pipeline) *Pip
 	result.HasMissingItems = len(missingItems) > 0 || result.Comment != ""
 	if r.env.LLMClient != nil {
 		result.LLMEndpoint = r.env.LLMClient.BaseURL()
+	}
+
+	if r.env.Logger != nil {
+		r.env.Logger.LogSection("LOCAL PIPELINE ANALYSIS")
+		r.env.Logger.LogInfo("Pipeline stages: %d, comment: %q, raw command: %q, invocation flags: %q",
+			len(pipeline.Stages), pipeline.Comment, result.RawCommandLine, result.InvocationFlags)
+		for i, st := range result.Stages {
+			if st.Command != nil {
+				r.env.Logger.LogInfo("Stage %d: cmd=%q found=%t summary=%q flags=%d wrappers=%d",
+					i+1, st.Command.Name, st.Command.Found, st.Command.Summary, len(st.Command.Flags), len(st.Command.Wrappers))
+			}
+		}
+		r.env.Logger.LogInfo("Missing items detected: %t", result.HasMissingItems)
 	}
 
 	return result
@@ -239,15 +266,28 @@ func (r *Resolver) ExplainCommand(ctx context.Context, cmd *Command) *CommandExp
 // 3. Otherwise, check Ollama's /api/ps endpoint: if the advanced model is already loaded in memory, use it.
 // 4. Otherwise, use the configured default model.
 func ResolveTargetModel(ctx context.Context, env DocEnv, isComment bool) (model string, isAdvanced bool) {
+	m, adv, _ := ResolveTargetModelWithReason(ctx, env, isComment)
+	return m, adv
+}
+
+// ResolveTargetModelWithReason returns the chosen model, whether it is advanced, and the selection rationale.
+func ResolveTargetModelWithReason(ctx context.Context, env DocEnv, isComment bool) (model string, isAdvanced bool, reason string) {
 	if env.OverrideModel != "" {
-		return env.OverrideModel, false
+		return env.OverrideModel, false, fmt.Sprintf("Override model specified via --model=%s", env.OverrideModel)
 	}
-	if env.UseAdvanced || isComment {
+	if env.UseAdvanced {
 		advModel := env.AdvancedModel
 		if advModel == "" {
 			advModel = llm.FallbackAdvancedModel
 		}
-		return advModel, true
+		return advModel, true, "Explicit --advanced flag provided"
+	}
+	if isComment {
+		advModel := env.AdvancedModel
+		if advModel == "" {
+			advModel = llm.FallbackAdvancedModel
+		}
+		return advModel, true, "Natural language question (# query) routed to advanced model"
 	}
 
 	advModel := env.AdvancedModel
@@ -258,7 +298,7 @@ func ResolveTargetModel(ctx context.Context, env DocEnv, isComment bool) (model 
 		psCtx, psCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer psCancel()
 		if env.LLMClient.IsModelLoaded(psCtx, advModel) {
-			return advModel, true
+			return advModel, true, fmt.Sprintf("Advanced model %s is already loaded in Ollama memory", advModel)
 		}
 	}
 
@@ -266,7 +306,7 @@ func ResolveTargetModel(ctx context.Context, env DocEnv, isComment bool) (model 
 	if defModel == "" {
 		defModel = llm.FallbackDefaultModel
 	}
-	return defModel, false
+	return defModel, false, fmt.Sprintf("Using default model %s", defModel)
 }
 
 // QueryLLMPipeline executes or continues a conversation with the configured Ollama LLM for a whole pipeline.
@@ -279,7 +319,22 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 	exp.LLMEndpoint = r.env.LLMClient.BaseURL()
 
 	isComment := pipeline != nil && pipeline.Comment != ""
-	model, isAdvanced := ResolveTargetModel(ctx, r.env, isComment)
+	model, isAdvanced, modelReason := ResolveTargetModelWithReason(ctx, r.env, isComment)
+
+	if r.env.Logger != nil {
+		r.env.Logger.LogConfig(
+			r.env.LLMClient.BaseURL(),
+			r.env.DefaultModel,
+			r.env.AdvancedModel,
+			r.env.LLMEnabled,
+			r.env.LLMTimeout,
+			r.env.ToolExecutionTimeout,
+			r.env.MaxToolTurns,
+			r.env.MaxToolOutputBytes,
+			r.env.AdvancedMultiplier,
+		)
+		r.env.Logger.LogModelResolution(model, isAdvanced, modelReason)
+	}
 
 	if len(exp.Conversation) == 0 {
 		var allArgs []string
@@ -336,6 +391,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 
 	isTTY := r.env.IsTerminalOutput != nil && statusWriter != nil && r.env.IsTerminalOutput(statusWriter)
 	color := isTTY
+	executedTools := make(map[string]bool)
 
 	for turn := 0; turn < maxToolTurns; turn++ {
 		spinMsg := fmt.Sprintf("Querying model (%s)...", model)
@@ -344,23 +400,100 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		}
 		spinner := ui.StartSpinner(statusWriter, spinMsg, isTTY, color)
 
+		chatStart := time.Now()
 		turnCtx, turnCancel := context.WithTimeout(ctx, llmTimeout)
-		resp, err := r.env.LLMClient.Chat(turnCtx, llm.ChatRequest{
+		reqPayload := llm.ChatRequest{
 			Model:    model,
 			Messages: exp.Conversation,
 			Tools:    llm.DefaultTools(),
-		})
+		}
+		resp, err := r.env.LLMClient.Chat(turnCtx, reqPayload)
 		turnCancel()
 		spinner.Stop()
+		chatDuration := time.Since(chatStart)
+
+		if r.env.Logger != nil {
+			r.env.Logger.LogInteraction(turn, model, r.env.LLMClient.BaseURL(), reqPayload, resp, chatDuration, err)
+		}
 
 		if err != nil {
+			// Check if error was due to timeout
+			isTimeout := errors.Is(err, context.DeadlineExceeded) ||
+				strings.Contains(strings.ToLower(err.Error()), "timeout") ||
+				strings.Contains(strings.ToLower(err.Error()), "deadline")
+			if isTimeout {
+				if statusWriter != nil {
+					fmt.Fprintf(statusWriter, "\nExecution limit reached: query timed out after %v.\n", llmTimeout)
+				}
+				if r.env.Logger != nil {
+					r.env.Logger.LogLimitReached("timeout", fmt.Sprintf("timed out after %v: %v", llmTimeout, err), false)
+				}
+
+				abort := true
+				if r.env.AskConfirmation != nil {
+					abort = r.env.AskConfirmation("Do you want to abort execution?", true)
+				}
+				if r.env.Logger != nil {
+					r.env.Logger.LogLimitReached("timeout_prompt", fmt.Sprintf("abort=%t", abort), abort)
+				}
+
+				if abort {
+					if statusWriter != nil {
+						fmt.Fprintln(statusWriter, "Execution aborted.")
+					}
+					exp.LLMError = "execution aborted after timeout"
+					return nil
+				}
+
+				// User decided NOT to abort
+				if statusWriter != nil {
+					fmt.Fprintln(statusWriter, "You can stop execution at any time using Ctrl+C or Ctrl+Z.")
+				}
+
+				if !isAdvanced {
+					model = r.env.AdvancedModel
+					if model == "" {
+						model = llm.FallbackAdvancedModel
+					}
+					isAdvanced = true
+					mult := r.env.AdvancedMultiplier
+					if mult <= 0 {
+						mult = 3
+					}
+					maxToolTurns = turn + (r.env.MaxToolTurns * mult)
+					llmTimeout = llmTimeout * time.Duration(mult)
+					toolTimeout = toolTimeout * time.Duration(mult)
+					if statusWriter != nil {
+						fmt.Fprintf(statusWriter, "Switching to advanced reasoning model (%s) to continue analysis (this may take longer due to deeper reasoning)...\n", model)
+					}
+				} else {
+					llmTimeout = llmTimeout * 2
+					maxToolTurns = turn + 5
+					if statusWriter != nil {
+						fmt.Fprintf(statusWriter, "Continuing with advanced model (%s) with extended timeout (%v)...\n", model, llmTimeout)
+					}
+				}
+				continue
+			}
+
 			exp.LLMError = err.Error()
+			if r.env.Logger != nil {
+				r.env.Logger.LogConclusion("", "", "", "ERROR: "+err.Error(), 0)
+			}
 			return err
 		}
+
 		chatResp = resp
 
 		toolCalls := llm.ExtractToolCalls(chatResp.Message)
 		if len(toolCalls) == 0 {
+			break
+		}
+
+		// If the model already produced a suggested command or script in its text content,
+		// it has formulated its final answer and conclusion. Treat this as the final turn.
+		parsed := llm.ParseLLMResponse(chatResp.Message.Content)
+		if parsed.SuggestedCommand != "" || parsed.SuggestedScript != "" {
 			break
 		}
 
@@ -401,8 +534,10 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		}
 
 		for _, tc := range toolCalls {
+			key := fmt.Sprintf("%s:%v", tc.Function.Name, tc.Function.Arguments)
+			executedTools[key] = true
 			switch tc.Function.Name {
-			case "fetch_command_documentation":
+			case "fetch-command-documentation":
 				targetCmd := ""
 				targetSub := ""
 				if c, ok := tc.Function.Arguments["command"].(string); ok {
@@ -422,12 +557,18 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 						fmt.Fprintf(statusWriter, "  Gathering manual pages, --help, and cheatsheets for '%s'...\n", displayName)
 					}
 
+					docStart := time.Now()
 					doc := gatherDoc(targetCmd, targetSub)
+					docDuration := time.Since(docStart)
 					toolContent := llm.FormatToolResponse(doc)
 					exp.Conversation = append(exp.Conversation, llm.Message{
 						Role:    "tool",
 						Content: toolContent,
 					})
+
+					if r.env.Logger != nil {
+						r.env.Logger.LogToolExecution(turn, "fetch-command-documentation", tc.Function.Arguments, true, "documentation", toolContent, docDuration, nil)
+					}
 				}
 
 			case "command-run", "command_run":
@@ -442,44 +583,121 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 						if statusWriter != nil {
 							fmt.Fprintf(statusWriter, "  LLM requested command '%s' (blocked: %s)\n", cmdToRun, reason)
 						}
+						errMsg := fmt.Sprintf("Error: Command %q was rejected by whitelist: %s. Only safe inspection commands are permitted.", cmdToRun, reason)
 						exp.Conversation = append(exp.Conversation, llm.Message{
 							Role:    "tool",
-							Content: fmt.Sprintf("Error: Command %q was rejected by whitelist: %s. Only safe inspection commands are permitted.", cmdToRun, reason),
+							Content: errMsg,
 						})
+						if r.env.Logger != nil {
+							r.env.Logger.LogToolExecution(turn, "command-run", tc.Function.Arguments, false, reason, errMsg, 0, nil)
+						}
 					} else {
 						if statusWriter != nil {
 							fmt.Fprintf(statusWriter, "  LLM requested running command: '%s'...\n", cmdToRun)
 							fmt.Fprintf(statusWriter, "  Executing whitelisted command...\n")
 						}
 
-						output, err := r.execWhitelisted(ctx, cmdToRun, toolTimeout)
-						if err != nil && len(output) == 0 {
-							output = []byte(fmt.Sprintf("Error executing command: %v", err))
+						execStart := time.Now()
+						cmdTimeout := toolTimeout
+						if cmdTimeout > 15*time.Second {
+							cmdTimeout = 15 * time.Second
 						}
-						outStr := string(output)
-						if len(outStr) > maxOutputBytes {
-							outStr = outStr[:maxOutputBytes] + "\n... (truncated)"
+						output, err := r.execWhitelisted(ctx, cmdToRun, cmdTimeout)
+						execDuration := time.Since(execStart)
+
+						isTimeout := errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || (err != nil && (strings.Contains(err.Error(), "killed") || strings.Contains(err.Error(), "signal: interrupt")))
+
+						if isTimeout {
+							if statusWriter != nil {
+								fmt.Fprintf(statusWriter, "  Command execution timed out after %v (cancelled).\n", cmdTimeout)
+							}
+							outStr := fmt.Sprintf("Error: Command %q timed out after %v. Inspection commands must complete quickly. Please refine your command with limits (e.g. use maxdepth, head, or specific paths to avoid heavy scans).", cmdToRun, cmdTimeout)
+							exp.Conversation = append(exp.Conversation, llm.Message{
+								Role:    "tool",
+								Content: outStr,
+							})
+							if r.env.Logger != nil {
+								r.env.Logger.LogToolExecution(turn, "command-run", tc.Function.Arguments, false, "timeout", outStr, execDuration, err)
+							}
+						} else {
+							if err != nil && len(output) == 0 {
+								output = fmt.Appendf([]byte(""), "Error executing command: %v", err)
+							}
+							outStr := string(output)
+							if len(outStr) > maxOutputBytes {
+								outStr = outStr[:maxOutputBytes] + "\n... (truncated)"
+							}
+							exp.Conversation = append(exp.Conversation, llm.Message{
+								Role:    "tool",
+								Content: fmt.Sprintf("Command '%s' output:\n%s", cmdToRun, strings.TrimSpace(outStr)),
+							})
+
+							if r.env.Logger != nil {
+								r.env.Logger.LogToolExecution(turn, "command-run", tc.Function.Arguments, true, reason, outStr, execDuration, err)
+							}
 						}
-						exp.Conversation = append(exp.Conversation, llm.Message{
-							Role:    "tool",
-							Content: fmt.Sprintf("Command '%s' output:\n%s", cmdToRun, strings.TrimSpace(outStr)),
-						})
 					}
 				}
 			}
 		}
 
-		// If this was the last allowed tool turn, request the final conclusion from the model
+		// Check if this was the last allowed tool turn
 		if turn == maxToolTurns-1 {
-			finalCtx, finalCancel := context.WithTimeout(ctx, llmTimeout)
-			finalResp, finalErr := r.env.LLMClient.Chat(finalCtx, llm.ChatRequest{
-				Model:    model,
-				Messages: exp.Conversation,
-			})
-			finalCancel()
-			if finalErr == nil && finalResp.Message.Content != "" {
-				chatResp = finalResp
+			if statusWriter != nil {
+				fmt.Fprintf(statusWriter, "\nExecution limit reached: maximum reasoning tool rounds reached (%d turns).\n", maxToolTurns)
 			}
+			if r.env.Logger != nil {
+				r.env.Logger.LogLimitReached("max_turns", fmt.Sprintf("reached limit of %d turns", maxToolTurns), false)
+			}
+
+			abort := true
+			if r.env.AskConfirmation != nil {
+				abort = r.env.AskConfirmation("Do you want to abort execution?", true)
+			}
+			if r.env.Logger != nil {
+				r.env.Logger.LogLimitReached("max_turns_prompt", fmt.Sprintf("abort=%t", abort), abort)
+			}
+
+			if abort {
+				if statusWriter != nil {
+					fmt.Fprintln(statusWriter, "Execution aborted.")
+				}
+				break
+			}
+
+			// User decided NOT to abort
+			if statusWriter != nil {
+				fmt.Fprintln(statusWriter, "You can stop execution at any time using Ctrl+C or Ctrl+Z.")
+			}
+
+			if !isAdvanced {
+				model = r.env.AdvancedModel
+				if model == "" {
+					model = llm.FallbackAdvancedModel
+				}
+				isAdvanced = true
+				mult := r.env.AdvancedMultiplier
+				if mult <= 0 {
+					mult = 3
+				}
+				maxToolTurns = turn + 1 + (r.env.MaxToolTurns * mult)
+				llmTimeout = llmTimeout * time.Duration(mult)
+				toolTimeout = toolTimeout * time.Duration(mult)
+				if statusWriter != nil {
+					fmt.Fprintf(statusWriter, "Switching to advanced reasoning model (%s) to continue analysis (this may take longer due to deeper reasoning)...\n", model)
+				}
+			} else {
+				maxToolTurns = turn + 1 + 5
+				if statusWriter != nil {
+					fmt.Fprintf(statusWriter, "Continuing with advanced model (%s) for %d additional turns...\n", model, 5)
+				}
+			}
+
+			exp.Conversation = append(exp.Conversation, llm.Message{
+				Role:    "user",
+				Content: "Previous turns reached reasoning limit. Please synthesize all gathered documentation and command output, then provide your final explanation and suggested command.",
+			})
+			continue
 		}
 	}
 
@@ -490,6 +708,16 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		exp.SuggestedCommand = parsed.SuggestedCommand
 		exp.SuggestedScript = parsed.SuggestedScript
 		exp.LLMError = ""
+	}
+
+	if r.env.Logger != nil {
+		status := "SUCCESS"
+		if exp.LLMError != "" {
+			status = "ERROR"
+		} else if exp.LLMExplanation == "" && exp.SuggestedCommand == "" {
+			status = "INCOMPLETE"
+		}
+		r.env.Logger.LogConclusion(exp.LLMExplanation, exp.SuggestedCommand, exp.SuggestedScript, status, 0)
 	}
 
 	return nil
@@ -525,7 +753,7 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 
 func (r *Resolver) execWhitelisted(ctx context.Context, cmdStr string, toolTimeout time.Duration) ([]byte, error) {
 	if toolTimeout <= 0 {
-		toolTimeout = 30 * time.Second
+		toolTimeout = 5 * time.Second
 	}
 	if r.env.RunCmdTimeout != nil {
 		return r.env.RunCmdTimeout(ctx, toolTimeout, "bash", "-c", cmdStr)
@@ -533,6 +761,13 @@ func (r *Resolver) execWhitelisted(ctx context.Context, cmdStr string, toolTimeo
 	execCtx, cancel := context.WithTimeout(ctx, toolTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(execCtx, "bash", "-c", cmdStr)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil && cmd.Process.Pid > 0 {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
 	return cmd.CombinedOutput()
 }
 
@@ -736,14 +971,23 @@ func buildBasicSummary(exp *CommandExplanation) string {
 	}
 	var sb strings.Builder
 	if exp.AliasInfo != "" {
-		sb.WriteString("  " + exp.AliasInfo + "\n")
+		sb.WriteString("  ")
+		sb.WriteString(exp.AliasInfo)
+		sb.WriteString("\n")
 	}
 	if exp.Summary != "" {
-		sb.WriteString("  " + exp.Summary + "\n")
+		sb.WriteString("  ")
+		sb.WriteString(exp.Summary)
+		sb.WriteString("\n")
 	}
 	for _, flag := range exp.Flags {
 		if flag.Found {
-			sb.WriteString("  " + flag.Flag.Name + ": " + strings.ReplaceAll(flag.Description, "\n", " ") + "\n")
+			sb.WriteString("  ")
+			sb.WriteString(flag.Flag.Name)
+			sb.WriteString(":")
+			sb.WriteString(strings.ReplaceAll(flag.Description, "\n", " "))
+			sb.WriteString("\n")
+
 		}
 	}
 	return sb.String()
@@ -796,7 +1040,9 @@ func formatRawPipeline(p *Pipeline) string {
 			sb.WriteString(formatRawCommand(stage.Command))
 		}
 		if stage.Operator != OpNone {
-			sb.WriteString(" " + string(stage.Operator) + " ")
+			sb.WriteString(" ")
+			sb.WriteString(string(stage.Operator))
+			sb.WriteString(" ")
 		} else if i < len(p.Stages)-1 {
 			sb.WriteString(" ")
 		}
@@ -804,9 +1050,11 @@ func formatRawPipeline(p *Pipeline) string {
 	if p.Comment != "" {
 		cleanComment := strings.TrimLeft(p.Comment, "# ")
 		if sb.Len() > 0 {
-			sb.WriteString(" # " + cleanComment)
+			sb.WriteString(" # ")
+			sb.WriteString(cleanComment)
 		} else {
-			sb.WriteString("# " + cleanComment)
+			sb.WriteString("# ")
+			sb.WriteString(cleanComment)
 		}
 	}
 	return strings.TrimSpace(sb.String())
@@ -830,7 +1078,10 @@ func buildPipelineBasicSummary(exp *PipelineExplanation) string {
 			sb.WriteString(buildBasicSummary(cmdExp))
 		}
 		if stage.Operator != OpNone {
-			sb.WriteString(string(stage.Operator) + " (" + stage.OpSummary + ")\n")
+			sb.WriteString(string(stage.Operator))
+			sb.WriteString(" (")
+			sb.WriteString(stage.OpSummary)
+			sb.WriteString(")\n")
 		}
 	}
 	return strings.TrimSpace(sb.String())

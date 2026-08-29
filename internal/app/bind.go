@@ -52,7 +52,11 @@ _yups_readline_binding() {
 
     local yups_marker
     yups_marker=$(mktemp "${TMPDIR:-/tmp}/yups-exec.XXXXXX.kk" 2>/dev/null || echo "/tmp/yups-exec.$$.kk")
-    YUPS_READLINE_MARKER="$yups_marker" yups -- "$READLINE_LINE" < /dev/tty
+    local yups_hist
+    yups_hist=$(mktemp "${TMPDIR:-/tmp}/yups-hist.XXXXXX.kk" 2>/dev/null || echo "/tmp/yups-hist.$$.kk")
+    HISTTIMEFORMAT= history 25 > "$yups_hist" 2>/dev/null
+
+    YUPS_READLINE_MARKER="$yups_marker" YUPS_SESSION_HISTORY="$yups_hist" command yups -- "$READLINE_LINE" < /dev/tty
 
     # Restore previous terminal settings for Readline
     if [ -n "$old_tty_settings" ]; then
@@ -66,7 +70,17 @@ _yups_readline_binding() {
         READLINE_LINE="$orig_line"
         READLINE_POINT="$orig_point"
     fi
-    rm -f "$yups_marker"
+    rm -f "$yups_marker" "$yups_hist"
+}
+
+yups() {
+    local yups_hist
+    yups_hist=$(mktemp "${TMPDIR:-/tmp}/yups-hist.XXXXXX.kk" 2>/dev/null || echo "/tmp/yups-hist.$$.kk")
+    HISTTIMEFORMAT= history 25 > "$yups_hist" 2>/dev/null
+    YUPS_SESSION_HISTORY="$yups_hist" command yups "$@"
+    local ret=$?
+    rm -f "$yups_hist"
+    return $ret
 }
 
 %s
@@ -86,13 +100,13 @@ _yups_completion() {
         local models=""
         local cfg_file="${HOME}/.yups/config.toml"
         if [ -f "$cfg_file" ]; then
-            models=$(grep -E '^(available-models|default-model|advanced-model)' "$cfg_file" 2>/dev/null | tr -d '[],"' | sed 's/.*=//')
+            models=$(grep -E '^[[:space:]]*(available-models|default-model|advanced-model)' "$cfg_file" 2>/dev/null | tr -d '[],"' | sed 's/.*=//')
         fi
         if [ -z "$models" ] && command -v ollama >/dev/null 2>&1; then
             models=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}')
         fi
         if [ -z "$models" ]; then
-            models="qwen2.5-coder:latest qwen2.5-coder:7b qwen3.8:latest gemma3:latest codestral:latest"
+            models="qwen3-coder:latest qwen3.8:latest gemma3:latest gemma4:latest codestral:latest"
         fi
         COMPREPLY=( $(compgen -W "$models" -- "$cur") )
         return 0

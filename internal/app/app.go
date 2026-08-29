@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"yups/internal/config"
 	"yups/internal/explain"
+	"yups/internal/sessionlog"
 )
 
 // Version is the version of the binary. It is overridden at build time with
@@ -52,11 +54,57 @@ Usage:
                         every installed copy with it
 `
 
+func isSystemInstalled(env *Env) bool {
+	if env == nil {
+		return false
+	}
+	if env.IsInstalled != nil {
+		return env.IsInstalled()
+	}
+	inPath := false
+	if env.PathDirs != nil && env.LookupExecutable != nil {
+		for _, dir := range env.PathDirs() {
+			if env.LookupExecutable(dir, ProgramName) {
+				inPath = true
+				break
+			}
+		}
+	}
+	configFileExists := false
+	if env.UserHomeDir != nil && env.PathExists != nil {
+		if home, err := env.UserHomeDir(); err == nil {
+			configFileExists = env.PathExists(config.Path(home))
+		}
+	}
+	return inPath && configFileExists
+}
+
 // Dispatch parses args and runs the matching command, returning the exit
 // code for the process.
 func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
+	homeDir := ""
+	if env.UserHomeDir != nil {
+		homeDir, _ = env.UserHomeDir()
+	}
+	logger := sessionlog.New(homeDir, args)
+
+	isInstalled := isSystemInstalled(env)
+
 	if len(args) == 0 {
 		fmt.Fprintln(stdout, ColoredLogo)
+		if !isInstalled {
+			fmt.Fprintln(stdout, "Note: yups is not installed or configured yet.")
+			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the automatic installation process now? (estimated time ~1-3 minutes)", true) {
+				if logger != nil {
+					logger.LogConclusion("", "", "", "LAUNCH_INSTALL", 0)
+				}
+				return Install(env, stdout, stderr)
+			}
+			fmt.Fprintln(stdout, "Run 'yups --install-yups' at any time to install.")
+		}
+		if logger != nil {
+			logger.LogConclusion("", "", "", "LOGO", ExitOK)
+		}
 		return ExitOK
 	}
 
@@ -64,7 +112,14 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 
 	// Handle flagUpdateApply
 	if args[0] == flagUpdateApply {
-		return UpdateApply(env, args[1:], stdout, stderr)
+		if logger != nil {
+			logger.LogSection("UPDATE APPLY")
+		}
+		code := UpdateApply(env, args[1:], stdout, stderr)
+		if logger != nil {
+			logger.LogConclusion("", "", "", "UPDATE_APPLY", code)
+		}
+		return code
 	}
 
 	// Parse flags
@@ -78,25 +133,52 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			break
 		}
 		if arg == "--test-models" {
-			_, code := RunModelBenchmark(env, stdout, stderr)
+			_, code := RunModelBenchmark(env, stdout, stderr, logger)
 			return code
 		}
 		if arg == "-h" || arg == "--help" || arg == "help" {
+			if logger != nil {
+				logger.LogConclusion("", "", "", "HELP", ExitOK)
+			}
 			fmt.Fprint(stdout, helpText)
 			return ExitOK
 		}
 		if arg == "-V" || arg == "--version" || arg == "version" {
+			if logger != nil {
+				logger.LogConclusion("", "", "", "VERSION", ExitOK)
+			}
 			fmt.Fprintf(stdout, "%s %s\n", ProgramName, Version)
 			return ExitOK
 		}
 		if arg == "-i" || arg == "--install-yups" {
-			return Install(env, stdout, stderr)
+			if logger != nil {
+				logger.LogSection("INSTALL")
+			}
+			code := Install(env, stdout, stderr)
+			if logger != nil {
+				logger.LogConclusion("", "", "", "INSTALL", code)
+			}
+			return code
 		}
 		if arg == "-u" || arg == "--uninstall-yups" {
-			return Uninstall(env, stdout, stderr)
+			if logger != nil {
+				logger.LogSection("UNINSTALL")
+			}
+			code := Uninstall(env, stdout, stderr)
+			if _, err := env.UserHomeDir(); err == nil {
+				logger.LogConclusion("", "", "", "UNINSTALL", code)
+			}
+			return code
 		}
 		if arg == "--update-yups" {
-			return Update(env, stdout, stderr)
+			if logger != nil {
+				logger.LogSection("UPDATE")
+			}
+			code := Update(env, stdout, stderr)
+			if logger != nil {
+				logger.LogConclusion("", "", "", "UPDATE", code)
+			}
+			return code
 		}
 		if arg == "--advanced" {
 			useAdvanced = true
@@ -115,16 +197,26 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 				continue
 			}
 			fmt.Fprintln(stderr, "yups: --model requires a model name argument")
+			if logger != nil {
+				logger.LogConclusion("", "", "", "MISSING_MODEL_ARG", ExitUsage)
+			}
 			return ExitUsage
 		}
 		if arg == "--query" {
+			flagArgs := args[:i+1]
+			invocationFlags := strings.Join(flagArgs, " ")
 			queryArgs := args[i+1:]
 			queryText := strings.TrimSpace(strings.Join(queryArgs, " "))
 			if queryText == "" {
 				fmt.Fprintln(stderr, "yups: --query requires a question or prompt argument")
+				if logger != nil {
+					logger.LogConclusion("", "", "", "MISSING_QUERY_ARG", ExitUsage)
+				}
 				return ExitUsage
 			}
 			docEnv := env.DocEnv()
+			docEnv.InvocationFlags = invocationFlags
+			docEnv.Logger = logger
 			docEnv.UseAdvanced = true
 			if overrideModel != "" {
 				docEnv.OverrideModel = overrideModel
@@ -134,18 +226,42 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 		if strings.HasPrefix(arg, "-") {
 			fmt.Fprintf(stderr, "yups: unknown option %q\n\n", arg)
 			fmt.Fprint(stderr, helpText)
+			if logger != nil {
+				logger.LogConclusion("", "", "", "UNKNOWN_OPTION", ExitUsage)
+			}
 			return ExitUsage
 		}
 		break
 	}
 
+	flagArgs := args[:i]
+	var invocationFlags string
+	if len(flagArgs) > 0 {
+		invocationFlags = strings.Join(flagArgs, " ")
+	}
+
 	cmdArgs := args[i:]
 	if len(cmdArgs) == 0 {
 		fmt.Fprintln(stdout, ColoredLogo)
+		if !isInstalled {
+			fmt.Fprintln(stdout, "Note: yups is not installed or configured yet.")
+			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the automatic installation process now? (estimated time ~1-3 minutes)", true) {
+				if logger != nil {
+					logger.LogConclusion("", "", "", "LAUNCH_INSTALL", 0)
+				}
+				return Install(env, stdout, stderr)
+			}
+			fmt.Fprintln(stdout, "Run 'yups --install-yups' at any time to install.")
+		}
+		if logger != nil {
+			logger.LogConclusion("", "", "", "LOGO", ExitOK)
+		}
 		return ExitOK
 	}
 
 	docEnv := env.DocEnv()
+	docEnv.InvocationFlags = invocationFlags
+	docEnv.Logger = logger
 	docEnv.OverrideModel = overrideModel
 	docEnv.UseAdvanced = useAdvanced
 

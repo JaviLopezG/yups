@@ -335,8 +335,8 @@ func TestBuildChatRequestIncludesTools(t *testing.T) {
 	if len(req.Tools) < 2 {
 		t.Fatalf("expected at least 2 Tools in ChatRequest, got %d", len(req.Tools))
 	}
-	if req.Tools[0].Function.Name != "fetch_command_documentation" {
-		t.Errorf("tool 0 name = %q, want 'fetch_command_documentation'", req.Tools[0].Function.Name)
+	if req.Tools[0].Function.Name != "fetch-command-documentation" {
+		t.Errorf("tool 0 name = %q, want 'fetch-command-documentation'", req.Tools[0].Function.Name)
 	}
 	if req.Tools[1].Function.Name != "command-run" {
 		t.Errorf("tool 1 name = %q, want 'command-run'", req.Tools[1].Function.Name)
@@ -386,37 +386,37 @@ func TestExtractToolCalls(t *testing.T) {
 		ToolCalls: []ToolCall{
 			{
 				Function: ToolCallFunction{
-					Name:      "fetch_command_documentation",
+					Name:      "fetch-command-documentation",
 					Arguments: map[string]any{"command": "ls"},
 				},
 			},
 		},
 	}
 	calls1 := ExtractToolCalls(msg1)
-	if len(calls1) != 1 || calls1[0].Function.Name != "fetch_command_documentation" {
-		t.Errorf("calls1 = %+v, want 1 fetch_command_documentation call", calls1)
+	if len(calls1) != 1 || calls1[0].Function.Name != "fetch-command-documentation" {
+		t.Errorf("calls1 = %+v, want 1 fetch-command-documentation call", calls1)
 	}
 
 	// 2. XML tag fallback: <tool_call>...</tool_call>
 	msg2 := Message{
 		Role:    "assistant",
-		Content: `<tool_call>{"name": "fetch_command_documentation", "arguments": {"command": "tar", "subcommand": "create"}}</tool_call>`,
+		Content: `<tool_call>{"name": "fetch-command-documentation", "arguments": {"command": "tar", "subcommand": "create"}}</tool_call>`,
 	}
 	calls2 := ExtractToolCalls(msg2)
-	if len(calls2) != 1 || calls2[0].Function.Name != "fetch_command_documentation" {
+	if len(calls2) != 1 || calls2[0].Function.Name != "fetch-command-documentation" {
 		t.Fatalf("calls2 = %+v, want 1 call", calls2)
 	}
 	if calls2[0].Function.Arguments["command"] != "tar" {
 		t.Errorf("command = %v, want tar", calls2[0].Function.Arguments["command"])
 	}
 
-	// 3. Functional text fallback: fetch_command_documentation(command="git", subcommand="commit")
+	// 3. Functional text fallback: fetch-command-documentation(command="git", subcommand="commit")
 	msg3 := Message{
 		Role:    "assistant",
-		Content: `Let me check the documentation: fetch_command_documentation(command="git", subcommand="commit")`,
+		Content: `Let me check the documentation: fetch-command-documentation(command="git", subcommand="commit")`,
 	}
 	calls3 := ExtractToolCalls(msg3)
-	if len(calls3) != 1 || calls3[0].Function.Name != "fetch_command_documentation" {
+	if len(calls3) != 1 || calls3[0].Function.Name != "fetch-command-documentation" {
 		t.Fatalf("calls3 = %+v, want 1 call", calls3)
 	}
 	if calls3[0].Function.Arguments["command"] != "git" || calls3[0].Function.Arguments["subcommand"] != "commit" {
@@ -434,5 +434,49 @@ func TestExtractToolCalls(t *testing.T) {
 	}
 	if calls4[0].Function.Arguments["command"] != "ls -la" {
 		t.Errorf("args = %v, want ls -la", calls4[0].Function.Arguments)
+	}
+}
+
+func TestBuildChatRequestDynamicNonceXMLBoundaries(t *testing.T) {
+	sysCtx := SystemContext{
+		OSRelease: "Fedora 43",
+		CWD:       "/home/javi",
+		RecentHistory: []string{
+			"ls -javi # quiero diferenciar entre binarios y archivos de texto",
+			"yups --test-models",
+		},
+		FileSnippets: map[string]string{
+			"script.sh": "#!/bin/bash\necho test\n",
+		},
+	}
+
+	req := BuildChatRequest("qwen2.5-coder:7b", sysCtx, "grep -r pattern .", []string{"-r"}, "grep summary")
+	if len(req.Messages) != 2 {
+		t.Fatalf("len(messages) = %d, want 2", len(req.Messages))
+	}
+
+	sysMsg := req.Messages[0].Content
+	userMsg := req.Messages[1].Content
+
+	// Check that system message contains security instructions and XML tags
+	if !strings.Contains(sysMsg, "CRITICAL DATA INTEGRITY") {
+		t.Errorf("sysMsg missing CRITICAL DATA INTEGRITY instruction:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, "<system_context_") {
+		t.Errorf("sysMsg missing <system_context_ tag:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, "<recent_shell_history_") {
+		t.Errorf("sysMsg missing <recent_shell_history_ tag:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, "<history_entry>ls -javi # quiero diferenciar entre binarios y archivos de texto</history_entry>") {
+		t.Errorf("sysMsg missing history entry:\n%s", sysMsg)
+	}
+
+	// Check that user message contains XML tags
+	if !strings.Contains(userMsg, "<user_command_line_") || !strings.Contains(userMsg, "grep -r pattern .") {
+		t.Errorf("userMsg missing <user_command_line_ tag:\n%s", userMsg)
+	}
+	if !strings.Contains(userMsg, "<unknown_items_") || !strings.Contains(userMsg, "- -r") {
+		t.Errorf("userMsg missing <unknown_items_ tag:\n%s", userMsg)
 	}
 }

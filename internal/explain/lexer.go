@@ -103,6 +103,10 @@ func needsQuotes(s string) bool {
 	case "||", "&&", "|", "|&", ";", "&", ">", ">>", "<", "2>", "2>&1", "&>":
 		return false
 	}
+	// If the string itself contains shell operators or comments, it is a sub-pipeline and must not be quoted
+	if strings.ContainsAny(s, "|&;><#") {
+		return false
+	}
 	for _, r := range s {
 		if unicode.IsSpace(r) || r == '"' || r == '\'' || r == '\\' || r == '$' || r == '`' {
 			return true

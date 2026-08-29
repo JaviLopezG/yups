@@ -93,15 +93,15 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		}
 
 		if !hasOllama {
-			cfg.LLMDisabled = true
+			cfg.Inference.Disabled = true
 			fmt.Fprintln(stdout, "Note: AI assistance is disabled (llm-disabled = true). yups will operate in fast local documentation mode (manpages, --help, wrappers, cheatsheets).")
 		} else {
-			cfg.LLMDisabled = false
-			endpoint := cfg.InferenceEndpoint
+			cfg.Inference.Disabled = false
+			endpoint := cfg.GetInferenceEndpoint()
 			if env.AskPrompt != nil {
-				endpoint = env.AskPrompt("Ollama inference endpoint", cfg.InferenceEndpoint)
+				endpoint = env.AskPrompt("Ollama inference endpoint", cfg.GetInferenceEndpoint())
 			}
-			cfg.InferenceEndpoint = endpoint
+			cfg.Inference.Endpoint = endpoint
 
 			if env.HTTPClient != nil {
 				llmClient := llm.NewClient(env.HTTPClient(), endpoint)
@@ -125,7 +125,7 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 								hasGemma = true
 							}
 						}
-						cfg.AvailableModels = modelNames
+						cfg.Inference.AvailableModels = modelNames
 
 						fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
 
@@ -151,20 +151,20 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 								pullCancel2()
 								adv = "qwen3.8:latest"
 
-								cfg.AvailableModels = append(cfg.AvailableModels, "qwen2.5-coder:7b", "qwen3.8:latest")
+								cfg.Inference.AvailableModels = append(cfg.Inference.AvailableModels, "qwen2.5-coder:7b", "qwen3.8:latest")
 
 							case "2":
 								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
 							case "3":
-								RunModelBenchmark(env, stdout, stderr)
+								RunModelBenchmark(env, stdout, stderr, nil)
 								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
 							case "4", "":
 								// use automatic selection
 							}
 						}
 
-						cfg.DefaultModel = def
-						cfg.AdvancedModel = adv
+						cfg.Inference.DefaultModel = def
+						cfg.Inference.AdvancedModel = adv
 						fmt.Fprintf(stdout, "Configured models: default-model = %s, advanced-model = %s.\n", def, adv)
 					} else {
 						fmt.Fprintf(stdout, "Connected to Ollama at %s (no models found).\n", endpoint)
@@ -172,9 +172,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 							fmt.Fprintln(stdout, "Pulling qwen2.5-coder:7b...")
 							pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 							if err := llmClient.PullModel(pullCtx, "qwen2.5-coder:7b", stdout); err == nil {
-								cfg.DefaultModel = "qwen2.5-coder:7b"
-								cfg.AdvancedModel = "qwen2.5-coder:7b"
-								cfg.AvailableModels = []string{"qwen2.5-coder:7b"}
+								cfg.Inference.DefaultModel = "qwen2.5-coder:7b"
+								cfg.Inference.AdvancedModel = "qwen2.5-coder:7b"
+								cfg.Inference.AvailableModels = []string{"qwen2.5-coder:7b"}
 							}
 							pullCancel()
 						}

@@ -41,16 +41,27 @@ func FormatBasicPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions
 		return
 	}
 
-	// 1. Print the #_? logo followed by raw command line in gray
+	// 1. Print the #_? logo followed by invocation flags (in cyan) and raw command line (in gray)
+	flags := strings.TrimSpace(p.InvocationFlags)
+	cmd := strings.TrimSpace(p.RawCommandLine)
+
 	if opts.Color {
-		if p.RawCommandLine != "" {
-			fmt.Fprintf(w, "%s#_?%s %s%s%s\n", ansiOrange, ansiReset, ansiGray, p.RawCommandLine, ansiReset)
+		if flags != "" && cmd != "" {
+			fmt.Fprintf(w, "%s#_?%s %s%s%s %s%s%s\n", ansiOrange, ansiReset, ansiCyan, flags, ansiReset, ansiGray, cmd, ansiReset)
+		} else if flags != "" {
+			fmt.Fprintf(w, "%s#_?%s %s%s%s\n", ansiOrange, ansiReset, ansiCyan, flags, ansiReset)
+		} else if cmd != "" {
+			fmt.Fprintf(w, "%s#_?%s %s%s%s\n", ansiOrange, ansiReset, ansiGray, cmd, ansiReset)
 		} else {
 			fmt.Fprintln(w, ansiOrange+"#_?"+ansiReset)
 		}
 	} else {
-		if p.RawCommandLine != "" {
-			fmt.Fprintf(w, "#_? %s\n", p.RawCommandLine)
+		if flags != "" && cmd != "" {
+			fmt.Fprintf(w, "#_? %s %s\n", flags, cmd)
+		} else if flags != "" {
+			fmt.Fprintf(w, "#_? %s\n", flags)
+		} else if cmd != "" {
+			fmt.Fprintf(w, "#_? %s\n", cmd)
 		} else {
 			fmt.Fprintln(w, "#_?")
 		}

@@ -55,6 +55,7 @@ var WhitelistedCommands = map[string]bool{
 	"type":       true,
 	"alias":      true,
 	"echo":       true,
+	"cd":         true,
 }
 
 // WhitelistedWrappers defines safe wrappers that can prefix an inspection command.

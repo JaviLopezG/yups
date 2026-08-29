@@ -554,7 +554,7 @@ func TestExplainWithToolCallFetchesDocumentation(t *testing.T) {
 					ToolCalls: []llm.ToolCall{
 						{
 							Function: llm.ToolCallFunction{
-								Name:      "fetch_command_documentation",
+								Name:      "fetch-command-documentation",
 								Arguments: map[string]any{"command": "ls"},
 							},
 						},
@@ -690,7 +690,7 @@ func TestExplainCompoundPipelineWithMissingItemsQueriesEntirePipeline(t *testing
 	}
 
 	// Verify the user prompt sent to LLM contains the full pipeline
-	if !strings.Contains(capturedUserPrompt, "User command line: ls -javi && yups -hV") {
+	if !strings.Contains(capturedUserPrompt, "ls -javi && yups -hV") {
 		t.Errorf("prompt does not contain full command line: %s", capturedUserPrompt)
 	}
 
@@ -705,7 +705,7 @@ func TestExplainCompoundPipelineWithMissingItemsQueriesEntirePipeline(t *testing
 	}
 
 	// Verify tools were provided
-	if len(capturedTools) == 0 || capturedTools[0].Function.Name != "fetch_command_documentation" {
+	if len(capturedTools) == 0 || capturedTools[0].Function.Name != "fetch-command-documentation" {
 		t.Errorf("expected tools in request, got %+v", capturedTools)
 	}
 
@@ -759,7 +759,7 @@ func TestExplainPipelineWithOrAndNotFoundCommand(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 
-	if !strings.Contains(capturedUserPrompt, "User command line: ls -javi || tree") {
+	if !strings.Contains(capturedUserPrompt, "ls -javi || tree") {
 		t.Errorf("prompt does not contain full command line: %s", capturedUserPrompt)
 	}
 	if !strings.Contains(capturedUserPrompt, "Command \"tree\" was not found in system PATH") {
@@ -792,7 +792,7 @@ func TestExplainMultiTurnToolCalls(t *testing.T) {
 					ToolCalls: []llm.ToolCall{
 						{
 							Function: llm.ToolCallFunction{
-								Name:      "fetch_command_documentation",
+								Name:      "fetch-command-documentation",
 								Arguments: map[string]any{"command": "ls"},
 							},
 						},
@@ -816,7 +816,7 @@ func TestExplainMultiTurnToolCalls(t *testing.T) {
 					ToolCalls: []llm.ToolCall{
 						{
 							Function: llm.ToolCallFunction{
-								Name:      "fetch_command_documentation",
+								Name:      "fetch-command-documentation",
 								Arguments: map[string]any{"command": "yups"},
 							},
 						},
@@ -1049,6 +1049,91 @@ func TestExplainWithCommandRunToolRejectsDisallowedCommand(t *testing.T) {
 	}
 }
 
+func TestExplainWithCommandRunToolTimeout(t *testing.T) {
+	var requestCount int
+	var receivedToolMsg string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
+			return
+		}
+		requestCount++
+		var chatReq llm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+		if requestCount == 1 {
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "command-run",
+								Arguments: map[string]any{"command": "find . -type f -exec file {} +"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		for _, m := range chatReq.Messages {
+			if m.Role == "tool" {
+				receivedToolMsg = m.Content
+			}
+		}
+
+		resp := llm.ChatResponse{
+			Model: "qwen2.5-coder:7b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "Command timed out, so here is the general explanation.\nSuggested command: find . -maxdepth 2",
+			},
+			Done: true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			return "find (1) - search for files in a directory hierarchy", nil
+		},
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			if len(args) >= 2 && args[0] == "-c" {
+				// Simulate command timeout
+				return nil, context.DeadlineExceeded
+			}
+			return []byte("Usage: find [path...] [expression]"), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"find", "-unknownflag"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if requestCount != 2 {
+		t.Errorf("requestCount = %d, want 2", requestCount)
+	}
+
+	if !strings.Contains(receivedToolMsg, "timed out after") {
+		t.Errorf("expected timeout notice in tool message, got %q", receivedToolMsg)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "timed out after") {
+		t.Errorf("stdout missing timeout notice:\n%s", out)
+	}
+}
+
 func TestExplainCommentQuestionWithMultiTurnInspection(t *testing.T) {
 	var turn int
 
@@ -1147,6 +1232,101 @@ func TestExplainCommentQuestionWithMultiTurnInspection(t *testing.T) {
 	}
 }
 
+func TestExplainResponseWithSuggestionAndToolCallIsTreatedAsFinal(t *testing.T) {
+	var requestCount int
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
+			return
+		}
+		requestCount++
+
+		if requestCount == 1 {
+			// Turn 1: model returns tool call for documentation and command-run
+			resp := llm.ChatResponse{
+				Model: "qwen3-coder:latest",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "fetch-command-documentation",
+								Arguments: map[string]any{"command": "ls"},
+							},
+						},
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "command-run",
+								Arguments: map[string]any{"command": "ls -jal"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		if requestCount == 2 {
+			// Turn 2: model provides both content with Suggested command AND a tool_call
+			resp := llm.ChatResponse{
+				Model: "qwen3-coder:latest",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "The option \"-j\" is not valid for ls.\n\nSuggested command: ls -al\nExplanation: The command contains an invalid option \"-j\".",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "command-run",
+								Arguments: map[string]any{"command": "ls -al"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		t.Fatalf("unexpected turn %d: should have stopped after turn 2", requestCount)
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient: llm.NewClient(ts.Client(), ts.URL),
+		Whatis: func(ctx context.Context, cmd string) (string, error) {
+			return "ls (1) - list directory contents", nil
+		},
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			if len(args) >= 2 && args[0] == "-c" {
+				return []byte("ls: invalid option -- 'j'"), nil
+			}
+			return []byte("Usage: ls [OPTION]..."), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-jal"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if requestCount != 2 {
+		t.Errorf("requestCount = %d, want exactly 2", requestCount)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Suggested command:\n  ls -al") {
+		t.Errorf("stdout missing suggested command:\n%s", out)
+	}
+	if !strings.Contains(out, "The command contains an invalid option \"-j\"") {
+		t.Errorf("stdout missing explanation:\n%s", out)
+	}
+}
+
 func TestExplainKeepsDefaultModelOnToolCall(t *testing.T) {
 	var requestedModels []string
 
@@ -1168,7 +1348,7 @@ func TestExplainKeepsDefaultModelOnToolCall(t *testing.T) {
 					ToolCalls: []llm.ToolCall{
 						{
 							Function: llm.ToolCallFunction{
-								Name:      "fetch_command_documentation",
+								Name:      "fetch-command-documentation",
 								Arguments: map[string]any{"command": "ls"},
 							},
 						},
@@ -1280,7 +1460,7 @@ func TestExplainOverrideModelUsesSpecifiedModelWithoutEscalation(t *testing.T) {
 					ToolCalls: []llm.ToolCall{
 						{
 							Function: llm.ToolCallFunction{
-								Name:      "fetch_command_documentation",
+								Name:      "fetch-command-documentation",
 								Arguments: map[string]any{"command": "ls"},
 							},
 						},
@@ -1391,5 +1571,258 @@ func TestExplainUsesAdvancedModelIfLoadedInMemoryViaPS(t *testing.T) {
 	out := stdout.String()
 	if !strings.Contains(out, "Asking advanced LLM (qwen3.8:latest)") {
 		t.Errorf("stdout missing advanced notice when loaded in memory:\n%s", out)
+	}
+}
+
+func TestLogoFlagsFormatting(t *testing.T) {
+	tests := []struct {
+		name      string
+		flags     string
+		rawCmd    string
+		color     bool
+		wantMatch string
+	}{
+		{
+			name:      "color with flags and command",
+			flags:     "--advanced --",
+			rawCmd:    "ls -hal",
+			color:     true,
+			wantMatch: "\x1b[38;5;214m#_?\x1b[0m \x1b[1;36m--advanced --\x1b[0m \x1b[90mls -hal\x1b[0m",
+		},
+		{
+			name:      "no color with flags and command",
+			flags:     "--advanced --",
+			rawCmd:    "ls -hal",
+			color:     false,
+			wantMatch: "#_? --advanced -- ls -hal",
+		},
+		{
+			name:      "no flags with command",
+			flags:     "",
+			rawCmd:    "ls -hal",
+			color:     false,
+			wantMatch: "#_? ls -hal",
+		},
+		{
+			name:      "color no flags with command",
+			flags:     "",
+			rawCmd:    "ls -hal",
+			color:     true,
+			wantMatch: "\x1b[38;5;214m#_?\x1b[0m \x1b[90mls -hal\x1b[0m",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &PipelineExplanation{
+				InvocationFlags: tt.flags,
+				RawCommandLine:  tt.rawCmd,
+			}
+			var buf bytes.Buffer
+			FormatBasicPipeline(&buf, p, FormatOptions{Color: tt.color})
+			got := strings.TrimSpace(buf.String())
+			if !strings.Contains(got, tt.wantMatch) {
+				t.Errorf("got %q, want to contain %q", got, tt.wantMatch)
+			}
+		})
+	}
+}
+
+func TestTurnLimitReachedInformsAndAbortsOnPrompt(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			// Always return tool call to exhaust turns
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							Function: llm.ToolCallFunction{
+								Name:      "command-run",
+								Arguments: map[string]any{"command": "ls"},
+							},
+						},
+					},
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	var askedPrompt string
+	docEnv := DocEnv{
+		LLMClient:    llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel: "qwen2.5-coder:7b",
+		MaxToolTurns: 2,
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("total 0\n"), nil
+		},
+		AskConfirmation: func(prompt string, defaultYes bool) bool {
+			askedPrompt = prompt
+			return true // User chooses to abort
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "maximum reasoning tool rounds reached (2 turns)") {
+		t.Errorf("expected turn limit message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Execution aborted.") {
+		t.Errorf("expected aborted message, got:\n%s", out)
+	}
+	if askedPrompt != "Do you want to abort execution?" {
+		t.Errorf("expected confirmation prompt 'Do you want to abort execution?', got %q", askedPrompt)
+	}
+}
+
+func TestTurnLimitReachedSwitchesToAdvancedModelWhenContinuing(t *testing.T) {
+	var chatModels []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			var req llm.ChatRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			chatModels = append(chatModels, req.Model)
+
+			if len(chatModels) <= 2 {
+				// Tool call in turns 1 and 2
+				resp := llm.ChatResponse{
+					Model: req.Model,
+					Message: llm.Message{
+						Role: "assistant",
+						ToolCalls: []llm.ToolCall{
+							{
+								Function: llm.ToolCallFunction{
+									Name:      "command-run",
+									Arguments: map[string]any{"command": "ls"},
+								},
+							},
+						},
+					},
+					Done: true,
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Turn 3 (after user says no to abort): final answer with advanced model
+			resp := llm.ChatResponse{
+				Model: req.Model,
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Done after advanced switch.\nSuggested command: ls -la",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:          llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel:       "qwen2.5-coder:7b",
+		AdvancedModel:      "qwen3.8:latest",
+		MaxToolTurns:       2,
+		AdvancedMultiplier: 2,
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("total 0\n"), nil
+		},
+		AskConfirmation: func(prompt string, defaultYes bool) bool {
+			return false // User chooses NOT to abort
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "maximum reasoning tool rounds reached (2 turns)") {
+		t.Errorf("expected turn limit message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Ctrl+C or Ctrl+Z") {
+		t.Errorf("expected Ctrl+C / Ctrl+Z notice, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Switching to advanced reasoning model (qwen3.8:latest)") {
+		t.Errorf("expected switch to advanced model message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Suggested command:") || !strings.Contains(out, "ls -la") {
+		t.Errorf("expected final suggested command, got:\n%s", out)
+	}
+
+	// Verify chat models escalated from default to advanced
+	if len(chatModels) < 3 {
+		t.Fatalf("expected at least 3 chat calls, got %d (%v)", len(chatModels), chatModels)
+	}
+	if chatModels[0] != "qwen2.5-coder:7b" {
+		t.Errorf("turn 1 model = %q, want qwen2.5-coder:7b", chatModels[0])
+	}
+	if chatModels[len(chatModels)-1] != "qwen3.8:latest" {
+		t.Errorf("final turn model = %q, want qwen3.8:latest", chatModels[len(chatModels)-1])
+	}
+}
+
+func TestTimeoutReachedInformsAndAbortsOrContinues(t *testing.T) {
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			callCount++
+			if callCount == 1 {
+				// Simulate slow query causing client timeout
+				time.Sleep(100 * time.Millisecond)
+			}
+			resp := llm.ChatResponse{
+				Model: "qwen3.8:latest",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Success after retry.\nSuggested command: ls",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:          llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel:       "qwen2.5-coder:7b",
+		AdvancedModel:      "qwen3.8:latest",
+		LLMTimeout:         20 * time.Millisecond,
+		AdvancedMultiplier: 10,
+		AskConfirmation: func(prompt string, defaultYes bool) bool {
+			return false // Do not abort
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Execution limit reached: query timed out") {
+		t.Errorf("expected timeout limit message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Ctrl+C or Ctrl+Z") {
+		t.Errorf("expected Ctrl+C notice, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Switching to advanced reasoning model (qwen3.8:latest)") {
+		t.Errorf("expected switch to advanced model message, got:\n%s", out)
 	}
 }

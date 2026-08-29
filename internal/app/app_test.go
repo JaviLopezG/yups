@@ -169,7 +169,16 @@ func (f *fakeFS) env() *Env {
 			return filepath.Join(destDir, ProgramName), nil
 		},
 		PathExists: func(path string) bool {
-			return f.existingPaths[path]
+			if f.existingPaths[path] {
+				return true
+			}
+			if _, ok := f.configs[path]; ok {
+				return true
+			}
+			if path == config.Path(f.home) && f.existingPaths[config.Dir(f.home)] {
+				return true
+			}
+			return false
 		},
 		EvalSymlinks: func(path string) (string, error) {
 			return path, nil
@@ -227,7 +236,10 @@ func runDispatch(t *testing.T, env *Env, args ...string) (string, int) {
 }
 
 func TestNoArgumentsPrintsColoredMarker(t *testing.T) {
-	out, code := runDispatch(t, newFakeFS().env())
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	out, code := runDispatch(t, fs.env())
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
@@ -261,7 +273,10 @@ func TestVersionFlagPrintsNameAndVersion(t *testing.T) {
 }
 
 func TestDispatchDoubleDashAlonePrintsLogo(t *testing.T) {
-	out, code := runDispatch(t, newFakeFS().env(), "--")
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	out, code := runDispatch(t, fs.env(), "--")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
@@ -336,8 +351,10 @@ func TestDispatchUnknownFlagFallsBackToLLM(t *testing.T) {
 	fs.addExecutable("/usr/local/bin/yups")
 	fs.existingPaths[config.Dir(fs.home)] = true
 	fs.configs[config.Path(fs.home)] = config.Config{
-		InferenceEndpoint: ts.URL,
-		DefaultModel:      "qwen3-coder:latest",
+		Inference: config.InferenceConfig{
+			Endpoint:     ts.URL,
+			DefaultModel: "qwen3-coder:latest",
+		},
 	}
 
 	env := fs.env()
@@ -728,7 +745,7 @@ func TestDispatchTestModelsBenchmark(t *testing.T) {
 	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
 	env.LoadConfig = func(path string) (config.Config, error) {
 		cfg := config.Defaults()
-		cfg.InferenceEndpoint = ts.URL
+		cfg.Inference.Endpoint = ts.URL
 		return cfg, nil
 	}
 
@@ -744,9 +761,68 @@ func TestDispatchTestModelsBenchmark(t *testing.T) {
 		"MODEL BENCHMARK SUMMARY",
 		"qwen2.5-coder:7b",
 		"gemma3:latest",
+		"Response to verify acceptability:",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestDispatchTestModelsBenchmarkColoredOutput(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			resp := map[string]any{
+				"models": []map[string]any{
+					{"name": "qwen2.5-coder:7b", "size": 4500000000},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Flags explained.\nSuggested command: ls -la",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.IsTerminalOutput = func(w io.Writer) bool { return true }
+	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
+	env.LoadConfig = func(path string) (config.Config, error) {
+		cfg := config.Defaults()
+		cfg.Inference.Endpoint = ts.URL
+		return cfg, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{"--test-models"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("Dispatch(--test-models) = %d, want %d", code, ExitOK)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"\x1b[1;32m[PASSED]\x1b[0m",
+		"\x1b[1;36mqwen2.5-coder:7b\x1b[0m",
+		"Response to verify acceptability:",
+		"Suggested command:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing colored segment %q\nFull output:\n%s", want, out)
 		}
 	}
 }
@@ -776,7 +852,7 @@ func TestDispatchTestModelsBenchmarkIncludesToolCallingTime(t *testing.T) {
 						ToolCalls: []llm.ToolCall{
 							{
 								Function: llm.ToolCallFunction{
-									Name:      "fetch_command_documentation",
+									Name:      "fetch-command-documentation",
 									Arguments: map[string]any{"command": "ls"},
 								},
 							},
@@ -811,7 +887,7 @@ func TestDispatchTestModelsBenchmarkIncludesToolCallingTime(t *testing.T) {
 	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
 	env.LoadConfig = func(path string) (config.Config, error) {
 		cfg := config.Defaults()
-		cfg.InferenceEndpoint = ts.URL
+		cfg.Inference.Endpoint = ts.URL
 		return cfg, nil
 	}
 
@@ -861,7 +937,7 @@ func TestDispatchQueryFlag(t *testing.T) {
 	env.HTTPClient = func() *http.Client { return ts.Client() }
 	env.LoadConfig = func(path string) (config.Config, error) {
 		cfg := config.Defaults()
-		cfg.InferenceEndpoint = ts.URL
+		cfg.Inference.Endpoint = ts.URL
 		return cfg, nil
 	}
 
@@ -909,7 +985,7 @@ func TestDispatchNaturalLanguageQuestionDirectly(t *testing.T) {
 	env.HTTPClient = func() *http.Client { return ts.Client() }
 	env.LoadConfig = func(path string) (config.Config, error) {
 		cfg := config.Defaults()
-		cfg.InferenceEndpoint = ts.URL
+		cfg.Inference.Endpoint = ts.URL
 		return cfg, nil
 	}
 
@@ -930,5 +1006,120 @@ func TestDispatchNaturalLanguageQuestionDirectly(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout missing %q\nFull output:\n%s", want, out)
 		}
+	}
+}
+
+func TestDispatchWithFlagsAndSessionLogging(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "qwen3.8:latest",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Done.\nSuggested command: ls -hal",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.LoadConfig = func(path string) (config.Config, error) {
+		cfg := config.Defaults()
+		cfg.Inference.Endpoint = ts.URL
+		return cfg, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{"--advanced", "--", "ls", "-hal"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("Dispatch(--advanced -- ls -hal) = %d, want %d", code, ExitOK)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "#_? --advanced -- ls -hal") {
+		t.Errorf("stdout missing flags in header '#_? --advanced -- ls -hal', got:\n%s", out)
+	}
+}
+
+func TestOSReadHistory(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// 1. Test live session history via YUPS_SESSION_HISTORY
+	sessionHistFile := filepath.Join(tempDir, "session_history.kk")
+	sessionContent := `  966  ls -javi # quiero diferenciar entre binarios y archivos de texto
+  967  yups ls -javi # quiero diferenciar entre binarios y archivos de texto
+  968  yups --uninstall-yups
+  969  repos/yups/yups --install-yups
+  970  cd
+  971  find . -type f -exec file {} \; | grep -E "(ASCII text|Unicode text|empty)"
+  972  ls #marca
+  973  cat .bash_history
+  974  history
+  975  history|tail
+`
+	if err := os.WriteFile(sessionHistFile, []byte(sessionContent), 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	t.Setenv("YUPS_SESSION_HISTORY", sessionHistFile)
+
+	lines := osReadHistory(tempDir, 5)
+	if len(lines) != 5 {
+		t.Fatalf("len(lines) = %d, want 5", len(lines))
+	}
+	if lines[len(lines)-1] != "cat .bash_history" {
+		t.Errorf("last line = %q, want 'cat .bash_history'", lines[len(lines)-1])
+	}
+	if lines[len(lines)-2] != "ls #marca" {
+		t.Errorf("second to last line = %q, want 'ls #marca'", lines[len(lines)-2])
+	}
+
+	// 2. Test fallback to .bash_history when YUPS_SESSION_HISTORY is unset
+	t.Setenv("YUPS_SESSION_HISTORY", "")
+	bashHistFile := filepath.Join(tempDir, ".bash_history")
+	bashHistContent := "#1629837264\ngit status\n#1629837270\ngit diff\n"
+	if err := os.WriteFile(bashHistFile, []byte(bashHistContent), 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	fallbackLines := osReadHistory(tempDir, 10)
+	if len(fallbackLines) != 2 {
+		t.Fatalf("len(fallbackLines) = %d, want 2, got %v", len(fallbackLines), fallbackLines)
+	}
+	if fallbackLines[0] != "git status" || fallbackLines[1] != "git diff" {
+		t.Errorf("fallbackLines = %v, want ['git status', 'git diff']", fallbackLines)
+	}
+}
+
+func TestDispatchUninstalledOffersInstallation(t *testing.T) {
+	fs := newFakeFS()
+	// Clear installation state
+	fs.files = map[string]bool{}
+	fs.existingPaths = map[string]bool{}
+	env := fs.env()
+	env.AskConfirmation = func(question string, defaultVal bool) bool {
+		return false
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, nil, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("Dispatch uninstalled = %d, want %d", code, ExitOK)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Note: yups is not installed or configured yet.") {
+		t.Errorf("stdout missing uninstalled notice:\n%s", out)
+	}
+	if !strings.Contains(out, "Run 'yups --install-yups' at any time to install.") {
+		t.Errorf("stdout missing install hint:\n%s", out)
 	}
 }

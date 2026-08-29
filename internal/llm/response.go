@@ -111,8 +111,8 @@ func ExtractToolCalls(msg Message) []ToolCall {
 		}
 	}
 
-	// 2. Check for functional text call: fetch_command_documentation(command="...", subcommand="...")
-	funcRegex := regexp.MustCompile(`(?i)fetch_command_documentation\s*\(\s*command\s*=\s*["']([^"']+)["'](?:,\s*subcommand\s*=\s*["']([^"']*)["'])?\s*\)`)
+	// 2. Check for functional text call: fetch-command-documentation(command="...", subcommand="...")
+	funcRegex := regexp.MustCompile(`(?i)(?:fetch-command-documentation)\s*\(\s*command\s*=\s*["']([^"']+)["'](?:,\s*subcommand\s*=\s*["']([^"']*)["'])?\s*\)`)
 	if matches := funcRegex.FindAllStringSubmatch(raw, -1); len(matches) > 0 {
 		for _, m := range matches {
 			cmd := m[1]
@@ -126,7 +126,7 @@ func ExtractToolCalls(msg Message) []ToolCall {
 			}
 			calls = append(calls, ToolCall{
 				Function: ToolCallFunction{
-					Name:      "fetch_command_documentation",
+					Name:      "fetch-command-documentation",
 					Arguments: args,
 				},
 			})
