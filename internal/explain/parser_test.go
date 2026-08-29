@@ -108,3 +108,23 @@ func TestParseSubcommand(t *testing.T) {
 		t.Errorf("args = %v, want ['fix bug']", cmd.Args)
 	}
 }
+
+func TestFormatRawPipelineCommentNoDuplication(t *testing.T) {
+	t.Run("pure_comment", func(t *testing.T) {
+		p := Parse([]string{"#helo"})
+		raw := formatRawPipeline(p)
+		want := "# helo"
+		if raw != want {
+			t.Errorf("formatRawPipeline(#helo) = %q, want %q", raw, want)
+		}
+	})
+
+	t.Run("command_with_comment", func(t *testing.T) {
+		p := Parse([]string{"ls", ".yups", "#I", "want", "to", "ls", "recursively"})
+		raw := formatRawPipeline(p)
+		want := "ls .yups # I want to ls recursively"
+		if raw != want {
+			t.Errorf("formatRawPipeline(ls .yups #...) = %q, want %q", raw, want)
+		}
+	})
+}

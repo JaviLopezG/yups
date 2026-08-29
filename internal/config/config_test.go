@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -39,7 +40,7 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load missing file: %v", err)
 	}
-	if c != Defaults() {
+	if !reflect.DeepEqual(c, Defaults()) {
 		t.Errorf("Load missing file = %+v, want defaults %+v", c, Defaults())
 	}
 }
@@ -80,7 +81,7 @@ func TestLoadCorruptFileReturnsExplicitError(t *testing.T) {
 	if !strings.Contains(err.Error(), "corrupt") {
 		t.Errorf("error %q does not mention the file is corrupt", err)
 	}
-	if (c != Config{}) {
+	if !reflect.DeepEqual(c, Config{}) {
 		t.Errorf("corrupt load returned non-zero config %+v", c)
 	}
 }
@@ -99,6 +100,7 @@ func TestSaveThenLoadRoundtripCreatesParentDirs(t *testing.T) {
 		ToolExecutionTimeoutSeconds: DefaultToolExecutionTimeoutSeconds,
 		MaxToolTurns:                DefaultMaxToolTurns,
 		MaxToolOutputBytes:          DefaultMaxToolOutputBytes,
+		AdvancedMultiplier:          DefaultAdvancedMultiplier,
 	}
 
 	if err := Save(path, want); err != nil {
@@ -108,7 +110,7 @@ func TestSaveThenLoadRoundtripCreatesParentDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after Save: %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("roundtrip = %+v, want %+v", got, want)
 	}
 }
@@ -181,5 +183,21 @@ func TestSetVersion(t *testing.T) {
 	}
 	if SetVersion(&c, "v0.5.0") {
 		t.Error("SetVersion to same version should return false")
+	}
+}
+
+func TestAvailableModelsConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "available-models = [\"qwen2.5-coder:7b\", \"qwen3.8:latest\", \"gemma3:latest\"]\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	models := c.GetAvailableModels()
+	if len(models) != 3 || models[0] != "qwen2.5-coder:7b" || models[1] != "qwen3.8:latest" || models[2] != "gemma3:latest" {
+		t.Errorf("GetAvailableModels() = %v, want 3 models", models)
 	}
 }

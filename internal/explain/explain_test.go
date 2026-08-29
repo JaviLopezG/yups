@@ -360,6 +360,10 @@ func TestExplainInteractiveExecutionEdit(t *testing.T) {
 func TestExplainInteractiveExecutionModifications(t *testing.T) {
 	callCount := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
+			return
+		}
 		callCount++
 		var chatReq llm.ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&chatReq)
@@ -464,7 +468,7 @@ func TestExplainKnownCommandWithCommentTriggersLLM(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&chatReq)
 
 		userMsg := chatReq.Messages[len(chatReq.Messages)-1].Content
-		if !strings.Contains(userMsg, "#Quiero listar todos los subdirectorios") {
+		if !strings.Contains(userMsg, "# Quiero listar todos los subdirectorios") && !strings.Contains(userMsg, "#Quiero listar todos los subdirectorios") {
 			t.Errorf("user message did not contain comment: %q", userMsg)
 		}
 
@@ -533,6 +537,10 @@ func TestExplainWithToolCallFetchesDocumentation(t *testing.T) {
 	var receivedToolMsg string
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
+			return
+		}
 		requestCount++
 		var chatReq llm.ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&chatReq)
@@ -767,6 +775,10 @@ func TestExplainMultiTurnToolCalls(t *testing.T) {
 	var toolsProvidedInTurn2 bool
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
+			return
+		}
 		requestCount++
 		var chatReq llm.ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&chatReq)
@@ -875,6 +887,10 @@ func TestExplainWithCommandRunToolExecutesAndReturnsOutput(t *testing.T) {
 	var receivedToolMsg string
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
+			return
+		}
 		requestCount++
 		var chatReq llm.ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&chatReq)
@@ -961,6 +977,10 @@ func TestExplainWithCommandRunToolRejectsDisallowedCommand(t *testing.T) {
 	var receivedToolMsg string
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
+			return
+		}
 		requestCount++
 		var chatReq llm.ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&chatReq)
@@ -1127,10 +1147,14 @@ func TestExplainCommentQuestionWithMultiTurnInspection(t *testing.T) {
 	}
 }
 
-func TestExplainEscalatesToAdvancedModelOnToolCall(t *testing.T) {
+func TestExplainKeepsDefaultModelOnToolCall(t *testing.T) {
 	var requestedModels []string
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
+			return
+		}
 		var chatReq llm.ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&chatReq)
 		requestedModels = append(requestedModels, chatReq.Model)
@@ -1156,12 +1180,12 @@ func TestExplainEscalatesToAdvancedModelOnToolCall(t *testing.T) {
 			return
 		}
 
-		// Turn 2 with escalated model: final answer
+		// Turn 2 continues with default model: final answer
 		resp := llm.ChatResponse{
 			Model: chatReq.Model,
 			Message: llm.Message{
 				Role:    "assistant",
-				Content: "Explanation by advanced model.\nSuggested command: ls -la",
+				Content: "Explanation by default model.\nSuggested command: ls -la",
 			},
 			Done: true,
 		}
@@ -1193,13 +1217,8 @@ func TestExplainEscalatesToAdvancedModelOnToolCall(t *testing.T) {
 	if requestedModels[0] != "qwen2.5-coder:7b" {
 		t.Errorf("turn 1 model = %q, want qwen2.5-coder:7b", requestedModels[0])
 	}
-	if requestedModels[1] != "gemma3:latest" {
-		t.Errorf("turn 2 model = %q, want gemma3:latest", requestedModels[1])
-	}
-
-	out := stdout.String()
-	if !strings.Contains(out, "Escalating to advanced model (gemma3:latest)") {
-		t.Errorf("stdout missing escalation notice:\n%s", out)
+	if requestedModels[1] != "qwen2.5-coder:7b" {
+		t.Errorf("turn 2 model = %q, want qwen2.5-coder:7b", requestedModels[1])
 	}
 }
 

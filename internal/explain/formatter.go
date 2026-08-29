@@ -41,18 +41,18 @@ func FormatBasicPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions
 		return
 	}
 
-	// 1. Print the #_? logo
+	// 1. Print the #_? logo followed by raw command line in gray
 	if opts.Color {
-		fmt.Fprintln(w, ansiOrange+"#_?"+ansiReset)
-	} else {
-		fmt.Fprintln(w, "#_?")
-	}
-
-	if len(p.Stages) == 0 && p.Comment != "" {
-		if opts.Color {
-			fmt.Fprintf(w, "  %s# %s%s\n", ansiGray, p.Comment, ansiReset)
+		if p.RawCommandLine != "" {
+			fmt.Fprintf(w, "%s#_?%s %s%s%s\n", ansiOrange, ansiReset, ansiGray, p.RawCommandLine, ansiReset)
 		} else {
-			fmt.Fprintf(w, "  # %s\n", p.Comment)
+			fmt.Fprintln(w, ansiOrange+"#_?"+ansiReset)
+		}
+	} else {
+		if p.RawCommandLine != "" {
+			fmt.Fprintf(w, "#_? %s\n", p.RawCommandLine)
+		} else {
+			fmt.Fprintln(w, "#_?")
 		}
 	}
 

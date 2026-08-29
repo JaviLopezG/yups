@@ -112,9 +112,11 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 					if len(models) > 0 {
 						def, adv := llm.SelectBestModels(models)
 
+						var modelNames []string
 						hasQwen := false
 						hasGemma := false
 						for _, m := range models {
+							modelNames = append(modelNames, m.Name)
 							lower := strings.ToLower(m.Name)
 							if strings.Contains(lower, "qwen") {
 								hasQwen = true
@@ -123,6 +125,7 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 								hasGemma = true
 							}
 						}
+						cfg.AvailableModels = modelNames
 
 						fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
 
@@ -148,6 +151,8 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 								pullCancel2()
 								adv = "qwen3.8:latest"
 
+								cfg.AvailableModels = append(cfg.AvailableModels, "qwen2.5-coder:7b", "qwen3.8:latest")
+
 							case "2":
 								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
 							case "3":
@@ -169,6 +174,7 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 							if err := llmClient.PullModel(pullCtx, "qwen2.5-coder:7b", stdout); err == nil {
 								cfg.DefaultModel = "qwen2.5-coder:7b"
 								cfg.AdvancedModel = "qwen2.5-coder:7b"
+								cfg.AvailableModels = []string{"qwen2.5-coder:7b"}
 							}
 							pullCancel()
 						}
@@ -179,15 +185,18 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 			}
 		}
 
-		_ = env.SaveConfig(cfgPath, cfg)
-
 		// Download community cheatsheets
 		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
 			cheatsDir := config.CheatsheetsDir(home)
 			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
 		}
 
+		// Configure bash key binding if desired
+		ConfigureBashBindingInteractively(env, home, stdout, stderr)
+
+		_ = env.SaveConfig(cfgPath, cfg)
 		fmt.Fprintf(stdout, "\nConfiguration saved to %s.\n", cfgPath)
+
 		if env.AskConfirmation != nil && env.AskConfirmation("Do you want to review the configuration file?", false) {
 			if env.OpenEditor != nil {
 				if err := env.OpenEditor(cfgPath, nil, stdout, stderr); err != nil {

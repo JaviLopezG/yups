@@ -328,7 +328,7 @@ func TestBuildChatRequestIncludesTools(t *testing.T) {
 		CWD:       "/home/user",
 	}
 
-	req := BuildChatRequest("qwen2.5-coder:latest", sysCtx, "tar -czf archive.tar.gz dir", []string{"-czf"}, "tar summary")
+	req := BuildChatRequest("qwen3-coder:latest", sysCtx, "tar -czf archive.tar.gz dir", []string{"-czf"}, "tar summary")
 	if len(req.Messages) != 2 {
 		t.Fatalf("len(messages) = %d, want 2", len(req.Messages))
 	}

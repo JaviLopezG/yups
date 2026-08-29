@@ -242,6 +242,7 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 		} else if applied > 0 {
 			fmt.Fprintf(stdout, "Applied %d migration(s).\n", applied)
 		}
+		EnsureBashBindingUpdated(env, home, stdout, stderr)
 	}
 
 	if len(blocked) == 0 {

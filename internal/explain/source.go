@@ -36,6 +36,7 @@ type DocEnv struct {
 	ToolExecutionTimeout time.Duration
 	MaxToolTurns         int
 	MaxToolOutputBytes   int
+	AdvancedMultiplier   int
 	IsTerminalOutput     func(w io.Writer) bool
 	AskConfirmation      func(prompt string, defaultYes bool) bool
 	AskPrompt            func(prompt, defaultValue string) string
@@ -313,9 +314,24 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 	if llmTimeout <= 0 {
 		llmTimeout = 60 * time.Second
 	}
+	toolTimeout := r.env.ToolExecutionTimeout
+	if toolTimeout <= 0 {
+		toolTimeout = 30 * time.Second
+	}
 	maxOutputBytes := r.env.MaxToolOutputBytes
 	if maxOutputBytes <= 0 {
 		maxOutputBytes = 4096
+	}
+
+	// Advanced model applies multiplier to all limits
+	if isAdvanced {
+		mult := r.env.AdvancedMultiplier
+		if mult <= 0 {
+			mult = 3
+		}
+		maxToolTurns *= mult
+		llmTimeout *= time.Duration(mult)
+		toolTimeout *= time.Duration(mult)
 	}
 
 	isTTY := r.env.IsTerminalOutput != nil && statusWriter != nil && r.env.IsTerminalOutput(statusWriter)
@@ -346,21 +362,6 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		toolCalls := llm.ExtractToolCalls(chatResp.Message)
 		if len(toolCalls) == 0 {
 			break
-		}
-
-		// Escalate to advanced model on tool call if no override model is set
-		if r.env.OverrideModel == "" && !isAdvanced {
-			advModel := r.env.AdvancedModel
-			if advModel == "" {
-				advModel = llm.FallbackAdvancedModel
-			}
-			if advModel != model {
-				if statusWriter != nil {
-					fmt.Fprintf(statusWriter, "  Escalating to advanced model (%s) for detailed analysis...\n", advModel)
-				}
-				model = advModel
-				isAdvanced = true
-			}
 		}
 
 		exp.Conversation = append(exp.Conversation, chatResp.Message)
@@ -451,7 +452,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 							fmt.Fprintf(statusWriter, "  Executing whitelisted command...\n")
 						}
 
-						output, err := r.execWhitelisted(ctx, cmdToRun)
+						output, err := r.execWhitelisted(ctx, cmdToRun, toolTimeout)
 						if err != nil && len(output) == 0 {
 							output = []byte(fmt.Sprintf("Error executing command: %v", err))
 						}
@@ -522,8 +523,7 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 	return err
 }
 
-func (r *Resolver) execWhitelisted(ctx context.Context, cmdStr string) ([]byte, error) {
-	toolTimeout := r.env.ToolExecutionTimeout
+func (r *Resolver) execWhitelisted(ctx context.Context, cmdStr string, toolTimeout time.Duration) ([]byte, error) {
 	if toolTimeout <= 0 {
 		toolTimeout = 30 * time.Second
 	}
@@ -768,15 +768,7 @@ func formatRawCommand(cmd *Command) string {
 	for _, r := range cmd.Redirects {
 		parts = append(parts, r.Op, r.Target)
 	}
-	res := strings.Join(parts, " ")
-	if cmd.Comment != "" {
-		if res != "" {
-			res += " #" + cmd.Comment
-		} else {
-			res = "#" + cmd.Comment
-		}
-	}
-	return res
+	return strings.Join(parts, " ")
 }
 
 func appendFlagsRaw(parts []string, flags []Flag) []string {
@@ -810,10 +802,11 @@ func formatRawPipeline(p *Pipeline) string {
 		}
 	}
 	if p.Comment != "" {
+		cleanComment := strings.TrimLeft(p.Comment, "# ")
 		if sb.Len() > 0 {
-			sb.WriteString(" #" + p.Comment)
+			sb.WriteString(" # " + cleanComment)
 		} else {
-			sb.WriteString("#" + p.Comment)
+			sb.WriteString("# " + cleanComment)
 		}
 	}
 	return strings.TrimSpace(sb.String())

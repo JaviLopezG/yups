@@ -133,6 +133,9 @@ var KnownSubcommandTools = map[string]bool{
 	"yarn":       true,
 	"composer":   true,
 	"dnf":        true,
+	"yum":        true,
+	"pip":        true,
+	"pip3":       true,
 	"pacman":     true,
 	"zypper":     true,
 }

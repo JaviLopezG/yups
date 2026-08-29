@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"yups/internal/llm"
@@ -80,6 +81,9 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 		switch cleanChoice {
 		case "y", "yes", "":
 			if env.ExecShell != nil {
+				if marker := os.Getenv("YUPS_READLINE_MARKER"); marker != "" {
+					_ = os.WriteFile(marker, []byte("executed\n"), 0o600)
+				}
 				fmt.Fprintf(stdout, "\nExecuting: %s\n", currentCmd)
 				return env.ExecShell(currentCmd, stdout, stderr)
 			}

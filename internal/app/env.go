@@ -141,6 +141,10 @@ type Env struct {
 	CheatsheetsDir func(home string) string
 	// OpenEditor opens path in the configured default text editor.
 	OpenEditor func(path string, stdin io.Reader, stdout, stderr io.Writer) error
+	// ReadFile reads the full content of the file at path.
+	ReadFile func(path string) ([]byte, error)
+	// WriteFile writes data to path with perm permissions.
+	WriteFile func(path string, data []byte, perm fs.FileMode) error
 }
 
 // DocEnv returns the explain.DocEnv adapter backed by this Env.
@@ -223,6 +227,7 @@ func (e *Env) DocEnv() explain.DocEnv {
 		ToolExecutionTimeout: time.Duration(cfg.GetToolExecutionTimeoutSeconds()) * time.Second,
 		MaxToolTurns:         cfg.GetMaxToolTurns(),
 		MaxToolOutputBytes:   cfg.GetMaxToolOutputBytes(),
+		AdvancedMultiplier:   cfg.GetAdvancedMultiplier(),
 		IsTerminalOutput:     e.IsTerminalOutput,
 		AskConfirmation:      e.AskConfirmation,
 		AskPrompt:            e.AskPrompt,
@@ -342,6 +347,8 @@ func NewOSEnv() *Env {
 		DownloadCheatsheets: cheats.DownloadAll,
 		CheatsheetsDir:      config.CheatsheetsDir,
 		OpenEditor:          osOpenEditor,
+		ReadFile:            os.ReadFile,
+		WriteFile:           os.WriteFile,
 	}
 }
 
@@ -551,6 +558,13 @@ func osPathExists(path string) bool {
 // bufio.Reader per question would silently swallow whatever the first
 // reader buffered beyond the first answer.
 var stdinReader = sync.OnceValue(func() *bufio.Reader {
+	// If os.Stdin is not a terminal (e.g. running under bash bind -x without redirection),
+	// attempt to open /dev/tty for interactive user queries.
+	if !osIsTerminalOutput(os.Stdin) {
+		if tty, err := os.Open("/dev/tty"); err == nil {
+			return bufio.NewReader(tty)
+		}
+	}
 	return bufio.NewReader(os.Stdin)
 })
 
@@ -571,7 +585,7 @@ func osAskConfirmation(prompt string, defaultYes bool) bool {
 		} else {
 			fmt.Printf("%s %s ", prompt, hint)
 		}
-		line, err := reader.ReadString('\n')
+		line, err := readSingleLine(reader)
 		switch answer := strings.ToLower(strings.TrimSpace(line)); {
 		case answer == "":
 			return defaultYes
@@ -586,6 +600,29 @@ func osAskConfirmation(prompt string, defaultYes bool) bool {
 		fmt.Println("Please answer y or n.")
 	}
 	return defaultYes
+}
+
+func readSingleLine(r *bufio.Reader) (string, error) {
+	var buf []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			if len(buf) > 0 {
+				return string(buf), nil
+			}
+			return "", err
+		}
+		if b == '\n' || b == '\r' {
+			if b == '\r' {
+				if next, err := r.Peek(1); err == nil && len(next) > 0 && next[0] == '\n' {
+					_, _ = r.ReadByte()
+				}
+			}
+			break
+		}
+		buf = append(buf, b)
+	}
+	return string(buf), nil
 }
 
 // osRunCmdTimeout executes name with args and returns its output, bounded by timeout.
@@ -664,7 +701,7 @@ func osAskPrompt(prompt, defaultValue string) string {
 		}
 	}
 	reader := stdinReader()
-	line, err := reader.ReadString('\n')
+	line, err := readSingleLine(reader)
 	if err != nil {
 		return defaultValue
 	}
@@ -810,7 +847,7 @@ func editLineTerminal(prompt, initialText string, stdin io.Reader, stdout io.Wri
 			fmt.Fprintf(stdout, "%s [%s]: ", prompt, initialText)
 		}
 		reader := stdinReader()
-		line, err := reader.ReadString('\n')
+		line, err := readSingleLine(reader)
 		if err != nil {
 			return initialText
 		}

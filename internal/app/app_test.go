@@ -50,6 +50,7 @@ type fakeFS struct {
 	stateLast      map[string]string // state file path -> last applied version
 	corruptState   map[string]bool   // state paths that fail to parse
 	existingPaths  map[string]bool   // paths reported as existing
+	fileContents   map[string]string // path -> file string contents
 	askScript      []bool            // scripted AskConfirmation answers
 	askedQuestions []string          // every question with its default hint
 }
@@ -73,6 +74,7 @@ func newFakeFS() *fakeFS {
 		stateLast:     map[string]string{},
 		corruptState:  map[string]bool{},
 		existingPaths: map[string]bool{},
+		fileContents:  map[string]string{},
 	}
 }
 
@@ -203,6 +205,17 @@ func (f *fakeFS) env() *Env {
 		IsTerminalOutput: func(w io.Writer) bool {
 			return false
 		},
+		ReadFile: func(path string) ([]byte, error) {
+			if content, ok := f.fileContents[path]; ok {
+				return []byte(content), nil
+			}
+			return nil, os.ErrNotExist
+		},
+		WriteFile: func(path string, data []byte, perm fs.FileMode) error {
+			f.fileContents[path] = string(data)
+			f.existingPaths[path] = true
+			return nil
+		},
 	}
 }
 
@@ -307,7 +320,7 @@ func TestDispatchUnknownFlagFallsBackToLLM(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/chat" {
 			resp := llm.ChatResponse{
-				Model: "qwen2.5-coder:latest",
+				Model: "qwen3-coder:latest",
 				Message: llm.Message{
 					Role:    "assistant",
 					Content: "Flag -javi does not exist for ls.\nSuggested command: ls -la",
@@ -324,7 +337,7 @@ func TestDispatchUnknownFlagFallsBackToLLM(t *testing.T) {
 	fs.existingPaths[config.Dir(fs.home)] = true
 	fs.configs[config.Path(fs.home)] = config.Config{
 		InferenceEndpoint: ts.URL,
-		DefaultModel:      "qwen2.5-coder:latest",
+		DefaultModel:      "qwen3-coder:latest",
 	}
 
 	env := fs.env()

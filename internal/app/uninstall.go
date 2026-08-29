@@ -89,6 +89,12 @@ func Uninstall(env *Env, stdout, stderr io.Writer) int {
 		}
 	}
 
+	if home, err := env.UserHomeDir(); err == nil {
+		if RemoveBashBinding(env, home) {
+			fmt.Fprintf(stdout, "Removed YUPS shell integration from %s.\n", filepath.Join(home, ".bashrc"))
+		}
+	}
+
 	askToDeleteStateDir(env, stdout)
 	return exitCode
 }
@@ -120,9 +126,11 @@ func askToDeleteStateDir(env *Env, stdout io.Writer) {
 				for _, m := range matches {
 					if env.PathExists(m) {
 						dirs = append(dirs, m)
+						RemoveBashBinding(env, filepath.Dir(m))
 					}
 				}
 			}
+			RemoveBashBinding(env, "/root")
 			for _, dir := range dedupeDirs(dirs) {
 				if err := env.RemoveAll(dir); err != nil {
 					fmt.Fprintf(stdout, "Could not delete %s: %v.\n", dir, err)

@@ -35,6 +35,7 @@ const (
 	DefaultToolExecutionTimeoutSeconds = 30
 	DefaultMaxToolTurns                = 10
 	DefaultMaxToolOutputBytes          = 4096
+	DefaultAdvancedMultiplier          = 3
 	// FloorVersion is the placeholder recorded when no version has ever
 	// been registered yet. Any real release tag compares strictly newer,
 	// so the first update bump starts from here.
@@ -43,17 +44,19 @@ const (
 
 // Config mirrors the on-disk config.toml.
 type Config struct {
-	Version                     string `toml:"version"`
-	YUPSRepo                    string `toml:"yups-repo"`
-	YUPSRepoFallback            string `toml:"yups-repo-fallback"`
-	InferenceEndpoint           string `toml:"inference-endpoint"`
-	DefaultModel                string `toml:"default-model"`
-	AdvancedModel               string `toml:"advanced-model"`
-	LLMDisabled                 bool   `toml:"llm-disabled,omitempty"`
-	LLMTimeoutSeconds           int    `toml:"llm-timeout-seconds,omitempty"`
-	ToolExecutionTimeoutSeconds int    `toml:"tool-execution-timeout-seconds,omitempty"`
-	MaxToolTurns                int    `toml:"max-tool-turns,omitempty"`
-	MaxToolOutputBytes          int    `toml:"max-tool-output-bytes,omitempty"`
+	Version                     string   `toml:"version"`
+	YUPSRepo                    string   `toml:"yups-repo"`
+	YUPSRepoFallback            string   `toml:"yups-repo-fallback"`
+	InferenceEndpoint           string   `toml:"inference-endpoint"`
+	DefaultModel                string   `toml:"default-model"`
+	AdvancedModel               string   `toml:"advanced-model"`
+	AvailableModels             []string `toml:"available-models,omitempty"`
+	LLMDisabled                 bool     `toml:"llm-disabled,omitempty"`
+	LLMTimeoutSeconds           int      `toml:"llm-timeout-seconds,omitempty"`
+	ToolExecutionTimeoutSeconds int      `toml:"tool-execution-timeout-seconds,omitempty"`
+	MaxToolTurns                int      `toml:"max-tool-turns,omitempty"`
+	MaxToolOutputBytes          int      `toml:"max-tool-output-bytes,omitempty"`
+	AdvancedMultiplier          int      `toml:"advanced-multiplier,omitempty"`
 }
 
 // IsLLMEnabled reports whether AI inference is enabled.
@@ -93,6 +96,41 @@ func (c Config) GetMaxToolOutputBytes() int {
 	return c.MaxToolOutputBytes
 }
 
+// GetAdvancedMultiplier returns the timeout and turns multiplier for the advanced model.
+func (c Config) GetAdvancedMultiplier() int {
+	if c.AdvancedMultiplier <= 0 {
+		return DefaultAdvancedMultiplier
+	}
+	return c.AdvancedMultiplier
+}
+
+// GetAvailableModels returns the configured models list or default fallbacks.
+func (c Config) GetAvailableModels() []string {
+	if len(c.AvailableModels) > 0 {
+		return c.AvailableModels
+	}
+	models := []string{DefaultModel, DefaultAdvancedModel}
+	if c.DefaultModel != "" && c.DefaultModel != DefaultModel {
+		models = append(models, c.DefaultModel)
+	}
+	if c.AdvancedModel != "" && c.AdvancedModel != DefaultAdvancedModel {
+		models = append(models, c.AdvancedModel)
+	}
+	return dedupeStrings(models)
+}
+
+func dedupeStrings(items []string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, it := range items {
+		if it != "" && !seen[it] {
+			seen[it] = true
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 // Dir returns the yups state directory under the given home directory.
 func Dir(home string) string {
 	return filepath.Join(home, ".yups")
@@ -106,6 +144,16 @@ func Path(home string) string {
 // CheatsheetsDir returns the directory where downloaded cheatsheets live.
 func CheatsheetsDir(home string) string {
 	return filepath.Join(Dir(home), "cheatsheets")
+}
+
+// ShellDir returns the directory where shell integration scripts live.
+func ShellDir(home string) string {
+	return filepath.Join(Dir(home), "shell")
+}
+
+// ShellScriptPath returns the path to the bash integration script.
+func ShellScriptPath(home string) string {
+	return filepath.Join(ShellDir(home), "yups.bash")
 }
 
 // Defaults returns the configuration used when nothing has been stored
@@ -124,6 +172,7 @@ func Defaults() Config {
 		ToolExecutionTimeoutSeconds: DefaultToolExecutionTimeoutSeconds,
 		MaxToolTurns:                DefaultMaxToolTurns,
 		MaxToolOutputBytes:          DefaultMaxToolOutputBytes,
+		AdvancedMultiplier:          DefaultAdvancedMultiplier,
 	}
 }
 
@@ -159,6 +208,9 @@ func EnsureDefaults(c *Config) {
 	}
 	if c.MaxToolOutputBytes <= 0 {
 		c.MaxToolOutputBytes = DefaultMaxToolOutputBytes
+	}
+	if c.AdvancedMultiplier <= 0 {
+		c.AdvancedMultiplier = DefaultAdvancedMultiplier
 	}
 }
 

@@ -1248,7 +1248,7 @@ valores por defecto/recomendados.
   respaldo en caso de caída del principal.
 - `inference-endpoint` (http://localhost:11434): Establece el endpoint en el que
   están expuestos el middleware u ollama.
-- `default-model` (qwen2.5-coder:latest): El modelo por defecto para análisis
+- `default-model` (qwen3-coder:latest): El modelo por defecto para análisis
   rápido y propuestas de comandos. Si en una consulta regular el modelo avanzado
   (`advanced-model`) ya se encuentra cargado en la memoria de Ollama (detectado
   vía `/api/ps`), se utilizará directamente dicho modelo avanzado aprovechando
@@ -1297,7 +1297,7 @@ acabar cualquier proceso.
   - [x] Menú interactivo de ejecución (`[y/n/e/m]` Yes/no/edit/modifications) con edición inline de la línea propuesta.
   - [x] Comportamiento adaptativo cuando no está instalado (sugerencia de instalación con tiempo estimado de ~3 minutos).
   - [x] Flags `--query`, `--advanced`, `--model` y benchmark de modelos `--test-models`.
-  - [ ] Configurar un bind (si el usuario quiere) en el proceso de instalación que lanzará `"yups -- " + $READLINE_LINE` de lo que haya en ese momento en la línea de comandos y al acabar si no se ha ejecutado ninguna recomendación de yups, dejará en la línea de comandos el mismo comando que estaba.
+  - [x] Configurar un bind (si el usuario quiere) en el proceso de instalación que lanzará `"yups -- " + $READLINE_LINE` de lo que haya en ese momento en la línea de comandos y al acabar si no se ha ejecutado ninguna recomendación de yups, dejará en la línea de comandos el mismo comando que estaba.
   - [ ] Autocomplete de los flags en bash para facilitar el uso de yups.
 
 #### Criterios de aceptación
