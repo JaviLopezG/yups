@@ -1,10 +1,12 @@
 # yups
 
-`yups` prints the `#_?` marker in ANSI 256-colour 214 and manages its own
-installation.
+`yups` explains shell commands, prints the `#_?` marker in ANSI 256-colour 214,
+and manages its own installation.
 
 ```bash
 $ yups                # prints #_? in colour 214
+$ yups -- ls -al /var/cache/man/
+$ yups -- "ls -l || ps aux"
 $ yups --help         # help with the options available so far
 $ yups --install-yups
 $ yups --uninstall-yups
@@ -12,6 +14,26 @@ $ yups --update-yups
 ```
 
 ## Commands
+
+- `-- <command...>` (or `yups <command...>`): explains a shell command line.
+  It tokenizes simple or compound pipelines (connected by `||`, `&&`, `;`, `|`,
+  `|&`, `&`), unpacks clustered flags (`-al` -> `-a`, `-l`), identifies
+  wrappers (`sudo`, `time`...), inspects positional arguments on the filesystem,
+  and fetches documentation prioritizing `<command> --help` before falling back
+  to `man` and `whatis`.
+  Local basic documentation is displayed immediately. When a command or flag is
+  not found locally, or when the command line includes a comment (`#...`),
+  it announces the query and connects to the configured Ollama inference
+  endpoint via direct HTTP. Shell comments are interpreted as user goals or
+  questions, allowing the LLM to explain discrepancies and suggest optimal
+  commands along with low-cost system context (OS distribution, working directory
+  structure, referenced file snippets, and recent shell history).
+  If the LLM suggests a command, `yups` prompts for action:
+  `[Yes/no/edit/modifications]` (`y` executes immediately in subshell, `n` aborts,
+  `e` enables interactive inline editing with cursor navigation, `m` sends
+  feedback/followup to the LLM in a multi-turn conversation).
+  If Ollama is unreachable, `yups` reports the connection error and, if unconfigured,
+  suggests running `yups --install-yups`.
 
 - `--help`: shows the help.
 
@@ -34,8 +56,11 @@ $ yups --update-yups
      `sudoers`, `wheel` or `admin`—, or passwordless sudo rights) it suggests
      repeating the previous command with `sudo !!`; otherwise it reports that
      the installation is not possible.
-  5. If everything is fine, the executable is copied into that directory, and
-     `~/.yups/config.toml` is initialized if not present.
+  5. If everything is fine, the executable is copied into that directory, prompts
+     for the Ollama inference endpoint (`http://localhost:11434` by default),
+     automatically probes `/api/tags` to discover and configure models,
+     initializes `~/.yups/config.toml`, and downloads community cheatsheets
+     (`tldr-pages`, `navi`, `cheat.sh`, `cheat`) into `~/.yups/cheatsheets/`.
 
 - `--uninstall-yups`:
 
@@ -87,8 +112,10 @@ Where does yups look, and what does it consider an administrator?
 | Administrator groups         | `sudo`, `sudoer`, `sudoers` (Debian family), `wheel` (Fedora/RHEL/Arch/openSUSE), `admin` (historic Ubuntu, macOS) | The default administrator group of the mainstream distros.                                                                                                                |
 | Administrator probe fallback | `sudo -n true` succeeds                                                                                            | Covers NOPASSWD sudoers and root on single-user systems where no group matches.                                                                                           |
 | Write-permission probe       | Create + remove a temporary `.kk` file in the directory                                                            | More reliable than access(2) with ACLs, read-only mounts or sticky bits.                                                                                                  |
-| Config file                  | `~/.yups/config.toml`: `version`, `YUPS_REPO`, `YUPS_REPO_FALLBACK`                                                | `version` records the installed version; initialized during `--install-yups`; a corrupt file is an explicit error instead of silent defaults.                              |
-| Self-update sources          | Primary `YUPS_REPO` (Forgejo), fallback `YUPS_REPO_FALLBACK` (GitHub)                                              | Forgejo is the canonical source of truth; GitHub only rescues outages.                                                                                                    |
+| Config file                  | `~/.yups/config.toml`: `version`, `yups-repo`, `yups-repo-fallback`, `[inference]` (`endpoint`, `default-model`, `advanced-model`, `available-models`, `disabled`), `[limits]` (`llm-timeout-seconds`, `tool-execution-timeout-seconds`, `max-tool-turns`, `max-tool-output-bytes`, `advanced-multiplier`) | `version` records the installed version; organized in sections with backward-compatibility for older flat configs; a corrupt file is an explicit error instead of silent defaults. |
+| Execution logs               | `~/.yups/logs/`: `sessions.log` (summary index) and `session-<timestamp>-<pid>.log` (full execution and Ollama exchanges) | Records step-by-step resolution decisions and raw request/response payloads for debugging and auditing. |
+| Inference endpoint           | Default: `http://localhost:11434` (Ollama HTTP API)                                                                | Queried directly via HTTP without third-party libraries; models discovered via `/api/tags` with smart code-model prioritization.                                           |
+| Self-update sources          | Primary `yups-repo` (Forgejo), fallback `yups-repo-fallback` (GitHub)                                              | Forgejo is the canonical source of truth; GitHub only rescues outages.                                                                                                    |
 | Binary swap                  | Copy to temp `.kk` file in the target dir, chmod 0755, rename                                                      | Same-directory rename is atomic and can never fail with EXDEV.                                                                                                            |
 | Multi-location anomaly       | First occurrence in `PATH` (matching `which`); informs user of duplicates                                         | Operates consistently with the binary the user would execute from shell. Duplicates are left untouched.                                                                    |
 | Uninstall questions          | Defaults: uninstall for all users, keep configuration (`~/.yups`)                                                  | Non-destructive defaults; prompted deletion allows single-user or all-users cleanup for administrators.                                                                   |
@@ -189,3 +216,13 @@ What a self-hosted worker needs (labels, docker daemon, security model) is
 documented in
 [configuration/forgejo-runner.md](configuration/forgejo-runner.md); other
 environment-specific knowledge lives next to it.
+
+## Acknowledgments & Data Sources
+
+`yups` integrates community-driven command documentation and cheatsheets to give users and local LLMs fast, offline, and accurate contextual assistance. We gratefully acknowledge and credit the creators and communities behind these indispensable resources:
+
+- **[tldr-pages](https://github.com/tldr-pages/tldr)**: Collaborative cheatsheets for console commands.
+- **[navi cheatsheets](https://github.com/denisidoro/cheats)** by Denis Isidoro and contributors.
+- **[cheat.sheets](https://github.com/chubin/cheat.sheets)** by Igor Chubin and the cheat.sh community.
+- **[cheatsheets](https://github.com/cheat/cheatsheets)** by Chris Allen Lane and the cheat community.
+

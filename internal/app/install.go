@@ -1,11 +1,15 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"yups/internal/config"
+	"yups/internal/llm"
 )
 
 // Install implements `yups --install-yups`:
@@ -82,7 +86,124 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		if cfg.Version == config.FloorVersion || cfg.Version == "" {
 			cfg.Version = Version
 		}
+
+		hasOllama := true
+		if env.AskConfirmation != nil {
+			hasOllama = env.AskConfirmation("Do you have an Ollama instance available for AI assistance?", true)
+		}
+
+		if !hasOllama {
+			cfg.Inference.Disabled = true
+			fmt.Fprintln(stdout, "Note: AI assistance is disabled (llm-disabled = true). yups will operate in fast local documentation mode (manpages, --help, wrappers, cheatsheets).")
+		} else {
+			cfg.Inference.Disabled = false
+			endpoint := cfg.GetInferenceEndpoint()
+			if env.AskPrompt != nil {
+				endpoint = env.AskPrompt("Ollama inference endpoint", cfg.GetInferenceEndpoint())
+			}
+			cfg.Inference.Endpoint = endpoint
+
+			if env.HTTPClient != nil {
+				llmClient := llm.NewClient(env.HTTPClient(), endpoint)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				models, err := llmClient.ListModels(ctx)
+				cancel()
+				if err == nil {
+					if len(models) > 0 {
+						def, adv := llm.SelectBestModels(models)
+
+						var modelNames []string
+						hasQwen := false
+						hasGemma := false
+						for _, m := range models {
+							modelNames = append(modelNames, m.Name)
+							lower := strings.ToLower(m.Name)
+							if strings.Contains(lower, "qwen") {
+								hasQwen = true
+							}
+							if strings.Contains(lower, "gemma") {
+								hasGemma = true
+							}
+						}
+						cfg.Inference.AvailableModels = modelNames
+
+						fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
+
+						if env.AskPrompt != nil && (!hasQwen || !hasGemma) {
+							fmt.Fprintln(stdout, "\nRecommended models (qwen2.5-coder for default, qwen3.8 for advanced) are not fully available:")
+							fmt.Fprintln(stdout, "  [1] Pull recommended models (qwen2.5-coder:7b and qwen3.8:latest)")
+							fmt.Fprintln(stdout, "  [2] Choose models from your installed list")
+							fmt.Fprintln(stdout, "  [3] Run model benchmark test (--test-models) and choose")
+							fmt.Fprintf(stdout, "  [4] Use automatic selection (%s / %s)\n", def, adv)
+
+							choice := strings.TrimSpace(env.AskPrompt("Model setup choice [1/2/3/4]", "4"))
+							switch choice {
+							case "1":
+								fmt.Fprintln(stdout, "Pulling qwen2.5-coder:7b...")
+								pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+								_ = llmClient.PullModel(pullCtx, "qwen2.5-coder:7b", stdout)
+								pullCancel()
+								def = "qwen2.5-coder:7b"
+
+								fmt.Fprintln(stdout, "Pulling qwen3.8:latest...")
+								pullCtx2, pullCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
+								_ = llmClient.PullModel(pullCtx2, "qwen3.8:latest", stdout)
+								pullCancel2()
+								adv = "qwen3.8:latest"
+
+								cfg.Inference.AvailableModels = append(cfg.Inference.AvailableModels, "qwen2.5-coder:7b", "qwen3.8:latest")
+
+							case "2":
+								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
+							case "3":
+								RunModelBenchmark(env, stdout, stderr, nil)
+								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
+							case "4", "":
+								// use automatic selection
+							}
+						}
+
+						cfg.Inference.DefaultModel = def
+						cfg.Inference.AdvancedModel = adv
+						fmt.Fprintf(stdout, "Configured models: default-model = %s, advanced-model = %s.\n", def, adv)
+					} else {
+						fmt.Fprintf(stdout, "Connected to Ollama at %s (no models found).\n", endpoint)
+						if env.AskConfirmation != nil && env.AskConfirmation("Would you like to pull the recommended qwen2.5-coder:7b model now?", true) {
+							fmt.Fprintln(stdout, "Pulling qwen2.5-coder:7b...")
+							pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+							if err := llmClient.PullModel(pullCtx, "qwen2.5-coder:7b", stdout); err == nil {
+								cfg.Inference.DefaultModel = "qwen2.5-coder:7b"
+								cfg.Inference.AdvancedModel = "qwen2.5-coder:7b"
+								cfg.Inference.AvailableModels = []string{"qwen2.5-coder:7b"}
+							}
+							pullCancel()
+						}
+					}
+				} else {
+					fmt.Fprintf(stdout, "Ollama is not reachable at %s; yups will operate in basic mode until Ollama is available.\n", endpoint)
+				}
+			}
+		}
+
+		// Download community cheatsheets
+		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
+			cheatsDir := config.CheatsheetsDir(home)
+			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+		}
+
+		// Configure bash key binding if desired
+		ConfigureBashBindingInteractively(env, home, stdout, stderr)
+
 		_ = env.SaveConfig(cfgPath, cfg)
+		fmt.Fprintf(stdout, "\nConfiguration saved to %s.\n", cfgPath)
+
+		if env.AskConfirmation != nil && env.AskConfirmation("Do you want to review the configuration file?", false) {
+			if env.OpenEditor != nil {
+				if err := env.OpenEditor(cfgPath, nil, stdout, stderr); err != nil {
+					fmt.Fprintf(stderr, "Could not open editor: %v\n", err)
+				}
+			}
+		}
 	}
 
 	fmt.Fprintf(stdout, "%s installed in %s.\n", ProgramName, destPath)

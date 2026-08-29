@@ -67,6 +67,12 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	cmp := semver.Compare(release.Tag, Version)
 	if cmp == 0 {
 		fmt.Fprintf(stdout, "%s %s is up to date (latest release: %s).\n", ProgramName, Version, release.Tag)
+		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
+			if home, err := env.UserHomeDir(); err == nil {
+				cheatsDir := config.CheatsheetsDir(home)
+				_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+			}
+		}
 		return ExitOK
 	}
 	if cmp < 0 {
@@ -225,6 +231,10 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 	}
 
 	if homeErr == nil {
+		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
+			cheatsDir := config.CheatsheetsDir(home)
+			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+		}
 		applied, err := RunMigrations(env, home, Version)
 		if err != nil {
 			fmt.Fprintf(stdout, "Warning: migration failed after updating: %v.\n", err)
@@ -232,6 +242,7 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 		} else if applied > 0 {
 			fmt.Fprintf(stdout, "Applied %d migration(s).\n", applied)
 		}
+		EnsureBashBindingUpdated(env, home, stdout, stderr)
 	}
 
 	if len(blocked) == 0 {

@@ -3,10 +3,15 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
+
+	"yups/internal/config"
+	"yups/internal/explain"
+	"yups/internal/sessionlog"
 )
 
 // Version is the version of the binary. It is overridden at build time with
@@ -35,6 +40,11 @@ const helpText = `yups - prints the ` + Logo + ` logo and manages its own instal
 
 Usage:
   yups                  Print the logo (` + Logo + `) in ANSI colour 214
+  yups -- <command...>  Explain the given command line, flags, and operators
+  yups <command...>     Explain the given command line
+  yups --model <tag>    Use a specific Ollama model for inference
+  yups --advanced       Use the advanced reasoning model directly
+  yups --test-models    Run latency benchmark test on all installed models
   yups --help           Show this help text
   yups --version        Show the yups version
   yups --install-yups   Install the yups executable into the first directory
@@ -44,34 +54,218 @@ Usage:
                         every installed copy with it
 `
 
+func isSystemInstalled(env *Env) bool {
+	if env == nil {
+		return false
+	}
+	if env.IsInstalled != nil {
+		return env.IsInstalled()
+	}
+	inPath := false
+	if env.PathDirs != nil && env.LookupExecutable != nil {
+		for _, dir := range env.PathDirs() {
+			if env.LookupExecutable(dir, ProgramName) {
+				inPath = true
+				break
+			}
+		}
+	}
+	configFileExists := false
+	if env.UserHomeDir != nil && env.PathExists != nil {
+		if home, err := env.UserHomeDir(); err == nil {
+			configFileExists = env.PathExists(config.Path(home))
+		}
+	}
+	return inPath && configFileExists
+}
+
 // Dispatch parses args and runs the matching command, returning the exit
 // code for the process.
 func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
+	homeDir := ""
+	if env.UserHomeDir != nil {
+		homeDir, _ = env.UserHomeDir()
+	}
+	logger := sessionlog.New(homeDir, args)
+
+	isInstalled := isSystemInstalled(env)
+
 	if len(args) == 0 {
 		fmt.Fprintln(stdout, ColoredLogo)
+		if !isInstalled {
+			fmt.Fprintln(stdout, "Note: yups is not installed or configured yet.")
+			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the automatic installation process now? (estimated time ~1-3 minutes)", true) {
+				if logger != nil {
+					logger.LogConclusion("", "", "", "LAUNCH_INSTALL", 0)
+				}
+				return Install(env, stdout, stderr)
+			}
+			fmt.Fprintln(stdout, "Run 'yups --install-yups' at any time to install.")
+		}
+		if logger != nil {
+			logger.LogConclusion("", "", "", "LOGO", ExitOK)
+		}
 		return ExitOK
 	}
 
-	switch args[0] {
-	case "-h", "--help", "help":
-		fmt.Fprint(stdout, helpText)
-		return ExitOK
-	case "-V", "--version", "version":
-		fmt.Fprintf(stdout, "%s %s\n", ProgramName, Version)
-		return ExitOK
-	case "-i", "--install-yups":
-		return Install(env, stdout, stderr)
-	case "-u", "--uninstall-yups":
-		return Uninstall(env, stdout, stderr)
-	case "--update-yups":
-		return Update(env, stdout, stderr)
-	case flagUpdateApply:
-		return UpdateApply(env, args[1:], stdout, stderr)
-	default:
-		fmt.Fprintf(stderr, "yups: unknown option %q\n\n", args[0])
-		fmt.Fprint(stderr, helpText)
-		return ExitUsage
+	color := env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout)
+
+	// Handle flagUpdateApply
+	if args[0] == flagUpdateApply {
+		if logger != nil {
+			logger.LogSection("UPDATE APPLY")
+		}
+		code := UpdateApply(env, args[1:], stdout, stderr)
+		if logger != nil {
+			logger.LogConclusion("", "", "", "UPDATE_APPLY", code)
+		}
+		return code
 	}
+
+	// Parse flags
+	var overrideModel string
+	var useAdvanced bool
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		if arg == "--" {
+			i++
+			break
+		}
+		if arg == "--test-models" {
+			_, code := RunModelBenchmark(env, stdout, stderr, logger)
+			return code
+		}
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			if logger != nil {
+				logger.LogConclusion("", "", "", "HELP", ExitOK)
+			}
+			fmt.Fprint(stdout, helpText)
+			return ExitOK
+		}
+		if arg == "-V" || arg == "--version" || arg == "version" {
+			if logger != nil {
+				logger.LogConclusion("", "", "", "VERSION", ExitOK)
+			}
+			fmt.Fprintf(stdout, "%s %s\n", ProgramName, Version)
+			return ExitOK
+		}
+		if arg == "-i" || arg == "--install-yups" {
+			if logger != nil {
+				logger.LogSection("INSTALL")
+			}
+			code := Install(env, stdout, stderr)
+			if logger != nil {
+				logger.LogConclusion("", "", "", "INSTALL", code)
+			}
+			return code
+		}
+		if arg == "-u" || arg == "--uninstall-yups" {
+			if logger != nil {
+				logger.LogSection("UNINSTALL")
+			}
+			code := Uninstall(env, stdout, stderr)
+			if _, err := env.UserHomeDir(); err == nil {
+				logger.LogConclusion("", "", "", "UNINSTALL", code)
+			}
+			return code
+		}
+		if arg == "--update-yups" {
+			if logger != nil {
+				logger.LogSection("UPDATE")
+			}
+			code := Update(env, stdout, stderr)
+			if logger != nil {
+				logger.LogConclusion("", "", "", "UPDATE", code)
+			}
+			return code
+		}
+		if arg == "--advanced" {
+			useAdvanced = true
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--model=") {
+			overrideModel = strings.TrimPrefix(arg, "--model=")
+			i++
+			continue
+		}
+		if arg == "--model" {
+			if i+1 < len(args) {
+				overrideModel = args[i+1]
+				i += 2
+				continue
+			}
+			fmt.Fprintln(stderr, "yups: --model requires a model name argument")
+			if logger != nil {
+				logger.LogConclusion("", "", "", "MISSING_MODEL_ARG", ExitUsage)
+			}
+			return ExitUsage
+		}
+		if arg == "--query" {
+			flagArgs := args[:i+1]
+			invocationFlags := strings.Join(flagArgs, " ")
+			queryArgs := args[i+1:]
+			queryText := strings.TrimSpace(strings.Join(queryArgs, " "))
+			if queryText == "" {
+				fmt.Fprintln(stderr, "yups: --query requires a question or prompt argument")
+				if logger != nil {
+					logger.LogConclusion("", "", "", "MISSING_QUERY_ARG", ExitUsage)
+				}
+				return ExitUsage
+			}
+			docEnv := env.DocEnv()
+			docEnv.InvocationFlags = invocationFlags
+			docEnv.Logger = logger
+			docEnv.UseAdvanced = true
+			if overrideModel != "" {
+				docEnv.OverrideModel = overrideModel
+			}
+			return explain.Explain(context.Background(), docEnv, []string{"# " + queryText}, stdout, stderr, color)
+		}
+		if strings.HasPrefix(arg, "-") {
+			fmt.Fprintf(stderr, "yups: unknown option %q\n\n", arg)
+			fmt.Fprint(stderr, helpText)
+			if logger != nil {
+				logger.LogConclusion("", "", "", "UNKNOWN_OPTION", ExitUsage)
+			}
+			return ExitUsage
+		}
+		break
+	}
+
+	flagArgs := args[:i]
+	var invocationFlags string
+	if len(flagArgs) > 0 {
+		invocationFlags = strings.Join(flagArgs, " ")
+	}
+
+	cmdArgs := args[i:]
+	if len(cmdArgs) == 0 {
+		fmt.Fprintln(stdout, ColoredLogo)
+		if !isInstalled {
+			fmt.Fprintln(stdout, "Note: yups is not installed or configured yet.")
+			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the automatic installation process now? (estimated time ~1-3 minutes)", true) {
+				if logger != nil {
+					logger.LogConclusion("", "", "", "LAUNCH_INSTALL", 0)
+				}
+				return Install(env, stdout, stderr)
+			}
+			fmt.Fprintln(stdout, "Run 'yups --install-yups' at any time to install.")
+		}
+		if logger != nil {
+			logger.LogConclusion("", "", "", "LOGO", ExitOK)
+		}
+		return ExitOK
+	}
+
+	docEnv := env.DocEnv()
+	docEnv.InvocationFlags = invocationFlags
+	docEnv.Logger = logger
+	docEnv.OverrideModel = overrideModel
+	docEnv.UseAdvanced = useAdvanced
+
+	return explain.Explain(context.Background(), docEnv, cmdArgs, stdout, stderr, color)
 }
 
 // findInDirs returns the directories from dirs that contain an executable

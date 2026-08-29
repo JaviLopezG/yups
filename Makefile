@@ -13,13 +13,13 @@ PRETTIFY := ./scripts/pretty-tests.sh
 SHELL       := /bin/bash
 .SHELLFLAGS := -o pipefail -c
 
-.PHONY: build test test-unit vet lint test-integration clean
+.PHONY: build vet lint test test-unit test-integration clean
 
-build:
-	go build -o $(BINARY) .
+build: 
+	@go build -o $(BINARY) .
 
-vet:
-	go vet ./...
+vet: 
+	@go vet ./...
 
 # Aggregated linter. Skipped with a warning when it is not installed:
 #   go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest

@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,7 +21,10 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"yups/internal/cheats"
 	"yups/internal/config"
+	"yups/internal/explain"
+	"yups/internal/llm"
 	"yups/internal/update"
 )
 
@@ -71,6 +76,8 @@ type Env struct {
 	// HTTPClient returns the client used for release queries and asset
 	// downloads.
 	HTTPClient func() *http.Client
+	// LLMHTTPClient returns the client used for LLM inference calls.
+	LLMHTTPClient func() *http.Client
 	// StageBinary extracts a downloaded release archive into a fresh
 	// temporary staging directory, self-validates the extracted binary
 	// (--version must report the expected tag) and returns the path of
@@ -100,6 +107,186 @@ type Env struct {
 	// containers) or exhausted. It echoes the question so transcripts
 	// stay readable.
 	AskConfirmation func(prompt string, defaultYes bool) bool
+	// AskPrompt prompts the user for text input with a default hint.
+	AskPrompt func(prompt, defaultValue string) string
+	// AskEditPrompt allows inline editing with a pre-filled editable string on terminals.
+	AskEditPrompt func(prompt, initialValue string) string
+
+	// RunCmdTimeout runs name with args, bounded by the given timeout.
+	RunCmdTimeout func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error)
+	// Whatis queries whatis / apropos for cmd.
+	Whatis func(ctx context.Context, cmd string) (string, error)
+	// ManPage fetches the cat-rendered manual page for cmd.
+	ManPage func(ctx context.Context, cmd string) (string, error)
+	// TypeCmd inspects the shell type (alias, builtin) for cmd.
+	TypeCmd func(ctx context.Context, cmd string) (string, error)
+	// Stat returns file info for path.
+	Stat func(path string) (fs.FileInfo, error)
+	// IsTerminalOutput reports whether w is an interactive terminal.
+	IsTerminalOutput func(w io.Writer) bool
+
+	// Environment context gathering for LLM inference
+	ReadOSRelease   func() string
+	ReadHistory     func(home string, maxLines int) []string
+	ReadFileSnippet func(path string, maxLines int) (string, error)
+	ListDirNames    func(dir string, maxItems int) []string
+	Getwd           func() (string, error)
+
+	// ExecShell executes a command line in bash.
+	ExecShell func(command string, stdout, stderr io.Writer) int
+	// IsInstalled reports whether yups is installed on the system.
+	IsInstalled func() bool
+	// DownloadCheatsheets downloads community cheatsheets to destDir.
+	DownloadCheatsheets func(client *http.Client, destDir string, stdout io.Writer) error
+	// CheatsheetsDir returns the directory where downloaded cheatsheets reside.
+	CheatsheetsDir func(home string) string
+	// OpenEditor opens path in the configured default text editor.
+	OpenEditor func(path string, stdin io.Reader, stdout, stderr io.Writer) error
+	// ReadFile reads the full content of the file at path.
+	ReadFile func(path string) ([]byte, error)
+	// WriteFile writes data to path with perm permissions.
+	WriteFile func(path string, data []byte, perm fs.FileMode) error
+}
+
+// DocEnv returns the explain.DocEnv adapter backed by this Env.
+func (e *Env) DocEnv() explain.DocEnv {
+	cfg := config.Defaults()
+	isInstalled := false
+	cheatsDir := ""
+	configFileExists := false
+	if e.UserHomeDir != nil {
+		if home, err := e.UserHomeDir(); err == nil {
+			if e.CheatsheetsDir != nil {
+				cheatsDir = e.CheatsheetsDir(home)
+			} else {
+				cheatsDir = config.CheatsheetsDir(home)
+			}
+			if e.PathExists != nil {
+				configFileExists = e.PathExists(config.Path(home))
+			}
+			if e.LoadConfig != nil {
+				if loaded, err := e.LoadConfig(config.Path(home)); err == nil {
+					cfg = loaded
+				}
+			}
+		}
+	}
+
+	inPath := false
+	if e.PathDirs != nil && e.LookupExecutable != nil {
+		for _, dir := range e.PathDirs() {
+			if e.LookupExecutable(dir, ProgramName) {
+				inPath = true
+				break
+			}
+		}
+	}
+
+	isInstalled = inPath && configFileExists
+	if e.IsInstalled != nil {
+		isInstalled = e.IsInstalled()
+	}
+	config.EnsureDefaults(&cfg)
+
+	var llmClient *llm.Client
+	if isInstalled && cfg.IsLLMEnabled() && cfg.GetInferenceEndpoint() != "" {
+		var httpClient *http.Client
+		if e.LLMHTTPClient != nil {
+			httpClient = e.LLMHTTPClient()
+		} else if e.HTTPClient != nil {
+			httpClient = e.HTTPClient()
+		}
+		if httpClient != nil {
+			llmClient = llm.NewClient(httpClient, cfg.GetInferenceEndpoint())
+		}
+	}
+
+	return explain.DocEnv{
+		RunCmdTimeout: e.RunCmdTimeout,
+		Whatis:        e.Whatis,
+		ManPage:       e.ManPage,
+		TypeCmd:       e.TypeCmd,
+		StatPath:      e.Stat,
+		LookupInPath: func(cmd string) bool {
+			if e.PathDirs == nil || e.LookupExecutable == nil {
+				return false
+			}
+			for _, dir := range e.PathDirs() {
+				if e.LookupExecutable(dir, cmd) {
+					return true
+				}
+			}
+			return false
+		},
+		LLMClient:            llmClient,
+		LLMEnv:               e.LLMEnv(),
+		DefaultModel:         cfg.GetDefaultModel(),
+		AdvancedModel:        cfg.GetAdvancedModel(),
+		IsInstalled:          isInstalled,
+		LLMEnabled:           cfg.IsLLMEnabled(),
+		LLMTimeout:           time.Duration(cfg.GetLLMTimeoutSeconds()) * time.Second,
+		ToolExecutionTimeout: time.Duration(cfg.GetToolExecutionTimeoutSeconds()) * time.Second,
+		MaxToolTurns:         cfg.GetMaxToolTurns(),
+		MaxToolOutputBytes:   cfg.GetMaxToolOutputBytes(),
+		AdvancedMultiplier:   cfg.GetAdvancedMultiplier(),
+		IsTerminalOutput:     e.IsTerminalOutput,
+		AskConfirmation:      e.AskConfirmation,
+		AskPrompt:            e.AskPrompt,
+		AskEditPrompt:        e.AskEditPrompt,
+		ExecShell:            e.ExecShell,
+		CheatsheetsDir:       cheatsDir,
+	}
+}
+
+// LLMEnv returns the llm.LLMEnv adapter backed by this Env.
+func (e *Env) LLMEnv() llm.LLMEnv {
+	return &envLLMAdapter{env: e}
+}
+
+type envLLMAdapter struct {
+	env *Env
+}
+
+func (a *envLLMAdapter) UserHomeDir() (string, error) {
+	if a.env.UserHomeDir == nil {
+		return "", errors.New("no user home dir")
+	}
+	return a.env.UserHomeDir()
+}
+
+func (a *envLLMAdapter) Getwd() (string, error) {
+	if a.env.Getwd == nil {
+		return os.Getwd()
+	}
+	return a.env.Getwd()
+}
+
+func (a *envLLMAdapter) ReadOSRelease() string {
+	if a.env.ReadOSRelease == nil {
+		return ""
+	}
+	return a.env.ReadOSRelease()
+}
+
+func (a *envLLMAdapter) ReadHistory(home string, maxLines int) []string {
+	if a.env.ReadHistory == nil {
+		return nil
+	}
+	return a.env.ReadHistory(home, maxLines)
+}
+
+func (a *envLLMAdapter) ReadFileSnippet(path string, maxLines int) (string, error) {
+	if a.env.ReadFileSnippet == nil {
+		return "", errors.New("cannot read snippet")
+	}
+	return a.env.ReadFileSnippet(path, maxLines)
+}
+
+func (a *envLLMAdapter) ListDirNames(dir string, maxItems int) []string {
+	if a.env.ListDirNames == nil {
+		return nil
+	}
+	return a.env.ListDirNames(dir, maxItems)
 }
 
 // Run parses args and executes the matching command against the real
@@ -112,6 +299,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 // downloads; the timeout keeps a stalled mirror from hanging the user's
 // terminal forever.
 var releaseHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+// llmHTTPClient is the client used for LLM inference calls, which can
+// take longer during model prompt evaluations.
+var llmHTTPClient = &http.Client{Timeout: 90 * time.Second}
 
 // NewOSEnv returns an Env backed by the real operating system.
 func NewOSEnv() *Env {
@@ -131,6 +322,7 @@ func NewOSEnv() *Env {
 		LoadUpdateState:     osLoadUpdateState,
 		SaveUpdateState:     osSaveUpdateState,
 		HTTPClient:          func() *http.Client { return releaseHTTPClient },
+		LLMHTTPClient:       func() *http.Client { return llmHTTPClient },
 		StageBinary:         osStageBinary,
 		RemoveAll:           os.RemoveAll,
 		ExecSelf:            osExecSelf,
@@ -138,6 +330,26 @@ func NewOSEnv() *Env {
 		PathExists:          osPathExists,
 		EvalSymlinks:        filepath.EvalSymlinks,
 		AskConfirmation:     osAskConfirmation,
+		AskPrompt:           osAskPrompt,
+		AskEditPrompt:       osAskEditPrompt,
+		RunCmdTimeout:       osRunCmdTimeout,
+		Whatis:              osWhatis,
+		ManPage:             osManPage,
+		TypeCmd:             osTypeCmd,
+		Stat:                os.Stat,
+		IsTerminalOutput:    osIsTerminalOutput,
+		ReadOSRelease:       osReadOSRelease,
+		ReadHistory:         osReadHistory,
+		ReadFileSnippet:     osReadFileSnippet,
+		ListDirNames:        osListDirNames,
+		Getwd:               os.Getwd,
+		ExecShell:           osExecShell,
+		IsInstalled:         osIsInstalled,
+		DownloadCheatsheets: cheats.DownloadAll,
+		CheatsheetsDir:      config.CheatsheetsDir,
+		OpenEditor:          osOpenEditor,
+		ReadFile:            os.ReadFile,
+		WriteFile:           os.WriteFile,
 	}
 }
 
@@ -347,6 +559,13 @@ func osPathExists(path string) bool {
 // bufio.Reader per question would silently swallow whatever the first
 // reader buffered beyond the first answer.
 var stdinReader = sync.OnceValue(func() *bufio.Reader {
+	// If os.Stdin is not a terminal (e.g. running under bash bind -x without redirection),
+	// attempt to open /dev/tty for interactive user queries.
+	if !osIsTerminalOutput(os.Stdin) {
+		if tty, err := os.Open("/dev/tty"); err == nil {
+			return bufio.NewReader(tty)
+		}
+	}
 	return bufio.NewReader(os.Stdin)
 })
 
@@ -360,9 +579,14 @@ func osAskConfirmation(prompt string, defaultYes bool) bool {
 	}
 
 	reader := stdinReader()
+	isTerm := osIsTerminalOutput(os.Stdout)
 	for attempt := 0; attempt < 3; attempt++ {
-		fmt.Printf("%s %s ", prompt, hint)
-		line, err := reader.ReadString('\n')
+		if isTerm {
+			fmt.Printf("\x1b[38;5;214m%s\x1b[0m %s ", prompt, hint)
+		} else {
+			fmt.Printf("%s %s ", prompt, hint)
+		}
+		line, err := readSingleLine(reader)
 		switch answer := strings.ToLower(strings.TrimSpace(line)); {
 		case answer == "":
 			return defaultYes
@@ -377,4 +601,490 @@ func osAskConfirmation(prompt string, defaultYes bool) bool {
 		fmt.Println("Please answer y or n.")
 	}
 	return defaultYes
+}
+
+func readSingleLine(r *bufio.Reader) (string, error) {
+	var buf []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			if len(buf) > 0 {
+				return string(buf), nil
+			}
+			return "", err
+		}
+		if b == '\n' || b == '\r' {
+			if b == '\r' {
+				if next, err := r.Peek(1); err == nil && len(next) > 0 && next[0] == '\n' {
+					_, _ = r.ReadByte()
+				}
+			}
+			break
+		}
+		buf = append(buf, b)
+	}
+	return string(buf), nil
+}
+
+// osRunCmdTimeout executes name with args and returns its output, bounded by timeout.
+// It sets process group isolation so any child processes spawned by shell pipelines
+// are cleanly terminated on timeout.
+func osRunCmdTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil && cmd.Process.Pid > 0 {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+	return cmd.CombinedOutput()
+}
+
+// osWhatis queries whatis for cmd. It rejects command names with spaces or shell characters
+// to avoid false positives.
+func osWhatis(ctx context.Context, cmd string) (string, error) {
+	if strings.ContainsAny(cmd, " \t\r\n|&;<>()`$#") {
+		return "", fmt.Errorf("invalid command name %q", cmd)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "whatis", "--", cmd).CombinedOutput()
+	if err != nil || len(bytes.TrimSpace(out)) == 0 {
+		return "", fmt.Errorf("whatis not found for %s", cmd)
+	}
+	return string(out), nil
+}
+
+// osManPage runs `man -P cat <cmd>` to fetch the plain text manual page.
+func osManPage(ctx context.Context, cmd string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "man", "-P", "cat", cmd).CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// osTypeCmd runs `<shell> -i -c "type <cmd>"` to discover aliases or builtins.
+func osTypeCmd(ctx context.Context, cmd string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "bash"
+	}
+	out, err := exec.CommandContext(ctx, shell, "-i", "-c", "type "+cmd).CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// osIsTerminalOutput reports whether w wraps an interactive character device terminal.
+func osIsTerminalOutput(w io.Writer) bool {
+	if f, ok := w.(*os.File); ok {
+		fi, err := f.Stat()
+		if err == nil && (fi.Mode()&os.ModeCharDevice) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// osAskPrompt prompts for user text input, returning defaultValue if empty.
+func osAskPrompt(prompt, defaultValue string) string {
+	isTerm := osIsTerminalOutput(os.Stdout)
+	if defaultValue != "" {
+		if isTerm {
+			fmt.Printf("\x1b[38;5;214m%s\x1b[0m [%s]: ", prompt, defaultValue)
+		} else {
+			fmt.Printf("%s [%s]: ", prompt, defaultValue)
+		}
+	} else {
+		if isTerm {
+			fmt.Printf("\x1b[38;5;214m%s\x1b[0m: ", prompt)
+		} else {
+			fmt.Printf("%s: ", prompt)
+		}
+	}
+	reader := stdinReader()
+	line, err := readSingleLine(reader)
+	if err != nil {
+		return defaultValue
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return defaultValue
+	}
+	return trimmed
+}
+
+// osReadOSRelease parses /etc/os-release for human-readable distribution name.
+func osReadOSRelease() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "Linux"
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, l := range lines {
+		if strings.HasPrefix(l, "PRETTY_NAME=") {
+			val := strings.TrimPrefix(l, "PRETTY_NAME=")
+			return strings.Trim(val, "\"")
+		}
+	}
+	return "Linux"
+}
+
+var (
+	historyNumRegex = regexp.MustCompile(`^\s*\d+\s+`)
+	zshHistoryRegex = regexp.MustCompile(`^:\s*\d+:\d+;`)
+)
+
+// osReadHistory reads up to maxLines of shell history. It prioritizes live session history
+// passed via YUPS_SESSION_HISTORY before falling back to HISTFILE and ~/.bash_history.
+func osReadHistory(home string, maxLines int) []string {
+	if maxLines <= 0 {
+		maxLines = 10
+	}
+
+	var data []byte
+	var err error
+
+	// 1. Check live session history file passed by yups shell wrapper or readline binding
+	if sessionHist := os.Getenv("YUPS_SESSION_HISTORY"); sessionHist != "" {
+		data, err = os.ReadFile(sessionHist)
+	}
+
+	// 2. Check explicit HISTFILE environment variable
+	if (err != nil || len(data) == 0) && os.Getenv("HISTFILE") != "" {
+		data, err = os.ReadFile(os.Getenv("HISTFILE"))
+	}
+
+	// 3. Check ~/.bash_history
+	if (err != nil || len(data) == 0) && home != "" {
+		data, err = os.ReadFile(filepath.Join(home, ".bash_history"))
+	}
+
+	// 4. Check ~/.zsh_history
+	if (err != nil || len(data) == 0) && home != "" {
+		data, err = os.ReadFile(filepath.Join(home, ".zsh_history"))
+	}
+
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+
+	rawLines := strings.Split(string(data), "\n")
+	var valid []string
+	for _, l := range rawLines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed == "" {
+			continue
+		}
+		// Strip leading bash history line numbers e.g. "  972  ls -la"
+		trimmed = historyNumRegex.ReplaceAllString(trimmed, "")
+		// Strip zsh extended history timestamp e.g. ": 1629837264:0;ls -la"
+		trimmed = zshHistoryRegex.ReplaceAllString(trimmed, "")
+		// Skip timestamp comment lines (e.g. bash "#1629837264")
+		if strings.HasPrefix(trimmed, "#") && len(trimmed) > 1 && isNumeric(trimmed[1:]) {
+			continue
+		}
+		// Skip history command noise
+		if strings.HasPrefix(trimmed, "history") || strings.HasPrefix(trimmed, "HISTTIMEFORMAT=") {
+			continue
+		}
+		valid = append(valid, trimmed)
+	}
+
+	if len(valid) > maxLines {
+		valid = valid[len(valid)-maxLines:]
+	}
+	return valid
+}
+
+func isNumeric(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// osReadFileSnippet reads up to maxLines from path if size is under 100KB.
+func osReadFileSnippet(path string, maxLines int) (string, error) {
+	fi, err := os.Stat(path)
+	if err != nil || fi.IsDir() || fi.Size() > 100*1024 {
+		return "", errors.New("unsuitable for snippet")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var lines []string
+	count := 0
+	for scanner.Scan() && count < maxLines {
+		lines = append(lines, scanner.Text())
+		count++
+	}
+
+	return strings.Join(lines, "\n"), scanner.Err()
+}
+
+// osListDirNames lists up to maxItems entries in dir.
+func osListDirNames(dir string, maxItems int) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for i, e := range entries {
+		if i >= maxItems {
+			break
+		}
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// osExecShell executes command in an interactive subshell so aliases and functions expand.
+func osExecShell(command string, stdout, stderr io.Writer) int {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "bash"
+	}
+	cmd := exec.Command(shell, "-i", "-c", command)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		return ExitError
+	}
+	return ExitOK
+}
+
+// osIsInstalled reports whether yups is properly installed:
+// 1. ~/.yups/config.toml configuration file exists
+// 2. yups executable is present in PATH
+func osIsInstalled() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	if !osPathExists(config.Path(home)) {
+		return false
+	}
+	for _, dir := range osPathDirs() {
+		if osLookupExecutable(dir, ProgramName) {
+			return true
+		}
+	}
+	return false
+}
+
+// osAskEditPrompt provides interactive inline editing with pre-filled initialText.
+func osAskEditPrompt(prompt, initialText string) string {
+	return editLineTerminal(prompt, initialText, os.Stdin, os.Stdout)
+}
+
+func editLineTerminal(prompt, initialText string, stdin io.Reader, stdout io.Writer) string {
+	fIn, okIn := stdin.(*os.File)
+	fOut, okOut := stdout.(*os.File)
+	isTerm := okIn && okOut && osIsTerminalOutput(fIn) && osIsTerminalOutput(fOut)
+
+	if !isTerm {
+		if prompt != "" {
+			fmt.Fprintf(stdout, "%s [%s]: ", prompt, initialText)
+		}
+		reader := stdinReader()
+		line, err := readSingleLine(reader)
+		if err != nil {
+			return initialText
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			return initialText
+		}
+		return trimmed
+	}
+
+	// Capture terminal state and configure cbreak mode
+	sttyStateCmd := exec.Command("stty", "-g")
+	sttyStateCmd.Stdin = fIn
+	stateBytes, err := sttyStateCmd.Output()
+	if err != nil {
+		return osAskPrompt(prompt, initialText)
+	}
+	savedState := strings.TrimSpace(string(stateBytes))
+	defer func() {
+		restoreCmd := exec.Command("stty", savedState)
+		restoreCmd.Stdin = fIn
+		_ = restoreCmd.Run()
+	}()
+
+	rawCmd := exec.Command("stty", "cbreak", "-echo")
+	rawCmd.Stdin = fIn
+	if err := rawCmd.Run(); err != nil {
+		return osAskPrompt(prompt, initialText)
+	}
+
+	if prompt != "" {
+		fmt.Fprintf(stdout, "%s:\n", prompt)
+	}
+
+	buf := []rune(initialText)
+	pos := len(buf)
+
+	redraw := func() {
+		fmt.Fprintf(stdout, "\r\x1b[K%s", string(buf))
+		fmt.Fprintf(stdout, "\r")
+		if pos > 0 {
+			fmt.Fprintf(stdout, "\x1b[%dC", pos)
+		}
+	}
+
+	redraw()
+
+	inputReader := bufio.NewReader(fIn)
+	for {
+		r, _, err := inputReader.ReadRune()
+		if err != nil {
+			break
+		}
+
+		switch r {
+		case '\r', '\n':
+			fmt.Fprintln(stdout)
+			return string(buf)
+		case '\x03': // Ctrl+C
+			fmt.Fprintln(stdout)
+			return initialText
+		case '\x04': // Ctrl+D
+			if len(buf) == 0 {
+				fmt.Fprintln(stdout)
+				return ""
+			}
+		case '\x01': // Ctrl+A (Home)
+			pos = 0
+			redraw()
+		case '\x05': // Ctrl+E (End)
+			pos = len(buf)
+			redraw()
+		case '\x0b': // Ctrl+K (Kill to end)
+			buf = buf[:pos]
+			redraw()
+		case '\x15': // Ctrl+U (Kill to start)
+			buf = buf[pos:]
+			pos = 0
+			redraw()
+		case '\x7f', '\b': // Backspace
+			if pos > 0 {
+				buf = append(buf[:pos-1], buf[pos:]...)
+				pos--
+				redraw()
+			}
+		case '\x1b': // Escape sequence
+			b, err := inputReader.ReadByte()
+			if err != nil {
+				break
+			}
+			if b == '[' {
+				b2, err := inputReader.ReadByte()
+				if err != nil {
+					break
+				}
+				switch b2 {
+				case 'D': // Left arrow
+					if pos > 0 {
+						pos--
+						redraw()
+					}
+				case 'C': // Right arrow
+					if pos < len(buf) {
+						pos++
+						redraw()
+					}
+				case 'H', '1': // Home
+					pos = 0
+					redraw()
+				case 'F', '4': // End
+					pos = len(buf)
+					redraw()
+				case '3': // Delete
+					_, _ = inputReader.ReadByte() // consume '~'
+					if pos < len(buf) {
+						buf = append(buf[:pos], buf[pos+1:]...)
+						redraw()
+					}
+				}
+			}
+		default:
+			if r >= 32 {
+				newBuf := make([]rune, 0, len(buf)+1)
+				newBuf = append(newBuf, buf[:pos]...)
+				newBuf = append(newBuf, r)
+				newBuf = append(newBuf, buf[pos:]...)
+				buf = newBuf
+				pos++
+				redraw()
+			}
+		}
+	}
+
+	return string(buf)
+}
+
+// osOpenEditor launches the preferred text editor for path, looking at VISUAL, EDITOR,
+// or probing common system editors (nano, vim, vi, editor, micro, emacs).
+func osOpenEditor(path string, stdin io.Reader, stdout, stderr io.Writer) error {
+	editor := os.Getenv("VISUAL")
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		for _, candidate := range []string{"nano", "vim", "vi", "editor", "micro", "emacs"} {
+			if p, err := exec.LookPath(candidate); err == nil && p != "" {
+				editor = candidate
+				break
+			}
+		}
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		parts = []string{"vi"}
+	}
+	bin := parts[0]
+	args := append(parts[1:], path)
+
+	cmd := exec.Command(bin, args...)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	} else {
+		cmd.Stdin = os.Stdin
+	}
+	if stdout != nil {
+		cmd.Stdout = stdout
+	} else {
+		cmd.Stdout = os.Stdout
+	}
+	if stderr != nil {
+		cmd.Stderr = stderr
+	} else {
+		cmd.Stderr = os.Stderr
+	}
+	return cmd.Run()
 }

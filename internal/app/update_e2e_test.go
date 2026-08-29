@@ -89,7 +89,7 @@ func TestUpdateEndToEndReplacesInstalledBinary(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("creating fake home: %v", err)
 	}
-	configBody := fmt.Sprintf("version = \"v0.0.9\"\nYUPS_REPO = %q\nYUPS_REPO_FALLBACK = %q\n",
+	configBody := fmt.Sprintf("version = \"v0.0.9\"\nyups-repo = %q\nyups-repo-fallback = %q\n",
 		server.URL+"/owner/repo", server.URL+"/fallback/repo")
 	if err := os.MkdirAll(config.Dir(home), 0o755); err != nil {
 		t.Fatalf("creating the fake .yups directory: %v", err)
