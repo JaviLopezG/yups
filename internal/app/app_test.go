@@ -47,7 +47,7 @@ type fakeFS struct {
 	execCalls      []execCall
 	replaceErrs    map[string]error // destination dir -> failure
 	replacedDirs   []string
-	stateLast      map[string]string // state file path -> last applied version
+	states         map[string]State  // state file path -> State
 	corruptState   map[string]bool   // state paths that fail to parse
 	existingPaths  map[string]bool   // paths reported as existing
 	fileContents   map[string]string // path -> file string contents
@@ -71,7 +71,7 @@ func newFakeFS() *fakeFS {
 		corruptConfig: map[string]bool{},
 		httpResponses: map[string]*http.Response{},
 		replaceErrs:   map[string]error{},
-		stateLast:     map[string]string{},
+		states:        map[string]State{},
 		corruptState:  map[string]bool{},
 		existingPaths: map[string]bool{},
 		fileContents:  map[string]string{},
@@ -134,14 +134,18 @@ func (f *fakeFS) env() *Env {
 			f.configs[path] = c
 			return nil
 		},
-		LoadUpdateState: func(path string) (string, error) {
+		LoadUpdateState: func(path string) (State, error) {
 			if f.corruptState[path] {
-				return "", fmt.Errorf("corrupt update state file %q", path)
+				return State{}, fmt.Errorf("corrupt update state file %q", path)
 			}
-			return f.stateLast[path], nil
+			st, ok := f.states[path]
+			if !ok {
+				return State{Version: config.FloorVersion, LastApplied: config.FloorVersion}, nil
+			}
+			return st, nil
 		},
-		SaveUpdateState: func(path string, lastApplied string) error {
-			f.stateLast[path] = lastApplied
+		SaveUpdateState: func(path string, state State) error {
+			f.states[path] = state
 			return nil
 		},
 		HTTPClient: func() *http.Client {
@@ -517,8 +521,13 @@ func TestInstallCopiesIntoFirstWritablePATHDirAndInitializesConfig(t *testing.T)
 	if !ok {
 		t.Fatalf("config file was not initialized at %s", cfgPath)
 	}
-	if cfg.Version != Version {
-		t.Errorf("initialized config version = %q, want %q", cfg.Version, Version)
+	statePath := config.StatePath(fs.home)
+	st, ok := fs.states[statePath]
+	if !ok {
+		t.Fatalf("state file was not initialized at %s", statePath)
+	}
+	if st.Version != Version {
+		t.Errorf("initialized state version = %q, want %q", st.Version, Version)
 	}
 	if cfg.YUPSRepo != config.DefaultYUPSRepo {
 		t.Errorf("initialized config YUPSRepo = %q, want %q", cfg.YUPSRepo, config.DefaultYUPSRepo)
@@ -530,10 +539,10 @@ func TestInstallDownloadsCheatsheets(t *testing.T) {
 	fs.writable["/usr/local/bin"] = true
 	var downloadedTo string
 	env := fs.env()
-	env.DownloadCheatsheets = func(client *http.Client, destDir string, stdout io.Writer) error {
+	env.DownloadCheatsheets = func(client *http.Client, destDir string, cachedVersions map[string]string, stdout io.Writer) (map[string]string, error) {
 		downloadedTo = destDir
 		fmt.Fprintln(stdout, "Downloaded mock cheatsheets")
-		return nil
+		return map[string]string{"tldr": "mock-tag"}, nil
 	}
 
 	out, code := runDispatch(t, env, "--install-yups")

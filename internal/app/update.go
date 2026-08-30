@@ -7,7 +7,7 @@
 //
 // Phase 2 (`yups --update-apply`) runs in the NEW binary: only it knows
 // how the system should look after this version. It replaces every
-// installed copy atomically, bumps config.version forward, runs pending
+// installed copy atomically, bumps state.version forward, runs pending
 // migrations and cleans the staging directory.
 package app
 
@@ -72,8 +72,13 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s %s is up to date (latest release: %s).\n", ProgramName, Version, release.Tag)
 		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
 			if home, err := env.UserHomeDir(); err == nil {
+				stateFile := config.StatePath(home)
+				state, _ := env.LoadUpdateState(stateFile)
 				cheatsDir := config.CheatsheetsDir(home)
-				_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+				if updated, err := env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, state.Cheatsheets, stdout); err == nil && updated != nil {
+					state.Cheatsheets = updated
+					_ = env.SaveUpdateState(stateFile, state)
+				}
 			}
 		}
 		return ExitOK
@@ -232,21 +237,26 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 		// exact command line, which still points at the staged binary.
 	}
 
-	// Record progress before anything else can fail: config.version is
-	// updated to the newly running version. A corrupt config is reported
+	// Record progress before anything else can fail: state.version is
+	// updated to the newly running version. A corrupt state is reported
 	// but does not abort: the binaries are already replaced; migrations
 	// track themselves in state.toml independently.
 	home, homeErr := env.UserHomeDir()
 	if homeErr != nil {
-		fmt.Fprintf(stdout, "Warning: cannot locate the home directory (%v); config.version and migrations skipped.\n", homeErr)
+		fmt.Fprintf(stdout, "Warning: cannot locate the home directory (%v); state.version and migrations skipped.\n", homeErr)
 	} else if err := recordUpdateProgress(env, home, stdout); err != nil {
 		fmt.Fprintf(stdout, "Warning: %v.\n", err)
 	}
 
 	if homeErr == nil {
+		stateFile := config.StatePath(home)
+		state, _ := env.LoadUpdateState(stateFile)
 		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
 			cheatsDir := config.CheatsheetsDir(home)
-			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+			if updated, err := env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, state.Cheatsheets, stdout); err == nil && updated != nil {
+				state.Cheatsheets = updated
+				_ = env.SaveUpdateState(stateFile, state)
+			}
 		}
 		applied, err := RunMigrations(env, home, Version)
 		if err != nil {
@@ -269,18 +279,22 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 	return exitCode
 }
 
-// recordUpdateProgress sets config.version to the newly installed version.
+// recordUpdateProgress sets state.version to the newly installed version
+// and cleans any legacy version string from config.toml.
 func recordUpdateProgress(env *Env, home string, stdout io.Writer) error {
 	cfgPath := config.Path(home)
-	cfg, err := env.LoadConfig(cfgPath)
+	_, _, _ = config.CleanLegacyVersion(cfgPath)
+
+	statePath := config.StatePath(home)
+	state, err := env.LoadUpdateState(statePath)
 	if err != nil {
-		return fmt.Errorf("cannot read %s (%v); config.version not updated", cfgPath, err)
+		state = State{Version: config.FloorVersion, LastApplied: config.FloorVersion}
 	}
-	if !config.SetVersion(&cfg, Version) {
+	if !state.SetVersion(Version) {
 		return nil
 	}
-	if err := env.SaveConfig(cfgPath, cfg); err != nil {
-		return fmt.Errorf("cannot write %s: %w", cfgPath, err)
+	if err := env.SaveUpdateState(statePath, state); err != nil {
+		return fmt.Errorf("cannot write %s: %w", statePath, err)
 	}
 	return nil
 }

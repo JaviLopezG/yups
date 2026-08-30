@@ -15,10 +15,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/BurntSushi/toml"
-
-	"yups/internal/semver"
 )
 
 // Default repository URLs written when the configuration file does not
@@ -44,7 +43,6 @@ const (
 
 // Config mirrors the on-disk config.toml organized into sections.
 type Config struct {
-	Version          string          `toml:"version"`
 	YUPSRepo         string          `toml:"yups-repo"`
 	YUPSRepoFallback string          `toml:"yups-repo-fallback"`
 	Inference        InferenceConfig `toml:"inference"`
@@ -205,12 +203,14 @@ func ShellScriptPath(home string) string {
 	return filepath.Join(ShellDir(home), "yups.bash")
 }
 
-// Defaults returns the configuration used when nothing has been stored
-// yet. Version starts at the floor: it records the highest version ever
-// run, and no version has run until something writes the file.
+// StatePath returns the path to the internal state.toml file.
+func StatePath(home string) string {
+	return filepath.Join(Dir(home), "state.toml")
+}
+
+// Defaults returns the configuration used when nothing has been stored yet.
 func Defaults() Config {
 	return Config{
-		Version:          FloorVersion,
 		YUPSRepo:         DefaultYUPSRepo,
 		YUPSRepoFallback: DefaultYUPSRepoFallback,
 		Inference: InferenceConfig{
@@ -232,9 +232,6 @@ func Defaults() Config {
 // EnsureDefaults fills every empty field with its default value. Fields
 // already set by the user are kept untouched.
 func EnsureDefaults(c *Config) {
-	if c.Version == "" {
-		c.Version = FloorVersion
-	}
 	if c.YUPSRepo == "" {
 		c.YUPSRepo = DefaultYUPSRepo
 	}
@@ -269,7 +266,6 @@ func EnsureDefaults(c *Config) {
 
 // rawLegacyConfig handles parsing both older flat TOML configs and sectioned TOML configs.
 type rawLegacyConfig struct {
-	Version          string `toml:"version"`
 	YUPSRepo         string `toml:"yups-repo"`
 	YUPSRepoFallback string `toml:"yups-repo-fallback"`
 
@@ -325,8 +321,11 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("corrupt configuration file %q: %w", path, err)
 	}
 
+	if versionLineRegex.Match(data) {
+		_, _, _ = CleanLegacyVersion(path)
+	}
+
 	c := Config{
-		Version:          raw.Version,
 		YUPSRepo:         raw.YUPSRepo,
 		YUPSRepoFallback: raw.YUPSRepoFallback,
 	}
@@ -419,23 +418,28 @@ func Save(path string, c Config) error {
 	return nil
 }
 
-// BumpVersion moves c.Version forward to tag when tag is strictly newer,
-// reporting whether the stored version changed. It never moves backwards:
-// the field records the highest version ever seen so multi-version jumps
-// apply every intermediate migration.
-func BumpVersion(c *Config, tag string) bool {
-	if !semver.IsNewer(c.Version, tag) {
-		return false
-	}
-	c.Version = tag
-	return true
-}
+var versionLineRegex = regexp.MustCompile(`(?m)^version\s*=\s*["']?([^"'\r\n]*)["']?\r?\n?`)
 
-// SetVersion updates c.Version to tag, returning whether the stored version changed.
-func SetVersion(c *Config, tag string) bool {
-	if c.Version == tag {
-		return false
+// CleanLegacyVersion removes any legacy `version = "..."` entry from the config
+// file at path, preserving comments and formatting. Returns the legacy version found
+// (if any) and whether the file was updated.
+func CleanLegacyVersion(path string) (string, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
 	}
-	c.Version = tag
-	return true
+	content := string(data)
+	match := versionLineRegex.FindStringSubmatch(content)
+	if match == nil {
+		return "", false, nil
+	}
+	legacyVer := match[1]
+	cleaned := versionLineRegex.ReplaceAllString(content, "")
+	if err := os.WriteFile(path, []byte(cleaned), 0o644); err != nil {
+		return legacyVer, false, fmt.Errorf("writing cleaned configuration %q: %w", path, err)
+	}
+	return legacyVer, true, nil
 }

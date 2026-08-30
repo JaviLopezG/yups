@@ -117,9 +117,6 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 			cfg = config.Defaults()
 		}
 		config.EnsureDefaults(&cfg)
-		if cfg.Version == config.FloorVersion || cfg.Version == "" {
-			cfg.Version = Version
-		}
 
 		hasOllama := true
 		if env.AskConfirmation != nil {
@@ -219,11 +216,22 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 			}
 		}
 
-		// Download community cheatsheets
+		// Initialize state.toml with version and cheatsheets
+		stateFile := config.StatePath(home)
+		state, _ := env.LoadUpdateState(stateFile)
+		state.Version = Version
+		if state.LastApplied == "" || state.LastApplied == config.FloorVersion {
+			state.LastApplied = Version
+		}
+
+		// Download or sync community cheatsheets
 		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
 			cheatsDir := config.CheatsheetsDir(home)
-			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+			if updated, err := env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, state.Cheatsheets, stdout); err == nil && updated != nil {
+				state.Cheatsheets = updated
+			}
 		}
+		_ = env.SaveUpdateState(stateFile, state)
 
 		// Configure bash key binding if desired
 		ConfigureBashBindingInteractively(env, home, stdout, stderr)

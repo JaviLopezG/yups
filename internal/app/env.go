@@ -68,11 +68,10 @@ type Env struct {
 	// SaveConfig writes the configuration file, creating parent
 	// directories as needed.
 	SaveConfig func(path string, c config.Config) error
-	// LoadUpdateState reads the last applied migration version from
-	// ~/.yups/state.toml (empty when the file does not exist yet).
-	LoadUpdateState func(path string) (string, error)
-	// SaveUpdateState records the last applied migration version.
-	SaveUpdateState func(path string, lastApplied string) error
+	// LoadUpdateState reads the State from ~/.yups/state.toml.
+	LoadUpdateState func(path string) (State, error)
+	// SaveUpdateState records the State into ~/.yups/state.toml.
+	SaveUpdateState func(path string, state State) error
 	// HTTPClient returns the client used for release queries and asset
 	// downloads.
 	HTTPClient func() *http.Client
@@ -136,8 +135,8 @@ type Env struct {
 	ExecShell func(command string, stdout, stderr io.Writer) int
 	// IsInstalled reports whether yups is installed on the system.
 	IsInstalled func() bool
-	// DownloadCheatsheets downloads community cheatsheets to destDir.
-	DownloadCheatsheets func(client *http.Client, destDir string, stdout io.Writer) error
+	// DownloadCheatsheets downloads or syncs community cheatsheets to destDir conditionally.
+	DownloadCheatsheets func(client *http.Client, destDir string, cachedVersions map[string]string, stdout io.Writer) (map[string]string, error)
 	// CheatsheetsDir returns the directory where downloaded cheatsheets reside.
 	CheatsheetsDir func(home string) string
 	// OpenEditor opens path in the configured default text editor.
@@ -345,7 +344,7 @@ func NewOSEnv() *Env {
 		Getwd:               os.Getwd,
 		ExecShell:           osExecShell,
 		IsInstalled:         osIsInstalled,
-		DownloadCheatsheets: cheats.DownloadAll,
+		DownloadCheatsheets: cheats.Sync,
 		CheatsheetsDir:      config.CheatsheetsDir,
 		OpenEditor:          osOpenEditor,
 		ReadFile:            os.ReadFile,
@@ -512,35 +511,38 @@ func osReplaceExecutable(sourcePath, destDir string) (string, error) {
 	return finalPath, nil
 }
 
-// osLoadUpdateState reads the last applied migration version from the
-// state file; a missing file means nothing has been applied yet.
-func osLoadUpdateState(path string) (string, error) {
+// osLoadUpdateState reads the State from the state file; a missing file means defaults.
+func osLoadUpdateState(path string) (State, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
+		return State{
+			Version:     config.FloorVersion,
+			LastApplied: config.FloorVersion,
+		}, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("reading update state %q: %w", path, err)
+		return State{}, fmt.Errorf("reading update state %q: %w", path, err)
 	}
-	var state struct {
-		LastApplied string `toml:"last-applied"`
-	}
+	var state State
 	if err := toml.Unmarshal(data, &state); err != nil {
-		return "", fmt.Errorf("corrupt update state file %q: %w", path, err)
+		return State{}, fmt.Errorf("corrupt update state file %q: %w", path, err)
 	}
-	return state.LastApplied, nil
+	if state.Version == "" {
+		state.Version = config.FloorVersion
+	}
+	if state.LastApplied == "" {
+		state.LastApplied = config.FloorVersion
+	}
+	return state, nil
 }
 
-// osSaveUpdateState writes the state file, creating its parent directory
-// when needed.
-func osSaveUpdateState(path string, lastApplied string) error {
+// osSaveUpdateState writes the state file, creating its parent directory when needed.
+func osSaveUpdateState(path string, state State) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating directory for %q: %w", path, err)
 	}
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(struct {
-		LastApplied string `toml:"last-applied"`
-	}{LastApplied: lastApplied}); err != nil {
+	if err := toml.NewEncoder(&buf).Encode(state); err != nil {
 		return fmt.Errorf("encoding update state for %q: %w", path, err)
 	}
 	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {

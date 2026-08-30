@@ -45,22 +45,22 @@ func statePath(home string) string {
 // never repeats completed work.
 func RunMigrations(env *Env, home, targetVersion string) (int, error) {
 	stateFile := statePath(home)
-	lastApplied, err := env.LoadUpdateState(stateFile)
+	state, err := env.LoadUpdateState(stateFile)
 	if err != nil {
 		return 0, err
 	}
 
 	applied := 0
 	for _, m := range migrations {
-		if !migrationPending(lastApplied, m.Version, targetVersion) {
+		if !migrationPending(state.LastApplied, m.Version, targetVersion) {
 			continue
 		}
 		if err := m.Apply(env, home); err != nil {
 			return applied, err
 		}
 		applied++
-		lastApplied = m.Version
-		if err := env.SaveUpdateState(stateFile, lastApplied); err != nil {
+		state.LastApplied = m.Version
+		if err := env.SaveUpdateState(stateFile, state); err != nil {
 			return applied, err
 		}
 	}

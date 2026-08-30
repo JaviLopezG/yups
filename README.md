@@ -97,7 +97,7 @@ $ yups --update-yups
   5. It replaces its own process image with the new binary (`--update-apply`),
      which atomically substitutes the keeper instance found in `PATH`
      (temporary `.kk` file in the target directory, `chmod 0755`, rename),
-     updates `config.version`, applies any pending migrations tracked in
+     updates `state.toml`, applies any pending migrations tracked in
      `~/.yups/state.toml`, and safely cleans up the ephemeral staging directory.
 
 Exit codes: `0` success, `1` error, `2` wrong usage.
