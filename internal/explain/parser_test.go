@@ -110,7 +110,7 @@ func TestParseSubcommand(t *testing.T) {
 }
 
 func TestFormatRawPipelineCommentNoDuplication(t *testing.T) {
-	t.Run("pure_comment", func(t *testing.T) {
+	t.Run("pure-comment", func(t *testing.T) {
 		p := Parse([]string{"#helo"})
 		raw := formatRawPipeline(p)
 		want := "# helo"
@@ -119,7 +119,7 @@ func TestFormatRawPipelineCommentNoDuplication(t *testing.T) {
 		}
 	})
 
-	t.Run("command_with_comment", func(t *testing.T) {
+	t.Run("command-with-comment", func(t *testing.T) {
 		p := Parse([]string{"ls", ".yups", "#I", "want", "to", "ls", "recursively"})
 		raw := formatRawPipeline(p)
 		want := "ls .yups # I want to ls recursively"

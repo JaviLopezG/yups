@@ -96,7 +96,7 @@ func TestExtractTarGz(t *testing.T) {
 	tempDir := t.TempDir()
 	tarData := createTestTarGz(t, map[string]string{
 		"sheets/tar":        "tar cheatsheet content\n",
-		"see_also/find.txt": "find cheatsheet content\n",
+		"see-also/find.txt": "find cheatsheet content\n",
 	})
 
 	if err := extractTarGz(tarData, tempDir); err != nil {

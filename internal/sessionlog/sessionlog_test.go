@@ -40,7 +40,7 @@ func TestSessionLoggerRecordsTraceAndInteractions(t *testing.T) {
 
 	logger.LogInteraction(0, "qwen3.8:latest", "http://localhost:11434", chatReq, chatResp, 150*time.Millisecond, nil)
 	logger.LogToolExecution(0, "command-run", map[string]any{"command": "ls"}, true, "whitelisted", "total 0\n", 20*time.Millisecond, nil)
-	logger.LogLimitReached("max_turns", "reached 10 turns", false)
+	logger.LogLimitReached("max-turns", "reached 10 turns", false)
 	logger.LogConclusion("ls -la lists directory contents", "ls -la", "", "SUCCESS", 0)
 
 	bufStr := logger.BufferString()
@@ -54,7 +54,7 @@ func TestSessionLoggerRecordsTraceAndInteractions(t *testing.T) {
 		"explain ls -la",
 		"ls -la lists directory contents",
 		"--- [TOOL EXECUTION Turn 0: command-run] ---",
-		"[! LIMIT REACHED: max_turns !]",
+		"[! LIMIT REACHED: max-turns !]",
 		"SESSION CONCLUSION",
 		"Status:            SUCCESS",
 	} {

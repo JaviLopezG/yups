@@ -45,28 +45,28 @@ func TestParseInUseKeybindings(t *testing.T) {
 }
 
 func TestDecodeRawBytes(t *testing.T) {
-	t.Run("f1_escape_sequence", func(t *testing.T) {
+	t.Run("f1-escape-sequence", func(t *testing.T) {
 		name, seq, isEnter, isCancel := DecodeRawBytes([]byte("\x1bOP"))
 		if name != "F1" || seq != SeqF1 || isEnter || isCancel {
 			t.Errorf("got (%q, %q, %v, %v), want (F1, %s, false, false)", name, seq, isEnter, isCancel, SeqF1)
 		}
 	})
 
-	t.Run("ctrl_g_byte", func(t *testing.T) {
+	t.Run("ctrl-g-byte", func(t *testing.T) {
 		name, seq, isEnter, isCancel := DecodeRawBytes([]byte{7})
 		if name != "Ctrl+g" || seq != SeqCtrlG || isEnter || isCancel {
 			t.Errorf("got (%q, %q, %v, %v), want (Ctrl+g, %s, false, false)", name, seq, isEnter, isCancel, SeqCtrlG)
 		}
 	})
 
-	t.Run("enter_byte", func(t *testing.T) {
+	t.Run("enter-byte", func(t *testing.T) {
 		name, seq, isEnter, isCancel := DecodeRawBytes([]byte{'\r'})
 		if !isEnter || isCancel {
 			t.Errorf("got (%q, %q, %v, %v), want enter", name, seq, isEnter, isCancel)
 		}
 	})
 
-	t.Run("ctrl_c_byte", func(t *testing.T) {
+	t.Run("ctrl-c-byte", func(t *testing.T) {
 		name, seq, isEnter, isCancel := DecodeRawBytes([]byte{3})
 		if !isCancel {
 			t.Errorf("got (%q, %q, %v, %v), want cancel", name, seq, isEnter, isCancel)
@@ -75,14 +75,14 @@ func TestDecodeRawBytes(t *testing.T) {
 }
 
 func TestSelectBestKeybinding(t *testing.T) {
-	t.Run("f1_available_when_map_empty", func(t *testing.T) {
+	t.Run("f1-available-when-map-empty", func(t *testing.T) {
 		name, seq := SelectBestKeybinding(map[string]string{})
 		if name != "F1" || seq != SeqF1 {
 			t.Errorf("got (%q, %q), want (F1, %s)", name, seq, SeqF1)
 		}
 	})
 
-	t.Run("f1_busy_suggests_ctrl_g", func(t *testing.T) {
+	t.Run("f1-busy-suggests-ctrl-g", func(t *testing.T) {
 		inUse := map[string]string{
 			SeqF1: "explain_current_line",
 		}
@@ -92,7 +92,7 @@ func TestSelectBestKeybinding(t *testing.T) {
 		}
 	})
 
-	t.Run("f1_and_ctrl_g_busy_suggests_ctrl_h", func(t *testing.T) {
+	t.Run("f1-and-ctrl-g-busy-suggests-ctrl-h", func(t *testing.T) {
 		inUse := map[string]string{
 			SeqF1:    "explain_current_line",
 			SeqCtrlG: "abort",
@@ -103,7 +103,7 @@ func TestSelectBestKeybinding(t *testing.T) {
 		}
 	})
 
-	t.Run("all_defaults_busy_returns_empty", func(t *testing.T) {
+	t.Run("all-defaults-busy-returns-empty", func(t *testing.T) {
 		inUse := map[string]string{
 			SeqF1:    "explain_current_line",
 			SeqCtrlG: "abort",
@@ -115,9 +115,9 @@ func TestSelectBestKeybinding(t *testing.T) {
 		}
 	})
 
-	t.Run("f1_already_bound_to_yups_is_reused", func(t *testing.T) {
+	t.Run("f1-already-bound-to-yups-is-reused", func(t *testing.T) {
 		inUse := map[string]string{
-			SeqF1: "_yups_readline_binding",
+			SeqF1: "_yups-readline-binding",
 		}
 		name, seq := SelectBestKeybinding(inUse)
 		if name != "F1" || seq != SeqF1 {
@@ -174,10 +174,10 @@ func TestInstallBashBinding(t *testing.T) {
 	if !ok {
 		t.Fatalf("shell script was not written to %s", shellScript)
 	}
-	if !strings.Contains(scriptContent, "_yups_readline_binding") || !strings.Contains(scriptContent, SeqF1) {
+	if !strings.Contains(scriptContent, "_yups-readline-binding") || !strings.Contains(scriptContent, SeqF1) {
 		t.Errorf("shell script missing binding content:\n%s", scriptContent)
 	}
-	if !strings.Contains(scriptContent, "_yups_completion") || !strings.Contains(scriptContent, "complete -F _yups_completion yups") {
+	if !strings.Contains(scriptContent, "_yups-completion") || !strings.Contains(scriptContent, "complete -F _yups-completion yups") {
 		t.Errorf("shell script missing autocompletion function:\n%s", scriptContent)
 	}
 
@@ -205,7 +205,7 @@ func TestInstallBashBinding(t *testing.T) {
 }
 
 func TestConfigureBashBindingInteractively(t *testing.T) {
-	t.Run("declining_prompt_installs_nothing", func(t *testing.T) {
+	t.Run("declining-prompt-installs-nothing", func(t *testing.T) {
 		fs := newFakeFS()
 		env := fs.env()
 		env.AskConfirmation = func(prompt string, defaultYes bool) bool {
@@ -221,7 +221,7 @@ func TestConfigureBashBindingInteractively(t *testing.T) {
 		}
 	})
 
-	t.Run("accepting_installs_suggested_f1", func(t *testing.T) {
+	t.Run("accepting-installs-suggested-f1", func(t *testing.T) {
 		fs := newFakeFS()
 		env := fs.env()
 		env.AskConfirmation = func(prompt string, defaultYes bool) bool {
@@ -250,7 +250,7 @@ func TestConfigureBashBindingInteractively(t *testing.T) {
 		}
 	})
 
-	t.Run("accepting_with_f1_busy_installs_ctrl_g", func(t *testing.T) {
+	t.Run("accepting-with-f1-busy-installs-ctrl-g", func(t *testing.T) {
 		fs := newFakeFS()
 		env := fs.env()
 		env.AskConfirmation = func(prompt string, defaultYes bool) bool {

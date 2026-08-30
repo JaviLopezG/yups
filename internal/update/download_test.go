@@ -50,8 +50,8 @@ func TestVerifyChecksums(t *testing.T) {
 	}{
 		{
 			name:      "matching entry passes",
-			checksums: good + "  yups_v1.0.0_linux_amd64.tar.gz\n",
-			fileName:  "yups_v1.0.0_linux_amd64.tar.gz",
+			checksums: good + "  yups-v1.0.0-linux-amd64.tar.gz\n",
+			fileName:  "yups-v1.0.0-linux-amd64.tar.gz",
 			data:      payload,
 		},
 		{

@@ -77,8 +77,8 @@ func ExtractToolCalls(msg Message) []ToolCall {
 
 	var calls []ToolCall
 
-	// 1. Check for XML style <tool_call>...</tool_call>
-	toolTagRegex := regexp.MustCompile(`(?s)<tool_call>(.*?)</tool_call>`)
+	// 1. Check for XML style <tool-call>...</tool-call> or fallback <tool_call>...</tool_call>
+	toolTagRegex := regexp.MustCompile(`(?s)<tool[-_]call>(.*?)</tool[-_]call>`)
 	if matches := toolTagRegex.FindAllStringSubmatch(raw, -1); len(matches) > 0 {
 		for _, m := range matches {
 			var rawObj struct {

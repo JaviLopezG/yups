@@ -63,7 +63,7 @@ func setVersion(t *testing.T, v string) {
 // the fixed test endpoints.
 func releaseDocument(tag string) string {
 	return fmt.Sprintf(`{"tag_name": %q, "assets": [
-		{"name": "yups_%s_linux_amd64.tar.gz", "browser_download_url": %q},
+		{"name": "yups-%s-linux-amd64.tar.gz", "browser_download_url": %q},
 		{"name": %q, "browser_download_url": %q}]}`,
 		tag, tag, testArchiveURL, update.ChecksumsFileName, testChecksumsURL)
 }
@@ -81,7 +81,7 @@ func serveLatestRelease(fs *fakeFS, tag, archivePayload string) {
 	fs.httpResponses[testPrimaryAPI] = fakeResponse(http.StatusOK, document)
 	fs.httpResponses[testFallbackAPI] = fakeResponse(http.StatusOK, document)
 	fs.httpResponses[testArchiveURL] = fakeResponse(http.StatusOK, archivePayload)
-	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(archivePayload), "yups_"+tag+"_linux_amd64.tar.gz")
+	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(archivePayload), "yups-"+tag+"-linux-amd64.tar.gz")
 	fs.httpResponses[testChecksumsURL] = fakeResponse(http.StatusOK, checksums)
 }
 
@@ -134,7 +134,7 @@ func TestUpdateFallsBackWhenPrimarySourceFails(t *testing.T) {
 	fs.httpResponses[testFallbackAPI] = fakeResponse(http.StatusOK, releaseDocument("v1.1.0"))
 	fs.httpResponses[testArchiveURL] = fakeResponse(http.StatusOK, "payload")
 	fs.httpResponses[testChecksumsURL] = fakeResponse(http.StatusOK,
-		fmt.Sprintf("%s  yups_v1.1.0_linux_amd64.tar.gz\n", sha256Hex("payload")))
+		fmt.Sprintf("%s  yups-v1.1.0-linux-amd64.tar.gz\n", sha256Hex("payload")))
 	fs.stagedBinary = testStagingBinary
 	fs.addExecutable("/usr/bin/yups")
 
@@ -175,7 +175,7 @@ func TestUpdateBadChecksumAbortsUntouched(t *testing.T) {
 	fs.httpResponses[testPrimaryAPI] = fakeResponse(http.StatusOK, document)
 	fs.httpResponses[testArchiveURL] = fakeResponse(http.StatusOK, "tampered payload")
 	fs.httpResponses[testChecksumsURL] = fakeResponse(http.StatusOK,
-		fmt.Sprintf("%s  yups_v1.1.0_linux_amd64.tar.gz\n", sha256Hex("original payload")))
+		fmt.Sprintf("%s  yups-v1.1.0-linux-amd64.tar.gz\n", sha256Hex("original payload")))
 	fs.stagedBinary = testStagingBinary
 	fs.addExecutable("/usr/bin/yups")
 

@@ -67,7 +67,7 @@ func TestUpdateEndToEndReplacesInstalledBinary(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/repos/owner/repo/releases/latest":
 			fmt.Fprintf(w, `{"tag_name": "v0.1.0", "assets": [
-				{"name": "yups_v0.1.0_linux_%s.tar.gz", "browser_download_url": "%s/archive.tar.gz"},
+				{"name": "yups-v0.1.0-linux-%s.tar.gz", "browser_download_url": "%s/archive.tar.gz"},
 				{"name": %q, "browser_download_url": "%s/checksums.txt"}]}`,
 				runtime.GOARCH, server.URL, update.ChecksumsFileName, server.URL)
 		case "/archive.tar.gz":
@@ -75,7 +75,7 @@ func TestUpdateEndToEndReplacesInstalledBinary(t *testing.T) {
 			_, _ = w.Write(buildTestArchive(t, newPayload))
 		case "/checksums.txt":
 			sum := sha256.Sum256(buildTestArchive(t, newPayload))
-			fmt.Fprintf(w, "%s  yups_v0.1.0_linux_%s.tar.gz\n", hex.EncodeToString(sum[:]), runtime.GOARCH)
+			fmt.Fprintf(w, "%s  yups-v0.1.0-linux-%s.tar.gz\n", hex.EncodeToString(sum[:]), runtime.GOARCH)
 		default:
 			http.NotFound(w, r)
 		}

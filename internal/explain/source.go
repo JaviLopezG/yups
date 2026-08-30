@@ -434,7 +434,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 					abort = r.env.AskConfirmation("Do you want to abort execution?", true)
 				}
 				if r.env.Logger != nil {
-					r.env.Logger.LogLimitReached("timeout_prompt", fmt.Sprintf("abort=%t", abort), abort)
+					r.env.Logger.LogLimitReached("timeout-prompt", fmt.Sprintf("abort=%t", abort), abort)
 				}
 
 				if abort {
@@ -647,7 +647,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 				fmt.Fprintf(statusWriter, "\nExecution limit reached: maximum reasoning tool rounds reached (%d turns).\n", maxToolTurns)
 			}
 			if r.env.Logger != nil {
-				r.env.Logger.LogLimitReached("max_turns", fmt.Sprintf("reached limit of %d turns", maxToolTurns), false)
+				r.env.Logger.LogLimitReached("max-turns", fmt.Sprintf("reached limit of %d turns", maxToolTurns), false)
 			}
 
 			abort := true
@@ -655,7 +655,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 				abort = r.env.AskConfirmation("Do you want to abort execution?", true)
 			}
 			if r.env.Logger != nil {
-				r.env.Logger.LogLimitReached("max_turns_prompt", fmt.Sprintf("abort=%t", abort), abort)
+				r.env.Logger.LogLimitReached("max-turns-prompt", fmt.Sprintf("abort=%t", abort), abort)
 			}
 
 			if abort {

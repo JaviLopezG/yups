@@ -609,7 +609,7 @@ func startReleaseServer(t *testing.T, tag string, payload []byte) string {
 
 	archive := tarGzOf(t, payload)
 	sum := sha256.Sum256(archive)
-	archiveName := fmt.Sprintf("yups_%s_linux_%s.tar.gz", tag, runtime.GOARCH)
+	archiveName := fmt.Sprintf("yups-%s-linux-%s.tar.gz", tag, runtime.GOARCH)
 
 	listener, err := net.Listen("tcp", ":0")
 	if err != nil {

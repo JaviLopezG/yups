@@ -80,9 +80,9 @@ type apiSource struct {
 }
 
 // ArchiveName returns the goreleaser archive file name of a release for
-// the running platform: yups_<tag>_<GOOS>_<GOARCH>.tar.gz.
+// the running platform: yups-<tag>-<GOOS>-<GOARCH>.tar.gz.
 func ArchiveName(tag string) string {
-	return fmt.Sprintf("yups_%s_%s_%s.tar.gz", tag, runtime.GOOS, runtime.GOARCH)
+	return fmt.Sprintf("yups-%s-%s-%s.tar.gz", tag, runtime.GOOS, runtime.GOARCH)
 }
 
 // Latest fetches and parses the latest release, selecting the archive

@@ -1053,7 +1053,7 @@ func TestOSReadHistory(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// 1. Test live session history via YUPS_SESSION_HISTORY
-	sessionHistFile := filepath.Join(tempDir, "session_history.kk")
+	sessionHistFile := filepath.Join(tempDir, "session-history.kk")
 	sessionContent := `  966  ls -javi # quiero diferenciar entre binarios y archivos de texto
   967  yups ls -javi # quiero diferenciar entre binarios y archivos de texto
   968  yups --uninstall-yups

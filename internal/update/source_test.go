@@ -63,7 +63,7 @@ func TestAPILatestURLDerivation(t *testing.T) {
 // releaseJSON builds a releases/latest document with the platform archive
 // and the checksum list as assets.
 func releaseJSON(tag string) string {
-	archive := fmt.Sprintf("yups_%s_%s_%s.tar.gz", tag, runtime.GOOS, runtime.GOARCH)
+	archive := fmt.Sprintf("yups-%s-%s-%s.tar.gz", tag, runtime.GOOS, runtime.GOARCH)
 	return fmt.Sprintf(`{
 		"tag_name": %q,
 		"assets": [
@@ -94,7 +94,7 @@ func TestLatestQueriesForgejoAPIPathAndParsesRelease(t *testing.T) {
 	if gotPath != wantPath {
 		t.Errorf("queried path = %q, want %q", gotPath, wantPath)
 	}
-	wantArchive := fmt.Sprintf("yups_v1.2.3_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	wantArchive := fmt.Sprintf("yups-v1.2.3-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	switch {
 	case release.Tag != "v1.2.3":
 		t.Errorf("Tag = %q, want v1.2.3", release.Tag)
@@ -156,12 +156,12 @@ func TestLatestErrorPaths(t *testing.T) {
 				fmt.Fprint(w, `{"tag_name": "v9.9.9", "assets": [
 					{"name": "checksums.txt", "browser_download_url": "https://dl.example/checksums.txt"}]}`)
 			},
-			wantErr: "ships no yups_v9.9.9_",
+			wantErr: "ships no yups-v9.9.9-",
 		},
 		{
 			name: "missing checksums asset is rejected",
 			handler: func(w http.ResponseWriter, r *http.Request) {
-				archive := fmt.Sprintf("yups_v9.9.9_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+				archive := fmt.Sprintf("yups-v9.9.9-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 				fmt.Fprintf(w, `{"tag_name": "v9.9.9", "assets": [
 					{"name": %q, "browser_download_url": "https://dl.example/x"}]}`, archive)
 			},

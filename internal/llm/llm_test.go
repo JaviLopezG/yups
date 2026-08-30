@@ -397,10 +397,10 @@ func TestExtractToolCalls(t *testing.T) {
 		t.Errorf("calls1 = %+v, want 1 fetch-command-documentation call", calls1)
 	}
 
-	// 2. XML tag fallback: <tool_call>...</tool_call>
+	// 2. XML tag fallback: <tool-call>...</tool-call>
 	msg2 := Message{
 		Role:    "assistant",
-		Content: `<tool_call>{"name": "fetch-command-documentation", "arguments": {"command": "tar", "subcommand": "create"}}</tool_call>`,
+		Content: `<tool-call>{"name": "fetch-command-documentation", "arguments": {"command": "tar", "subcommand": "create"}}</tool-call>`,
 	}
 	calls2 := ExtractToolCalls(msg2)
 	if len(calls2) != 1 || calls2[0].Function.Name != "fetch-command-documentation" {
@@ -462,21 +462,21 @@ func TestBuildChatRequestDynamicNonceXMLBoundaries(t *testing.T) {
 	if !strings.Contains(sysMsg, "CRITICAL DATA INTEGRITY") {
 		t.Errorf("sysMsg missing CRITICAL DATA INTEGRITY instruction:\n%s", sysMsg)
 	}
-	if !strings.Contains(sysMsg, "<system_context_") {
-		t.Errorf("sysMsg missing <system_context_ tag:\n%s", sysMsg)
+	if !strings.Contains(sysMsg, "<system-context-") {
+		t.Errorf("sysMsg missing <system-context- tag:\n%s", sysMsg)
 	}
-	if !strings.Contains(sysMsg, "<recent_shell_history_") {
-		t.Errorf("sysMsg missing <recent_shell_history_ tag:\n%s", sysMsg)
+	if !strings.Contains(sysMsg, "<recent-shell-history-") {
+		t.Errorf("sysMsg missing <recent-shell-history- tag:\n%s", sysMsg)
 	}
-	if !strings.Contains(sysMsg, "<history_entry>ls -javi # quiero diferenciar entre binarios y archivos de texto</history_entry>") {
+	if !strings.Contains(sysMsg, "<history-entry>ls -javi # quiero diferenciar entre binarios y archivos de texto</history-entry>") {
 		t.Errorf("sysMsg missing history entry:\n%s", sysMsg)
 	}
 
 	// Check that user message contains XML tags
-	if !strings.Contains(userMsg, "<user_command_line_") || !strings.Contains(userMsg, "grep -r pattern .") {
-		t.Errorf("userMsg missing <user_command_line_ tag:\n%s", userMsg)
+	if !strings.Contains(userMsg, "<user-command-line-") || !strings.Contains(userMsg, "grep -r pattern .") {
+		t.Errorf("userMsg missing <user-command-line- tag:\n%s", userMsg)
 	}
-	if !strings.Contains(userMsg, "<unknown_items_") || !strings.Contains(userMsg, "- -r") {
-		t.Errorf("userMsg missing <unknown_items_ tag:\n%s", userMsg)
+	if !strings.Contains(userMsg, "<unknown-items-") || !strings.Contains(userMsg, "- -r") {
+		t.Errorf("userMsg missing <unknown-items- tag:\n%s", userMsg)
 	}
 }
