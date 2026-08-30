@@ -431,15 +431,15 @@ func TestExplainInteractiveExecutionModifications(t *testing.T) {
 }
 
 func TestTokenizeWithComment(t *testing.T) {
-	tokens := Tokenize([]string{"ls", "-avi", "#Quiero listar subdirectorios"})
-	if len(tokens) != 3 {
-		t.Fatalf("len(tokens) = %d, want 3 (%+v)", len(tokens), tokens)
+	p := Parse([]string{"ls", "-avi", "#Quiero listar subdirectorios"})
+	if len(p.Stages) != 1 {
+		t.Fatalf("len(stages) = %d, want 1 (%+v)", len(p.Stages), p.Stages)
 	}
-	if tokens[0].Value != "ls" || tokens[1].Value != "-avi" {
-		t.Errorf("unexpected command tokens: %+v", tokens[:2])
+	if p.Stages[0].Command.Name != "ls" {
+		t.Errorf("unexpected command: %q, want 'ls'", p.Stages[0].Command.Name)
 	}
-	if tokens[2].Type != TokenComment || tokens[2].Value != "Quiero listar subdirectorios" {
-		t.Errorf("unexpected comment token: %+v", tokens[2])
+	if p.Comment != "Quiero listar subdirectorios" {
+		t.Errorf("unexpected comment: %q, want 'Quiero listar subdirectorios'", p.Comment)
 	}
 }
 

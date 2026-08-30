@@ -2,6 +2,9 @@ package explain
 
 import (
 	"strings"
+	"unicode"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // ControlOperator represents how two command stages are connected.
@@ -140,96 +143,204 @@ var KnownSubcommandTools = map[string]bool{
 	"zypper":     true,
 }
 
-// Parse takes a slice of shell arguments and parses them into a Pipeline.
+// Parse takes a slice of shell arguments and parses them into a Pipeline using mvdan.cc/sh/v3/syntax.
 func Parse(args []string) *Pipeline {
-	tokens := Tokenize(args)
-	if len(tokens) == 0 {
+	if len(args) == 0 {
 		return &Pipeline{}
 	}
 
-	pipeline := &Pipeline{}
-	var currentTokens []Token
+	raw := joinArgs(args)
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return &Pipeline{}
+	}
 
-	for _, token := range tokens {
-		switch token.Type {
-		case TokenOpOr, TokenOpAnd, TokenOpPipeStderr, TokenOpPipe, TokenOpSemi, TokenOpBackground:
-			if len(currentTokens) > 0 {
-				cmd := parseCommand(currentTokens)
-				pipeline.Stages = append(pipeline.Stages, Stage{
-					Command:  cmd,
-					Operator: ControlOperator(token.Value),
-				})
-				currentTokens = nil
-			}
-		case TokenComment:
-			pipeline.Comment = token.Value
-			if len(currentTokens) > 0 {
-				cmd := parseCommand(currentTokens)
-				cmd.Comment = token.Value
-				pipeline.Stages = append(pipeline.Stages, Stage{
-					Command:  cmd,
-					Operator: OpNone,
-				})
-				currentTokens = nil
-			} else if len(pipeline.Stages) > 0 {
-				lastStage := &pipeline.Stages[len(pipeline.Stages)-1]
-				if lastStage.Command != nil {
-					lastStage.Command.Comment = token.Value
-				}
-			} else {
-				pipeline.Stages = append(pipeline.Stages, Stage{
-					Command:  &Command{Comment: token.Value},
-					Operator: OpNone,
-				})
-			}
-		default:
-			currentTokens = append(currentTokens, token)
+	if isNaturalLanguageQuery(trimmed) && !strings.HasPrefix(trimmed, "#") {
+		return &Pipeline{
+			Comment: trimmed,
 		}
 	}
 
-	if len(currentTokens) > 0 {
-		cmd := parseCommand(currentTokens)
-		pipeline.Stages = append(pipeline.Stages, Stage{
-			Command:  cmd,
-			Operator: OpNone,
-		})
+	p := syntax.NewParser(syntax.KeepComments(true), syntax.Variant(syntax.LangBash))
+	file, err := p.Parse(strings.NewReader(raw), "")
+	if err != nil {
+		// If bash parsing fails, treat the input as a natural language or comment query
+		return &Pipeline{
+			Comment: trimmed,
+		}
+	}
+
+	pipeline := &Pipeline{}
+
+	// Extract top-level comments
+	var commentParts []string
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if c, ok := node.(*syntax.Comment); ok {
+			text := strings.TrimSpace(strings.TrimPrefix(c.Text, "#"))
+			if text != "" {
+				commentParts = append(commentParts, text)
+			}
+		}
+		return true
+	})
+	if len(commentParts) > 0 {
+		pipeline.Comment = strings.Join(commentParts, " ")
+	}
+
+	// Flatten statements into pipeline stages
+	for i, stmt := range file.Stmts {
+		trailingOp := OpNone
+		if stmt.Background {
+			trailingOp = OpBackground
+		} else if i < len(file.Stmts)-1 {
+			trailingOp = OpSemicolon
+		}
+		stages := flattenStmt(stmt, trailingOp)
+		pipeline.Stages = append(pipeline.Stages, stages...)
+	}
+
+	// If there are no command stages but a comment was found
+	if len(pipeline.Stages) == 0 && pipeline.Comment != "" {
+		return pipeline
+	}
+
+	// Propagate comment to command if present
+	if pipeline.Comment != "" && len(pipeline.Stages) > 0 {
+		lastCmd := pipeline.Stages[len(pipeline.Stages)-1].Command
+		if lastCmd != nil && lastCmd.Comment == "" {
+			lastCmd.Comment = pipeline.Comment
+		}
 	}
 
 	return pipeline
 }
 
-func parseCommand(tokens []Token) *Command {
-	cmd := &Command{}
-	i := 0
-	n := len(tokens)
+func flattenStmt(stmt *syntax.Stmt, trailingOp ControlOperator) []Stage {
+	if stmt == nil || stmt.Cmd == nil {
+		return nil
+	}
 
-	// 1. Parse leading environment variable assignments (e.g. FOO=bar)
-	for i < n && tokens[i].Type == TokenWord && isEnvVarAssignment(tokens[i].Value) {
-		cmd.EnvVars = append(cmd.EnvVars, tokens[i].Value)
+	switch x := stmt.Cmd.(type) {
+	case *syntax.BinaryCmd:
+		op := mapBinOp(x.Op)
+		left := flattenStmt(x.X, op)
+		right := flattenStmt(x.Y, trailingOp)
+		return append(left, right...)
+	case *syntax.CallExpr:
+		cmd := parseCallExpr(x, stmt.Redirs, stmt.Comments)
+		return []Stage{{Command: cmd, Operator: trailingOp}}
+	case *syntax.Subshell:
+		var stages []Stage
+		for i, s := range x.Stmts {
+			op := OpNone
+			if s.Background {
+				op = OpBackground
+			} else if i < len(x.Stmts)-1 {
+				op = OpSemicolon
+			}
+			if i == len(x.Stmts)-1 && trailingOp != OpNone {
+				op = trailingOp
+			}
+			stages = append(stages, flattenStmt(s, op)...)
+		}
+		return stages
+	case *syntax.Block:
+		var stages []Stage
+		for i, s := range x.Stmts {
+			op := OpNone
+			if s.Background {
+				op = OpBackground
+			} else if i < len(x.Stmts)-1 {
+				op = OpSemicolon
+			}
+			if i == len(x.Stmts)-1 && trailingOp != OpNone {
+				op = trailingOp
+			}
+			stages = append(stages, flattenStmt(s, op)...)
+		}
+		return stages
+	case *syntax.TimeClause:
+		if x.Stmt != nil {
+			stages := flattenStmt(x.Stmt, trailingOp)
+			if len(stages) > 0 && stages[0].Command != nil {
+				stages[0].Command.Wrappers = append([]Wrapper{{Name: "time"}}, stages[0].Command.Wrappers...)
+			}
+			return stages
+		}
+		return []Stage{{Command: &Command{Name: "time"}, Operator: trailingOp}}
+	default:
+		// Fallback for other shell clauses
+		var sb strings.Builder
+		_ = syntax.NewPrinter().Print(&sb, stmt)
+		cmd := &Command{
+			Name: strings.TrimSpace(sb.String()),
+		}
+		return []Stage{{Command: cmd, Operator: trailingOp}}
+	}
+}
+
+func mapBinOp(op syntax.BinCmdOperator) ControlOperator {
+	switch op {
+	case syntax.AndStmt:
+		return OpAnd
+	case syntax.OrStmt:
+		return OpOr
+	case syntax.Pipe:
+		return OpPipe
+	case syntax.PipeAll:
+		return OpPipeStderr
+	default:
+		return OpNone
+	}
+}
+
+func parseCallExpr(call *syntax.CallExpr, redirs []*syntax.Redirect, comments []syntax.Comment) *Command {
+	cmd := &Command{}
+
+	// 1. EnvVars from Assigns (e.g. FOO=bar)
+	for _, a := range call.Assigns {
+		if a.Name != nil {
+			val := ""
+			if a.Value != nil {
+				val = wordValue(a.Value)
+			}
+			cmd.EnvVars = append(cmd.EnvVars, a.Name.Value+"="+val)
+		}
+	}
+
+	// 2. Extract word strings from args
+	var words []string
+	for _, w := range call.Args {
+		words = append(words, wordValue(w))
+	}
+
+	i := 0
+	n := len(words)
+
+	// 3. Leading environment variable assignments in arguments
+	for i < n && isEnvVarAssignment(words[i]) {
+		cmd.EnvVars = append(cmd.EnvVars, words[i])
 		i++
 	}
 
-	// 2. Parse wrappers (e.g. sudo, time, nohup)
-	for i < n && tokens[i].Type == TokenWord {
-		word := tokens[i].Value
-		baseName := filepathBase(word)
-		if KnownWrappers[baseName] || KnownWrappers[word] {
-			wrapper := Wrapper{Name: word}
+	// 4. Wrappers (e.g. sudo, time, nohup)
+	for i < n {
+		w := words[i]
+		base := filepathBase(w)
+		if KnownWrappers[base] || KnownWrappers[w] {
+			wrapper := Wrapper{Name: w}
 			i++
-			// Consume flags/args for the wrapper until target command
-			for i < n && tokens[i].Type == TokenWord {
-				nextWord := tokens[i].Value
-				if strings.HasPrefix(nextWord, "-") {
-					// Wrapper flag
-					wrapper.Flags = append(wrapper.Flags, parseFlags(nextWord)...)
+			for i < n {
+				next := words[i]
+				if strings.HasPrefix(next, "-") {
+					wrapper.Flags = append(wrapper.Flags, parseFlags(next)...)
 					i++
-					// If flag takes argument like -u user
-					if (nextWord == "-u" || nextWord == "--user") && i < n && !strings.HasPrefix(tokens[i].Value, "-") {
-						wrapper.Args = append(wrapper.Args, tokens[i].Value)
+					if (next == "-u" || next == "--user") && i < n && !strings.HasPrefix(words[i], "-") {
+						wrapper.Args = append(wrapper.Args, words[i])
 						i++
 					}
-				} else if isEnvVarAssignment(nextWord) {
-					cmd.EnvVars = append(cmd.EnvVars, nextWord)
+				} else if isEnvVarAssignment(next) {
+					cmd.EnvVars = append(cmd.EnvVars, next)
 					i++
 				} else {
 					break
@@ -245,46 +356,186 @@ func parseCommand(tokens []Token) *Command {
 		return cmd
 	}
 
-	// 3. Command name
-	if tokens[i].Type == TokenWord {
-		cmd.Name = tokens[i].Value
-		i++
-	}
+	// 5. Command name
+	cmd.Name = words[i]
+	i++
 
-	// 4. Check for Subcommand if tool supports it (e.g. git commit)
+	// 6. Subcommand check for tools like git, apt, cargo, docker
 	baseCmd := filepathBase(cmd.Name)
-	if KnownSubcommandTools[baseCmd] && i < n && tokens[i].Type == TokenWord && !strings.HasPrefix(tokens[i].Value, "-") && !isEnvVarAssignment(tokens[i].Value) {
-		cmd.Subcommand = tokens[i].Value
+	if KnownSubcommandTools[baseCmd] && i < n && !strings.HasPrefix(words[i], "-") && !isEnvVarAssignment(words[i]) {
+		cmd.Subcommand = words[i]
 		i++
 	}
 
-	// 5. Parse remaining flags, redirects, and positional arguments
+	// 7. Flags and positional arguments
 	for i < n {
-		tok := tokens[i]
-		switch tok.Type {
-		case TokenRedir:
-			redir := Redirect{Op: tok.Value}
-			i++
-			if i < n && tokens[i].Type == TokenWord {
-				redir.Target = tokens[i].Value
-				i++
-			}
-			cmd.Redirects = append(cmd.Redirects, redir)
-		case TokenWord:
-			val := tok.Value
-			if strings.HasPrefix(val, "-") && val != "-" {
-				flags := parseFlags(val)
-				cmd.Flags = append(cmd.Flags, flags...)
+		val := words[i]
+		if strings.HasPrefix(val, "-") && val != "-" {
+			cmd.Flags = append(cmd.Flags, parseFlags(val)...)
+		} else {
+			cmd.Args = append(cmd.Args, val)
+		}
+		i++
+	}
+
+	// 8. Redirections
+	for _, r := range redirs {
+		redir := Redirect{Op: r.Op.String()}
+		if r.N != nil {
+			redir.Op = r.N.Value + redir.Op
+		}
+		if r.Word != nil {
+			redir.Target = wordValue(r.Word)
+		}
+		if r.Op == syntax.DplOut && r.N != nil && r.N.Value == "2" && r.Word != nil && wordValue(r.Word) == "1" {
+			redir.Op = "2>&1"
+			redir.Target = ""
+		}
+		cmd.Redirects = append(cmd.Redirects, redir)
+	}
+
+	// 9. Comments
+	for _, c := range comments {
+		text := strings.TrimSpace(strings.TrimPrefix(c.Text, "#"))
+		if text != "" {
+			if cmd.Comment != "" {
+				cmd.Comment += " " + text
 			} else {
-				cmd.Args = append(cmd.Args, val)
+				cmd.Comment = text
 			}
-			i++
-		default:
-			i++
 		}
 	}
 
 	return cmd
+}
+
+func wordValue(w *syntax.Word) string {
+	if w == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, part := range w.Parts {
+		writeWordPart(&sb, part)
+	}
+	return sb.String()
+}
+
+func writeWordPart(sb *strings.Builder, part syntax.WordPart) {
+	switch p := part.(type) {
+	case *syntax.Lit:
+		sb.WriteString(p.Value)
+	case *syntax.SglQuoted:
+		sb.WriteString(p.Value)
+	case *syntax.DblQuoted:
+		for _, inner := range p.Parts {
+			writeWordPart(sb, inner)
+		}
+	case *syntax.ParamExp:
+		if p.Param != nil {
+			if p.Short {
+				sb.WriteString("$" + p.Param.Value)
+			} else {
+				sb.WriteString("${" + p.Param.Value + "}")
+			}
+		}
+	case *syntax.CmdSubst:
+		var sub strings.Builder
+		_ = syntax.NewPrinter().Print(&sub, p)
+		sb.WriteString(sub.String())
+	case *syntax.ArithmExp:
+		var sub strings.Builder
+		_ = syntax.NewPrinter().Print(&sub, p)
+		sb.WriteString(sub.String())
+	case *syntax.ProcSubst:
+		var sub strings.Builder
+		_ = syntax.NewPrinter().Print(&sub, p)
+		sb.WriteString(sub.String())
+	default:
+		var sub strings.Builder
+		_ = syntax.NewPrinter().Print(&sub, p)
+		sb.WriteString(sub.String())
+	}
+}
+
+func isNaturalLanguageQuery(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "¿") || strings.HasPrefix(trimmed, "?") {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	prefixes := []string{
+		"cómo ", "como ", "how ", "how to ", "what ", "what is ", "where ",
+		"why ", "quién ", "quien ", "cual ", "cuál ", "dónde ", "donde ",
+		"ayuda ", "help ", "explicar ", "explain ", "muéstrame ", "show me ",
+		"dime ", "tell me ",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func joinArgs(args []string) string {
+	if len(args) == 1 {
+		return args[0]
+	}
+	var sb strings.Builder
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		if strings.HasPrefix(arg, "#") {
+			sb.WriteString(strings.Join(args[i:], " "))
+			break
+		}
+		if needsQuotes(arg) {
+			sb.WriteString(quoteArg(arg))
+		} else {
+			sb.WriteString(arg)
+		}
+	}
+	return sb.String()
+}
+
+func needsQuotes(s string) bool {
+	if s == "" {
+		return true
+	}
+	switch s {
+	case "||", "&&", "|", "|&", ";", "&", ">", ">>", "<", "2>", "2>&1", "&>":
+		return false
+	}
+	if strings.ContainsAny(s, "|&;><#") {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsSpace(r) || r == '"' || r == '\'' || r == '\\' || r == '$' || r == '`' {
+			return true
+		}
+	}
+	return false
+}
+
+func quoteArg(s string) string {
+	if !strings.Contains(s, "'") {
+		return "'" + s + "'"
+	}
+	var sb strings.Builder
+	sb.WriteByte('"')
+	for _, r := range s {
+		if r == '"' || r == '\\' || r == '$' || r == '`' {
+			sb.WriteByte('\\')
+		}
+		sb.WriteRune(r)
+	}
+	sb.WriteByte('"')
+	return sb.String()
 }
 
 func isEnvVarAssignment(s string) bool {
