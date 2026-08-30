@@ -406,17 +406,38 @@ func TestInstallDetectsSameNameCommandOutsideCurrentPATH(t *testing.T) {
 	forEachImage(t, func(t *testing.T, d distro) {
 		id := newContainer(t, d)
 		if out, code := sh(t, id, "root", "",
-			"cp /opt/yups /usr/bin/yups && chmod 755 /usr/bin/yups && mkdir -p /tmp/only"); code != 0 {
+			"cp /opt/yups /usr/bin/yups && chmod 755 /usr/bin/yups && mkdir -p /tmp/only && mkdir -p /root/.yups && touch /root/.yups/config.toml"); code != 0 {
 			t.Fatalf("setup failed:\n%s", out)
 		}
 		// PATH no longer contains /usr/bin, but the command exists in one
-		// of the well-known binary directories: step 2 of --install-yups
+		// of the well-known binary directories and ~/.yups exists: step 3 of --install-yups
 		// catches it.
 		out, code := yupsCmd(t, id, "root", "/tmp/only", "--install-yups")
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
 		requireOutputContains(t, out, "already installed", "/usr/bin/yups")
+	})
+}
+
+func TestInstallWhenBinaryInPATHWithoutConfigDirInitializesConfig(t *testing.T) {
+	forEachImage(t, func(t *testing.T, d distro) {
+		id := newContainer(t, d)
+		if out, code := sh(t, id, "root", "",
+			"cp /opt/yups /usr/bin/yups && chmod 755 /usr/bin/yups && rm -rf /root/.yups"); code != 0 {
+			t.Fatalf("setup failed:\n%s", out)
+		}
+		out, code := yupsCmd(t, id, "root", "", "--install-yups")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0\n%s", code, out)
+		}
+		if strings.Contains(out, "already installed") {
+			t.Errorf("output %q should not report already installed when ~/.yups is missing", out)
+		}
+		requireOutputContains(t, out, "/usr/bin/yups")
+		if !fileExists(t, id, "/root/.yups/config.toml") {
+			t.Error("/root/.yups/config.toml was not initialized")
+		}
 	})
 }
 

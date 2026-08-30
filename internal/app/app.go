@@ -73,7 +73,7 @@ func isSystemInstalled(env *Env) bool {
 	configFileExists := false
 	if env.UserHomeDir != nil && env.PathExists != nil {
 		if home, err := env.UserHomeDir(); err == nil {
-			configFileExists = env.PathExists(config.Path(home))
+			configFileExists = env.PathExists(config.Dir(home)) || env.PathExists(config.Path(home))
 		}
 	}
 	return inPath && configFileExists

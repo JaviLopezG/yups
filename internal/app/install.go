@@ -17,9 +17,9 @@ import (
 //  1. The write-permission probe over the PATH directories runs first,
 //     before anything else (acceptance criterion IN-1).
 //  2. If the executable is already reachable through one of the PATH
-//     directories, the user is informed that it is already installed.
+//     directories, and ~/.yups exists, the user is informed that it is already installed.
 //  3. If a command with the same name exists in one of the well-known
-//     system binary directories, the user is informed that it is already
+//     system binary directories, and ~/.yups exists, the user is informed that it is already
 //     installed.
 //  4. When several coexisting copies show up anywhere, they are reported
 //     together with the first instance found in PATH.
@@ -28,8 +28,8 @@ import (
 //     repeat the previous command with sudo (`sudo !!`); anybody else is
 //     informed that the installation is not possible.
 //  6. Otherwise, the executable is copied into the first writable PATH
-//     directory, the ~/.yups configuration directory is initialized,
-//     and the user is informed.
+//     directory (unless already present in PATH), the ~/.yups configuration
+//     directory is initialized, and the user is informed.
 func Install(env *Env, stdout, stderr io.Writer) int {
 	pathDirs := env.PathDirs()
 
@@ -38,41 +38,57 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 	// user cannot write anywhere.
 	destDir := firstWritableDir(env, pathDirs)
 
-	if found := findInDirs(env, pathDirs, ProgramName); len(found) > 0 {
-		reportInstallAnomaly(env, found, stdout)
-		fmt.Fprintf(stdout, "%s is already installed in %s.\n", ProgramName, quotedJoin(found))
-		return ExitOK
-	}
-
-	if found := findInDirs(env, env.KnownBinDirs(), ProgramName); len(found) > 0 {
-		reportInstallAnomaly(env, found, stdout)
-		fmt.Fprintf(stdout, "%s is already installed (found outside PATH in %s).\n", ProgramName, quotedJoin(found))
-		return ExitOK
-	}
-
-	if destDir == "" {
-		if isAdmin(env) {
-			fmt.Fprintf(stdout,
-				"Cannot install %s: none of the PATH directories is writable, but you have administrator privileges; retry the previous command with sudo (sudo !!).\n",
-				ProgramName)
-		} else {
-			fmt.Fprintf(stdout,
-				"Cannot install %s: you do not have write permissions on any of the directories where the system stores executables.\n",
-				ProgramName)
+	yupsDirExists := false
+	if env.UserHomeDir != nil && env.PathExists != nil {
+		if home, err := env.UserHomeDir(); err == nil {
+			yupsDirExists = env.PathExists(config.Dir(home)) || env.PathExists(config.Path(home))
 		}
-		return ExitError
 	}
 
-	sourcePath, err := env.ExecutablePath()
-	if err != nil {
-		fmt.Fprintf(stderr, "Cannot install %s: %v.\n", ProgramName, err)
-		return ExitError
+	foundInPath := findInDirs(env, pathDirs, ProgramName)
+	if len(foundInPath) > 0 && yupsDirExists {
+		reportInstallAnomaly(env, foundInPath, stdout)
+		fmt.Fprintf(stdout, "%s is already installed in %s.\n", ProgramName, quotedJoin(foundInPath))
+		return ExitOK
 	}
 
-	destPath, err := env.InstallTo(sourcePath, destDir)
-	if err != nil {
-		fmt.Fprintf(stderr, "Cannot install %s: %v.\n", ProgramName, err)
-		return ExitError
+	foundInKnown := findInDirs(env, env.KnownBinDirs(), ProgramName)
+	if len(foundInKnown) > 0 && yupsDirExists {
+		reportInstallAnomaly(env, foundInKnown, stdout)
+		fmt.Fprintf(stdout, "%s is already installed (found outside PATH in %s).\n", ProgramName, quotedJoin(foundInKnown))
+		return ExitOK
+	}
+
+	var destPath string
+	if len(foundInPath) > 0 {
+		reportInstallAnomaly(env, foundInPath, stdout)
+		destPath = filepath.Join(foundInPath[0], ProgramName)
+	} else {
+		if destDir == "" {
+			if isAdmin(env) {
+				fmt.Fprintf(stdout,
+					"Cannot install %s: none of the PATH directories is writable, but you have administrator privileges; retry the previous command with sudo (sudo !!).\n",
+					ProgramName)
+			} else {
+				fmt.Fprintf(stdout,
+					"Cannot install %s: you do not have write permissions on any of the directories where the system stores executables.\n",
+					ProgramName)
+			}
+			return ExitError
+		}
+
+		sourcePath, err := env.ExecutablePath()
+		if err != nil {
+			fmt.Fprintf(stderr, "Cannot install %s: %v.\n", ProgramName, err)
+			return ExitError
+		}
+
+		var installErr error
+		destPath, installErr = env.InstallTo(sourcePath, destDir)
+		if installErr != nil {
+			fmt.Fprintf(stderr, "Cannot install %s: %v.\n", ProgramName, installErr)
+			return ExitError
+		}
 	}
 
 	// Initialize ~/.yups/config.toml on install
