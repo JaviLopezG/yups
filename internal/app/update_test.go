@@ -536,6 +536,7 @@ func TestInstallReportsMultiLocationAnomaly(t *testing.T) {
 	fs := newFakeFS()
 	fs.addExecutable("/home/user/bin/yups") // first PATH directory
 	fs.addExecutable("/usr/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
 
 	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitOK {

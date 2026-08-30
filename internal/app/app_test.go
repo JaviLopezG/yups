@@ -401,6 +401,7 @@ func TestUnknownOptionIsAUsageError(t *testing.T) {
 func TestInstallWhenAlreadyInPath(t *testing.T) {
 	fs := newFakeFS()
 	fs.addExecutable("/usr/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
 	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
@@ -416,12 +417,85 @@ func TestInstallWhenAlreadyInPath(t *testing.T) {
 func TestInstallDetectsSameCommandOutsideCurrentPath(t *testing.T) {
 	fs := newFakeFS()
 	fs.addExecutable("/usr/local/sbin/yups") // exists outside the fake PATH
+	fs.existingPaths[config.Dir(fs.home)] = true
 	out, code := runDispatch(t, fs.env(), "--install-yups")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 	}
 	if !strings.Contains(out, "already installed") || !strings.Contains(out, "/usr/local/sbin/yups") {
 		t.Errorf("unexpected output %q", out)
+	}
+}
+
+func TestInstallWhenBinaryInPATHButConfigDirMissing(t *testing.T) {
+	fs := newFakeFS()
+	fs.addExecutable("/usr/bin/yups")
+	out, code := runDispatch(t, fs.env(), "--install-yups")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+	}
+	if strings.Contains(out, "already installed") {
+		t.Errorf("output %q should not report already installed when ~/.yups is missing", out)
+	}
+	if !strings.Contains(out, "yups installed in /usr/bin/yups") {
+		t.Errorf("expected installation confirmation in /usr/bin/yups, got %q", out)
+	}
+	if fs.installedDst != "" {
+		t.Error("binary already in PATH should not be re-copied")
+	}
+	cfgPath := config.Path(fs.home)
+	if _, ok := fs.configs[cfgPath]; !ok {
+		t.Fatalf("config file was not initialized at %s", cfgPath)
+	}
+}
+
+func TestIsSystemInstalledBothConditions(t *testing.T) {
+	tests := []struct {
+		name       string
+		inPath     bool
+		hasConfig  bool
+		wantResult bool
+	}{
+		{
+			name:       "neither binary nor config exists",
+			inPath:     false,
+			hasConfig:  false,
+			wantResult: false,
+		},
+		{
+			name:       "binary in path but config missing",
+			inPath:     true,
+			hasConfig:  false,
+			wantResult: false,
+		},
+		{
+			name:       "config exists but binary missing from path",
+			inPath:     false,
+			hasConfig:  true,
+			wantResult: false,
+		},
+		{
+			name:       "both binary in path and config directory exist",
+			inPath:     true,
+			hasConfig:  true,
+			wantResult: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := newFakeFS()
+			if tt.inPath {
+				fs.addExecutable("/usr/bin/yups")
+			}
+			if tt.hasConfig {
+				fs.existingPaths[config.Dir(fs.home)] = true
+			}
+			got := isSystemInstalled(fs.env())
+			if got != tt.wantResult {
+				t.Errorf("isSystemInstalled = %v, want %v", got, tt.wantResult)
+			}
+		})
 	}
 }
 
