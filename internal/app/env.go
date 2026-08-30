@@ -162,7 +162,7 @@ func (e *Env) DocEnv() explain.DocEnv {
 				cheatsDir = config.CheatsheetsDir(home)
 			}
 			if e.PathExists != nil {
-				configFileExists = e.PathExists(config.Path(home))
+				configFileExists = e.PathExists(config.Dir(home)) || e.PathExists(config.Path(home))
 			}
 			if e.LoadConfig != nil {
 				if loaded, err := e.LoadConfig(config.Path(home)); err == nil {
@@ -874,14 +874,14 @@ func osExecShell(command string, stdout, stderr io.Writer) int {
 }
 
 // osIsInstalled reports whether yups is properly installed:
-// 1. ~/.yups/config.toml configuration file exists
+// 1. ~/.yups/config.toml (or ~/.yups directory) exists
 // 2. yups executable is present in PATH
 func osIsInstalled() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
 	}
-	if !osPathExists(config.Path(home)) {
+	if !osPathExists(config.Dir(home)) && !osPathExists(config.Path(home)) {
 		return false
 	}
 	for _, dir := range osPathDirs() {

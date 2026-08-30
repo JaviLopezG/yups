@@ -42,11 +42,11 @@ $ yups --update-yups
 
 - `--install-yups`:
 
-  1. If the executable is already reachable through any `PATH` directory, it
-     reports that it is already installed.
+  1. If the executable is already reachable through any `PATH` directory and
+     `~/.yups` exists, it reports that it is already installed.
   2. Otherwise it checks whether a command named `yups` already exists in one of
      the well-known system binary directories (`/usr/local/bin`, `/usr/bin`,
-     ...); if so, it reports that it is already installed.
+     ...) and `~/.yups` exists; if so, it reports that it is already installed.
   3. When several coexisting copies show up anywhere, the user is informed of
      all discovered duplicates while operating with the first instance found in
      `PATH` (matching `which` behavior).
@@ -56,11 +56,12 @@ $ yups --update-yups
      `sudoers`, `wheel` or `admin`—, or passwordless sudo rights) it suggests
      repeating the previous command with `sudo !!`; otherwise it reports that
      the installation is not possible.
-  5. If everything is fine, the executable is copied into that directory, prompts
-     for the Ollama inference endpoint (`http://localhost:11434` by default),
-     automatically probes `/api/tags` to discover and configure models,
-     initializes `~/.yups/config.toml`, and downloads community cheatsheets
-     (`tldr-pages`, `navi`, `cheat.sh`, `cheat`) into `~/.yups/cheatsheets/`.
+  5. If the binary is not yet in `PATH`, the executable is copied into that
+     directory. Then it prompts for the Ollama inference endpoint
+     (`http://localhost:11434` by default), automatically probes `/api/tags` to
+     discover and configure models, initializes `~/.yups/config.toml`, and
+     downloads community cheatsheets (`tldr-pages`, `navi`, `cheat.sh`, `cheat`)
+     into `~/.yups/cheatsheets/`.
 
 - `--uninstall-yups`:
 
@@ -108,7 +109,7 @@ Where does yups look, and what does it consider an administrator?
 | Decision                     | Value                                                                                                              | Why                                                                                                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install target               | First writable directory of the current `PATH`                                                                     | Respects whatever the user configured.                                                                                                                                    |
-| "Already installed" check    | Every `PATH` directory plus `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin`          | Catches copies reachable through non-default PATHs.                                                                                                                       |
+| "Already installed" check    | Binary in `PATH` (or `/usr/local/sbin`, `/usr/local/bin`, ...) AND `~/.yups` exists | Ensures both binary and per-user configuration are present before reporting installed.                                                                                                                   |
 | Administrator groups         | `sudo`, `sudoer`, `sudoers` (Debian family), `wheel` (Fedora/RHEL/Arch/openSUSE), `admin` (historic Ubuntu, macOS) | The default administrator group of the mainstream distros.                                                                                                                |
 | Administrator probe fallback | `sudo -n true` succeeds                                                                                            | Covers NOPASSWD sudoers and root on single-user systems where no group matches.                                                                                           |
 | Write-permission probe       | Create + remove a temporary `.kk` file in the directory                                                            | More reliable than access(2) with ACLs, read-only mounts or sticky bits.                                                                                                  |
