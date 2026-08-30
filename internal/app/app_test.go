@@ -270,8 +270,11 @@ func TestVersionFlagPrintsNameAndVersion(t *testing.T) {
 		if code != ExitOK {
 			t.Fatalf("arg %q: exit code = %d, want %d", arg, code, ExitOK)
 		}
-		if want := ProgramName + " " + Version + "\n"; out != want {
-			t.Errorf("arg %q: output = %q, want %q", arg, out, want)
+		if !strings.Contains(out, Logo) || !strings.Contains(out, arg) {
+			t.Errorf("arg %q: output %q does not contain logo and arg", arg, out)
+		}
+		if !strings.Contains(out, ProgramName+" "+Version) {
+			t.Errorf("arg %q: output %q does not contain %q", arg, out, ProgramName+" "+Version)
 		}
 	}
 }

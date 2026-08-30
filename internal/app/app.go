@@ -89,6 +89,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	logger := sessionlog.New(homeDir, args)
 
 	isInstalled := isSystemInstalled(env)
+	color := env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout)
 
 	if len(args) == 0 {
 		fmt.Fprintln(stdout, ColoredLogo)
@@ -107,8 +108,6 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 		}
 		return ExitOK
 	}
-
-	color := env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout)
 
 	// Handle flagUpdateApply
 	if args[0] == flagUpdateApply {
@@ -133,24 +132,28 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			break
 		}
 		if arg == "--test-models" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			_, code := RunModelBenchmark(env, stdout, stderr, logger)
 			return code
 		}
-		if arg == "-h" || arg == "--help" || arg == "help" {
+		if arg == "--help" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogConclusion("", "", "", "HELP", ExitOK)
 			}
 			fmt.Fprint(stdout, helpText)
 			return ExitOK
 		}
-		if arg == "-V" || arg == "--version" || arg == "version" {
+		if arg == "--version" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogConclusion("", "", "", "VERSION", ExitOK)
 			}
 			fmt.Fprintf(stdout, "%s %s\n", ProgramName, Version)
 			return ExitOK
 		}
-		if arg == "-i" || arg == "--install-yups" {
+		if arg == "--install-yups" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogSection("INSTALL")
 			}
@@ -160,7 +163,8 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			}
 			return code
 		}
-		if arg == "-u" || arg == "--uninstall-yups" {
+		if arg == "--uninstall-yups" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogSection("UNINSTALL")
 			}
@@ -171,6 +175,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			return code
 		}
 		if arg == "--update-yups" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogSection("UPDATE")
 			}
@@ -196,6 +201,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 				i += 2
 				continue
 			}
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			fmt.Fprintln(stderr, "yups: --model requires a model name argument")
 			if logger != nil {
 				logger.LogIncident("CLI_USAGE_ERROR", "--model requires a model name argument")
@@ -209,6 +215,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			queryArgs := args[i+1:]
 			queryText := strings.TrimSpace(strings.Join(queryArgs, " "))
 			if queryText == "" {
+				explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 				fmt.Fprintln(stderr, "yups: --query requires a question or prompt argument")
 				if logger != nil {
 					logger.LogIncident("CLI_USAGE_ERROR", "--query requires a question or prompt argument")
@@ -226,13 +233,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			return explain.Explain(context.Background(), docEnv, []string{"# " + queryText}, stdout, stderr, color)
 		}
 		if strings.HasPrefix(arg, "-") {
-			fmt.Fprintf(stderr, "yups: unknown option %q\n\n", arg)
-			fmt.Fprint(stderr, helpText)
-			if logger != nil {
-				logger.LogIncident("CLI_USAGE_ERROR", "unknown option %q", arg)
-				logger.LogConclusion("", "", "", "UNKNOWN_OPTION", ExitUsage)
-			}
-			return ExitUsage
+			return HandleUnknownFlag(env, args, i, stdout, stderr, color, logger)
 		}
 		break
 	}
@@ -245,7 +246,11 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 
 	cmdArgs := args[i:]
 	if len(cmdArgs) == 0 {
-		fmt.Fprintln(stdout, ColoredLogo)
+		if invocationFlags != "" && invocationFlags != "--" {
+			explain.FormatInvocationHeader(stdout, invocationFlags, "", color)
+		} else {
+			fmt.Fprintln(stdout, ColoredLogo)
+		}
 		if !isInstalled {
 			fmt.Fprintln(stdout, "Note: yups is not installed or configured yet.")
 			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the automatic installation process now? (estimated time ~1-3 minutes)", true) {

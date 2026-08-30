@@ -127,8 +127,8 @@ func TestUpdateEndToEndReplacesInstalledBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("running the updated binary: %v: %s", err, versionOut)
 	}
-	if got := strings.TrimSpace(string(versionOut)); got != ProgramName+" v0.1.0" {
-		t.Errorf("installed binary reports %q, want %q", got, ProgramName+" v0.1.0")
+	if got := strings.TrimSpace(string(versionOut)); !strings.Contains(got, ProgramName+" v0.1.0") {
+		t.Errorf("installed binary reports %q, want it to contain %q", got, ProgramName+" v0.1.0")
 	}
 
 	updatedState, err := os.ReadFile(config.StatePath(home))

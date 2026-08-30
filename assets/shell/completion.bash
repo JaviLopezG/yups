@@ -11,7 +11,7 @@ _yups-completion() {
         cword=$COMP_CWORD
     }
 
-    local yupsFlags="-h --help -V --version -i --install-yups -u --uninstall-yups --update-yups --advanced --model --query --test-models --"
+    local yupsFlags="--help --version --install-yups --uninstall-yups --update-yups --advanced --model --query --test-models --"
 
     if [ "$prev" = "--model" ]; then
         local models=""

@@ -35,17 +35,12 @@ func FormatPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions) {
 	}
 }
 
-// FormatBasicPipeline writes the basic local documentation for all pipeline stages.
-func FormatBasicPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions) {
-	if p == nil {
-		return
-	}
+// FormatInvocationHeader formats the #_? logo line with cyan flags and gray command line.
+func FormatInvocationHeader(w io.Writer, flags, cmd string, color bool) {
+	flags = strings.TrimSpace(flags)
+	cmd = strings.TrimSpace(cmd)
 
-	// 1. Print the #_? logo followed by invocation flags (in cyan) and raw command line (in gray)
-	flags := strings.TrimSpace(p.InvocationFlags)
-	cmd := strings.TrimSpace(p.RawCommandLine)
-
-	if opts.Color {
+	if color {
 		if flags != "" && cmd != "" {
 			fmt.Fprintf(w, "%s#_?%s %s%s%s %s%s%s\n", ansiOrange, ansiReset, ansiCyan, flags, ansiReset, ansiGray, cmd, ansiReset)
 		} else if flags != "" {
@@ -66,6 +61,15 @@ func FormatBasicPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions
 			fmt.Fprintln(w, "#_?")
 		}
 	}
+}
+
+// FormatBasicPipeline writes the basic local documentation for all pipeline stages.
+func FormatBasicPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions) {
+	if p == nil {
+		return
+	}
+
+	FormatInvocationHeader(w, p.InvocationFlags, p.RawCommandLine, opts.Color)
 
 	for i, stage := range p.Stages {
 		if stage.Command != nil {
@@ -239,12 +243,7 @@ func FormatLLMPipelineResult(w io.Writer, exp *PipelineExplanation, opts FormatO
 	}
 
 	if exp.SuggestedCommand != "" {
-		fmt.Fprintln(w)
-		if opts.Color {
-			fmt.Fprintf(w, "%sSuggested command:%s\n  %s%s%s\n", ansiBold, ansiReset, ansiGreen, exp.SuggestedCommand, ansiReset)
-		} else {
-			fmt.Fprintf(w, "Suggested command:\n  %s\n", exp.SuggestedCommand)
-		}
+		FormatSuggestedCommand(w, exp.SuggestedCommand, opts)
 	}
 
 	if exp.SuggestedScript != "" {
@@ -259,6 +258,19 @@ func FormatLLMPipelineResult(w io.Writer, exp *PipelineExplanation, opts FormatO
 			fmt.Fprintf(w, "  %s\n", line)
 		}
 		fmt.Fprintln(w, "  ```")
+	}
+}
+
+// FormatSuggestedCommand prints the suggested command block.
+func FormatSuggestedCommand(w io.Writer, cmd string, opts FormatOptions) {
+	if cmd == "" {
+		return
+	}
+	fmt.Fprintln(w)
+	if opts.Color {
+		fmt.Fprintf(w, "%sSuggested command:%s\n  %s%s%s\n", ansiBold, ansiReset, ansiGreen, cmd, ansiReset)
+	} else {
+		fmt.Fprintf(w, "Suggested command:\n  %s\n", cmd)
 	}
 }
 
@@ -285,6 +297,17 @@ func FormatPromptChoice(opts FormatOptions) string {
 			ansiUnderline + "m" + ansiReset + ansiOrange + "odifications] (default: Yes): " + ansiReset
 	}
 	return "Do you want to run this command? [Yes/no/edit/modifications] (default: Yes): "
+}
+
+// FormatPromptChoiceNoMod renders the choice prompt without modifications option.
+func FormatPromptChoiceNoMod(opts FormatOptions) string {
+	if opts.Color {
+		return ansiOrange + "Do you want to run this command? [" +
+			ansiUnderline + "Y" + ansiReset + ansiOrange + "es/" +
+			ansiUnderline + "n" + ansiReset + ansiOrange + "o/" +
+			ansiUnderline + "e" + ansiReset + ansiOrange + "dit] (default: Yes): " + ansiReset
+	}
+	return "Do you want to run this command? [Yes/no/edit] (default: Yes): "
 }
 
 func formatFlag(w io.Writer, flag FlagExplanation, opts FormatOptions) {
