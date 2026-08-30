@@ -299,6 +299,96 @@ func TestGatherContext(t *testing.T) {
 	}
 }
 
+func TestParseLLMResponseJSON(t *testing.T) {
+	tests := []struct {
+		name        string
+		raw         string
+		wantCmd     string
+		wantScript  string
+		wantExplain string
+	}{
+		{
+			name: "strict json with kebab-case",
+			raw: `{
+				"explanation": "The -Z option is used for SELinux context.",
+				"suggested-command": "ls -laZ /var/log",
+				"suggested-script": ""
+			}`,
+			wantCmd:     "ls -laZ /var/log",
+			wantExplain: "The -Z option is used for SELinux context.",
+		},
+		{
+			name: "json with snake_case",
+			raw: `{
+				"explanation": "Typo in command.",
+				"suggested_command": "ls -av"
+			}`,
+			wantCmd:     "ls -av",
+			wantExplain: "Typo in command.",
+		},
+		{
+			name: "json with camelCase",
+			raw: `{
+				"explanation": "Use find instead.",
+				"suggestedCommand": "find . -name '*.txt'"
+			}`,
+			wantCmd:     "find . -name '*.txt'",
+			wantExplain: "Use find instead.",
+		},
+		{
+			name: "json with multiline script",
+			raw: `{
+				"explanation": "Iterate through text files.",
+				"suggested-script": "for f in *.txt; do\n  echo \"$f\"\ndone"
+			}`,
+			wantScript:  "for f in *.txt; do\n  echo \"$f\"\ndone",
+			wantExplain: "Iterate through text files.",
+		},
+		{
+			name: "json with single-line script normalized to command",
+			raw: `{
+				"explanation": "Single line script.",
+				"suggested-script": "tar -czf archive.tar.gz /path/to/dir"
+			}`,
+			wantCmd:     "tar -czf archive.tar.gz /path/to/dir",
+			wantExplain: "Single line script.",
+		},
+		{
+			name:        "markdown fenced json",
+			raw:         "```json\n{\n  \"explanation\": \"Fenced JSON response.\",\n  \"suggested-command\": \"grep -rn 'pattern' .\"\n}\n```",
+			wantCmd:     "grep -rn 'pattern' .",
+			wantExplain: "Fenced JSON response.",
+		},
+		{
+			name:        "markdown fenced json without language tag",
+			raw:         "```\n{\n  \"explanation\": \"Fenced without tag.\",\n  \"suggested-command\": \"ps aux | grep node\"\n}\n```",
+			wantCmd:     "ps aux | grep node",
+			wantExplain: "Fenced without tag.",
+		},
+		{
+			name:        "json with surrounding prose text",
+			raw:         "Here is the result:\n{\n  \"explanation\": \"Answer with prose wrapper.\",\n  \"suggested-command\": \"uptime\"\n}\nHope this helps!",
+			wantCmd:     "uptime",
+			wantExplain: "Answer with prose wrapper.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := ParseLLMResponse(tc.raw)
+			if res.SuggestedCommand != tc.wantCmd {
+				t.Errorf("SuggestedCommand = %q, want %q", res.SuggestedCommand, tc.wantCmd)
+			}
+			if res.SuggestedScript != tc.wantScript {
+				t.Errorf("SuggestedScript = %q, want %q", res.SuggestedScript, tc.wantScript)
+			}
+			if res.Explanation != tc.wantExplain {
+				t.Errorf("Explanation = %q, want %q", res.Explanation, tc.wantExplain)
+			}
+		})
+	}
+}
+
 func TestParseLLMResponse(t *testing.T) {
 	raw := `The option -Z enables SELinux security context display for files.
 It was likely what you intended instead of -9.
@@ -458,9 +548,15 @@ func TestBuildChatRequestDynamicNonceXMLBoundaries(t *testing.T) {
 	sysMsg := req.Messages[0].Content
 	userMsg := req.Messages[1].Content
 
-	// Check that system message contains security instructions and XML tags
+	// Check that system message contains security instructions, XML tags, and strict JSON format rules
 	if !strings.Contains(sysMsg, "CRITICAL DATA INTEGRITY") {
 		t.Errorf("sysMsg missing CRITICAL DATA INTEGRITY instruction:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, "Final Response Format (STRICT JSON)") {
+		t.Errorf("sysMsg missing Final Response Format (STRICT JSON) instruction:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, `"suggested-command"`) {
+		t.Errorf("sysMsg missing suggested-command schema in instructions:\n%s", sysMsg)
 	}
 	if !strings.Contains(sysMsg, "<system-context-") {
 		t.Errorf("sysMsg missing <system-context- tag:\n%s", sysMsg)
@@ -472,11 +568,14 @@ func TestBuildChatRequestDynamicNonceXMLBoundaries(t *testing.T) {
 		t.Errorf("sysMsg missing history entry:\n%s", sysMsg)
 	}
 
-	// Check that user message contains XML tags
+	// Check that user message contains XML tags and strict JSON task instruction
 	if !strings.Contains(userMsg, "<user-command-line-") || !strings.Contains(userMsg, "grep -r pattern .") {
 		t.Errorf("userMsg missing <user-command-line- tag:\n%s", userMsg)
 	}
 	if !strings.Contains(userMsg, "<unknown-items-") || !strings.Contains(userMsg, "- -r") {
 		t.Errorf("userMsg missing <unknown-items- tag:\n%s", userMsg)
+	}
+	if !strings.Contains(userMsg, "strict JSON object") {
+		t.Errorf("userMsg missing strict JSON task requirement:\n%s", userMsg)
 	}
 }

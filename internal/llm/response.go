@@ -17,13 +17,117 @@ var suggestedCmdRegex = regexp.MustCompile(`(?i)(?:suggested command|command sug
 var codeBlockRegex = regexp.MustCompile("(?s)```(?:bash|sh)?\n(.*?)\n```")
 
 // ParseLLMResponse extracts the explanation, suggested one-liner command,
-// and multiline bash script from the model's text output.
+// and multiline bash script from the model's text output, prioritizing structured
+// JSON responses and falling back to text/markdown extraction if needed.
 func ParseLLMResponse(raw string) LLMResult {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return LLMResult{}
 	}
 
+	// 1. Try structured JSON extraction first
+	if res, ok := parseJSONResponse(trimmed); ok {
+		return res
+	}
+
+	// 2. Fallback to legacy markdown/text regex parsing
+	return parseLegacyResponse(trimmed)
+}
+
+func parseJSONResponse(raw string) (LLMResult, bool) {
+	// Candidate 1: Full trimmed raw string
+	if res, ok := tryUnmarshalJSON(raw); ok {
+		return res, true
+	}
+
+	// Candidate 2: Code block with json or empty tag
+	jsonFenceRegex := regexp.MustCompile("(?s)```(?:json)?\n?(.*?)\n?```")
+	if match := jsonFenceRegex.FindStringSubmatch(raw); len(match) > 1 {
+		if res, ok := tryUnmarshalJSON(match[1]); ok {
+			return res, true
+		}
+	}
+
+	// Candidate 3: Substring between first '{' and last '}'
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start >= 0 && end > start {
+		candidate := raw[start : end+1]
+		if res, ok := tryUnmarshalJSON(candidate); ok {
+			return res, true
+		}
+	}
+
+	return LLMResult{}, false
+}
+
+func tryUnmarshalJSON(content string) (LLMResult, bool) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
+		return LLMResult{}, false
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &data); err != nil {
+		return LLMResult{}, false
+	}
+
+	res := LLMResult{}
+
+	// Extract explanation
+	for _, k := range []string{"explanation", "Explanation", "explain", "explicacion", "explicación"} {
+		if val, ok := data[k]; ok {
+			if s, ok := val.(string); ok && strings.TrimSpace(s) != "" {
+				res.Explanation = strings.TrimSpace(s)
+				break
+			}
+		}
+	}
+
+	// Extract suggested-command
+	for _, k := range []string{"suggested-command", "suggested_command", "suggestedCommand", "suggested-cmd", "suggested_cmd", "suggested", "command"} {
+		if val, ok := data[k]; ok {
+			if s, ok := val.(string); ok && strings.TrimSpace(s) != "" {
+				res.SuggestedCommand = cleanCommand(s)
+				break
+			}
+		}
+	}
+
+	// Extract suggested-script
+	for _, k := range []string{"suggested-script", "suggested_script", "suggestedScript", "script"} {
+		if val, ok := data[k]; ok {
+			if s, ok := val.(string); ok && strings.TrimSpace(s) != "" {
+				res.SuggestedScript = strings.TrimSpace(s)
+				break
+			}
+		}
+	}
+
+	// If script is a single line and suggested-command is empty, normalize to suggested-command
+	if res.SuggestedCommand == "" && res.SuggestedScript != "" && !strings.Contains(res.SuggestedScript, "\n") {
+		res.SuggestedCommand = res.SuggestedScript
+		res.SuggestedScript = ""
+	}
+
+	return res, true
+}
+
+func cleanCommand(s string) string {
+	clean := strings.TrimSpace(s)
+	if strings.HasPrefix(clean, "```") && strings.HasSuffix(clean, "```") && len(clean) >= 6 {
+		clean = strings.TrimSpace(clean[3 : len(clean)-3])
+	}
+	if strings.HasPrefix(clean, "`") && strings.HasSuffix(clean, "`") && len(clean) >= 2 {
+		clean = strings.TrimSpace(clean[1 : len(clean)-1])
+	}
+	if strings.HasPrefix(clean, "\"") && strings.HasSuffix(clean, "\"") && len(clean) >= 2 && !strings.Contains(clean[1:len(clean)-1], "\"") {
+		clean = strings.TrimSpace(clean[1 : len(clean)-1])
+	}
+	return clean
+}
+
+func parseLegacyResponse(trimmed string) LLMResult {
 	result := LLMResult{}
 
 	// 1. Extract bash script block if present
@@ -38,8 +142,7 @@ func ParseLLMResponse(raw string) LLMResult {
 
 	// 2. Extract suggested single-line command if present
 	if match := suggestedCmdRegex.FindStringSubmatch(trimmed); len(match) > 1 {
-		cmd := strings.TrimSpace(match[1])
-		cmd = strings.Trim(cmd, "`\"'")
+		cmd := cleanCommand(match[1])
 		if cmd != "" && !strings.Contains(cmd, "\n") {
 			result.SuggestedCommand = cmd
 		}

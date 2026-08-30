@@ -64,17 +64,19 @@ func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, mi
 	sysSb.WriteString("2. Tool calling:\n")
 	sysSb.WriteString("   - 'fetch-command-documentation(command=\"...\", subcommand=\"...\")': fetch manual pages, --help, and cheatsheets for commands.\n")
 	sysSb.WriteString("   - 'command-run(command=\"...\")': execute read-only whitelisted shell commands (e.g. ls, pwd, stat, file, du, df, find, locate, tree, cat, head, tail, grep, ps, free, uptime, lscpu, ip, ss, ping, dig, nslookup, etc. combined with standard Bash operators) to inspect system files or state.\n")
-	sysSb.WriteString("   You can invoke tools across turns to research missing information. When you have enough information and are providing your final explanation and 'Suggested command:', do NOT invoke any more tools.\n")
-	sysSb.WriteString("3. Suggestion: If the command line has invalid options, typos, or mistakes, provide the entire corrected command line on a single line:\n")
-	sysSb.WriteString("   Suggested command: <full corrected command line>\n")
-	sysSb.WriteString("   (If a multiline script is truly necessary, wrap it in a single ```bash ... ``` code block).\n")
-	sysSb.WriteString("4. Explanation (STRICT MAXIMUM 256 CHARACTERS):\n")
-	sysSb.WriteString("   - If the user asked a question in a comment (e.g. # ¿Cual es la ip...?), provide the direct answer in the explanation.\n")
-	sysSb.WriteString("   - If explaining unknown flags or errors, explain ONLY the specific items under 'Unknown items'.\n")
-	sysSb.WriteString("   - If everything is understood and there are no questions or unknowns, the explanation can be omitted.\n")
-	sysSb.WriteString("   - Do NOT explain known commands, known flags, or shell operators (like &&, ||).\n")
-	sysSb.WriteString("   - Do NOT repeat the suggested command inside the explanation; it will already be displayed to the user separately.\n")
-	sysSb.WriteString("   - Keep it direct, precise, and under 256 characters without conversational filler.\n")
+	sysSb.WriteString("   You can invoke tools across turns to research missing information. When you have enough information and are providing your final answer, do NOT invoke any more tools.\n")
+	sysSb.WriteString("3. Final Response Format (STRICT JSON):\n")
+	sysSb.WriteString("   When providing your final answer (not invoking tools), you MUST respond with a single valid JSON object adhering strictly to this schema:\n")
+	sysSb.WriteString("   {\n")
+	sysSb.WriteString("     \"explanation\": \"Direct answer or explanation of unknown flags/items (max 256 chars, empty string if none)\",\n")
+	sysSb.WriteString("     \"suggested-command\": \"Full corrected single-line shell command (empty string if no command is needed)\",\n")
+	sysSb.WriteString("     \"suggested-script\": \"Multiline bash script if a single command is insufficient (empty string if none)\"\n")
+	sysSb.WriteString("   }\n")
+	sysSb.WriteString("   Rules for JSON fields:\n")
+	sysSb.WriteString("   - 'explanation': If the user asked a question (e.g. in # ... comment), provide the direct answer here. If explaining unknown items or typos, explain ONLY those items (STRICT MAX 256 CHARACTERS). If everything is understood, leave as empty string \"\". Do NOT repeat the suggested command inside explanation.\n")
+	sysSb.WriteString("   - 'suggested-command': If the user command has errors, typos, or needs suggestions, provide the full corrected single-line command here. If none needed, leave as empty string \"\".\n")
+	sysSb.WriteString("   - 'suggested-script': If a multiline shell script is truly necessary, provide the raw script content here. If none needed, leave as empty string \"\".\n")
+	sysSb.WriteString("   - Output ONLY the JSON object. Do NOT include markdown formatting, code block markers, greetings, or conversational filler outside the JSON.\n")
 
 	var userSb strings.Builder
 	fmt.Fprintf(&userSb, "<user-command-line-%s>\n%s\n</user-command-line-%s>\n\n", nonce, commandLine, nonce)
@@ -91,7 +93,7 @@ func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, mi
 		fmt.Fprintf(&userSb, "</unknown-items-%s>\n\n", nonce)
 	}
 
-	fmt.Fprintf(&userSb, "Task: If needed, invoke tools ('fetch-command-documentation' or 'command-run') to inspect documentation or system state. Provide 'Suggested command: ...' (if a command is needed) and a brief answer or explanation (max 256 chars) covering the question or unknown items in <user-command-line-%s>.", nonce)
+	fmt.Fprintf(&userSb, "Task: If needed, invoke tools ('fetch-command-documentation' or 'command-run') to inspect documentation or system state. When finished, output your final answer as a strict JSON object with \"explanation\", \"suggested-command\", and \"suggested-script\" covering the question or unknown items in <user-command-line-%s>.", nonce)
 
 	return ChatRequest{
 		Model: model,
