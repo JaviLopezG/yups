@@ -426,6 +426,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 					fmt.Fprintf(statusWriter, "\nExecution limit reached: query timed out after %v.\n", llmTimeout)
 				}
 				if r.env.Logger != nil {
+					r.env.Logger.LogIncident("LLM_TIMEOUT", "Turn %d: query timed out after %v: %v", turn, llmTimeout, err)
 					r.env.Logger.LogLimitReached("timeout", fmt.Sprintf("timed out after %v: %v", llmTimeout, err), false)
 				}
 
@@ -442,6 +443,9 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 						fmt.Fprintln(statusWriter, "Execution aborted.")
 					}
 					exp.LLMError = "execution aborted after timeout"
+					if r.env.Logger != nil {
+						r.env.Logger.LogIncident("USER_ABORT", "execution aborted by user after LLM timeout")
+					}
 					return nil
 				}
 
@@ -478,6 +482,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 
 			exp.LLMError = err.Error()
 			if r.env.Logger != nil {
+				r.env.Logger.LogIncident("LLM_QUERY_ERROR", "Turn %d: inference failed: %v", turn, err)
 				r.env.Logger.LogConclusion("", "", "", "ERROR: "+err.Error(), 0)
 			}
 			return err
@@ -589,6 +594,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 							Content: errMsg,
 						})
 						if r.env.Logger != nil {
+							r.env.Logger.LogIncident("TOOL_WHITELIST_REJECTED", "Turn %d: command %q rejected by whitelist: %s", turn, cmdToRun, reason)
 							r.env.Logger.LogToolExecution(turn, "command-run", tc.Function.Arguments, false, reason, errMsg, 0, nil)
 						}
 					} else {
@@ -617,11 +623,17 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 								Content: outStr,
 							})
 							if r.env.Logger != nil {
+								r.env.Logger.LogIncident("TOOL_TIMEOUT", "Turn %d: command %q timed out after %v", turn, cmdToRun, cmdTimeout)
 								r.env.Logger.LogToolExecution(turn, "command-run", tc.Function.Arguments, false, "timeout", outStr, execDuration, err)
 							}
 						} else {
-							if err != nil && len(output) == 0 {
-								output = fmt.Appendf([]byte(""), "Error executing command: %v", err)
+							if err != nil {
+								if len(output) == 0 {
+									output = fmt.Appendf([]byte(""), "Error executing command: %v", err)
+								}
+								if r.env.Logger != nil {
+									r.env.Logger.LogIncident("TOOL_ERROR", "Turn %d: command %q failed: %v", turn, cmdToRun, err)
+								}
 							}
 							outStr := string(output)
 							if len(outStr) > maxOutputBytes {
@@ -647,6 +659,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 				fmt.Fprintf(statusWriter, "\nExecution limit reached: maximum reasoning tool rounds reached (%d turns).\n", maxToolTurns)
 			}
 			if r.env.Logger != nil {
+				r.env.Logger.LogIncident("MAX_TURNS_REACHED", "reached maximum reasoning turns limit (%d turns)", maxToolTurns)
 				r.env.Logger.LogLimitReached("max-turns", fmt.Sprintf("reached limit of %d turns", maxToolTurns), false)
 			}
 
@@ -661,6 +674,9 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 			if abort {
 				if statusWriter != nil {
 					fmt.Fprintln(statusWriter, "Execution aborted.")
+				}
+				if r.env.Logger != nil {
+					r.env.Logger.LogIncident("USER_ABORT", "execution aborted by user after reaching max turns (%d)", maxToolTurns)
 				}
 				break
 			}

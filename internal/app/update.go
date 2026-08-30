@@ -20,6 +20,7 @@ import (
 
 	"yups/internal/config"
 	"yups/internal/semver"
+	"yups/internal/sessionlog"
 	"yups/internal/update"
 )
 
@@ -54,12 +55,14 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	cfgPath := config.Path(home)
 	cfg, err := env.LoadConfig(cfgPath)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot load config from %s: %v", cfgPath, err)
 		fmt.Fprintf(stderr, "Cannot update %s: %v.\nFix or remove %s and retry.\n", ProgramName, err, cfgPath)
 		return ExitError
 	}
 
 	release, err := latestRelease(cfg, env.HTTPClient(), stdout)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot check for updates: %v", err)
 		fmt.Fprintf(stderr, "Cannot check for updates: %v.\n", err)
 		return ExitError
 	}
@@ -86,21 +89,25 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "Downloading %s...\n", release.Tag)
 	archiveData, err := update.Fetch(env.HTTPClient(), release.AssetURL)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot download %s: %v", update.ArchiveName(release.Tag), err)
 		fmt.Fprintf(stderr, "Cannot download %s: %v.\n", update.ArchiveName(release.Tag), err)
 		return ExitError
 	}
 	checksums, err := update.Fetch(env.HTTPClient(), release.ChecksumURL)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot download %s: %v", update.ChecksumsFileName, err)
 		fmt.Fprintf(stderr, "Cannot download %s: %v.\n", update.ChecksumsFileName, err)
 		return ExitError
 	}
 	if err := update.VerifyChecksums(checksums, update.ArchiveName(release.Tag), archiveData); err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_CHECKSUM_ERROR", "checksum verification failed for %s: %v", release.Tag, err)
 		fmt.Fprintf(stderr, "Aborting update: %v.\n", err)
 		return ExitError
 	}
 
 	binaryPath, err := env.StageBinary(archiveData, release.Tag)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "staging binary failed for %s: %v", release.Tag, err)
 		fmt.Fprintf(stderr, "Aborting update: %v.\n", err)
 		return ExitError
 	}
@@ -110,6 +117,7 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	if len(installed) == 0 {
 		// Best-effort cleanup: the primary message below is what matters.
 		cleanupStaging(env, filepath.Dir(binaryPath))
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_NOT_INSTALLED", "yups is not installed")
 		fmt.Fprintf(stdout, "%s is not installed; run 'yups --install-yups' instead of updating.\n", ProgramName)
 		return ExitError
 	}
@@ -118,6 +126,7 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	// duplicates are reported and left untouched.
 	keeper, duplicates := firstInPath(env, installed)
 	if len(duplicates) > 0 {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_MULTIPLE_BINARIES", "several copies found (%s)", quotedJoin(duplicates))
 		fmt.Fprintf(stdout,
 			"Warning: %s is installed in several places (%s); only %s will be updated, duplicates are left untouched.\n",
 			ProgramName, quotedJoin(duplicates), filepath.Join(keeper, ProgramName))
@@ -129,6 +138,7 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	if err := env.ExecSelf(binaryPath, argv); err != nil {
 		// Best-effort cleanup: the exec failure is the error to report.
 		cleanupStaging(env, stagingDir)
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot exec %s: %v", binaryPath, err)
 		fmt.Fprintf(stderr, "Cannot hand over to the new binary: %v.\n", err)
 		return ExitError
 	}
@@ -209,6 +219,9 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 	exitCode := ExitOK
 	if len(blocked) > 0 {
 		exitCode = ExitError
+		if home, err := env.UserHomeDir(); err == nil {
+			sessionlog.RecordIncident(home, "", "yups --update-apply", "UPDATE_PERMISSION_DENIED", "could not update %s", strings.Join(blocked, ", "))
+		}
 		fmt.Fprintf(stdout, "Could not update %s.\n", strings.Join(blocked, ", "))
 		if isAdmin(env) {
 			fmt.Fprint(stdout, "You have administrator privileges: retry the previous command with sudo (sudo !!).\n")
@@ -243,6 +256,7 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "Applied %d migration(s).\n", applied)
 		}
 		EnsureBashBindingUpdated(env, home, stdout, stderr)
+		_ = EnsureScriptsUpdated(env, home)
 	}
 
 	if len(blocked) == 0 {

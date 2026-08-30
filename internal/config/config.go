@@ -185,6 +185,16 @@ func LogsDir(home string) string {
 	return filepath.Join(Dir(home), "logs")
 }
 
+// IncidentsLogPath returns the path to the aggregated incidents log file.
+func IncidentsLogPath(home string) string {
+	return filepath.Join(LogsDir(home), "incidents.log")
+}
+
+// ScriptsDir returns the directory where yups utility scripts live.
+func ScriptsDir(home string) string {
+	return filepath.Join(Dir(home), "scripts")
+}
+
 // ShellDir returns the directory where shell integration scripts live.
 func ShellDir(home string) string {
 	return filepath.Join(Dir(home), "shell")

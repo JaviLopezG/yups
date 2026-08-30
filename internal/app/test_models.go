@@ -42,6 +42,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 	if docEnv.LLMClient == nil {
 		fmt.Fprintln(stderr, "Error: No Ollama endpoint is configured. Run 'yups --install-yups' first.")
 		if logger != nil {
+			logger.LogIncident("NO_OLLAMA_ENDPOINT", "No Ollama endpoint configured")
 			logger.LogConclusion("", "", "", "NO_OLLAMA_ENDPOINT", ExitError)
 		}
 		return nil, ExitError
@@ -56,6 +57,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 	if err != nil {
 		fmt.Fprintf(stderr, "Error connecting to Ollama at %s: %v\n", endpoint, err)
 		if logger != nil {
+			logger.LogIncident("LLM_CONNECTION_ERROR", "Error connecting to Ollama at %s: %v", endpoint, err)
 			logger.LogConclusion("", "", "", fmt.Sprintf("OLLAMA_CONNECTION_ERROR: %v", err), ExitError)
 		}
 		return nil, ExitError

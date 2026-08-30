@@ -198,6 +198,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			}
 			fmt.Fprintln(stderr, "yups: --model requires a model name argument")
 			if logger != nil {
+				logger.LogIncident("CLI_USAGE_ERROR", "--model requires a model name argument")
 				logger.LogConclusion("", "", "", "MISSING_MODEL_ARG", ExitUsage)
 			}
 			return ExitUsage
@@ -210,6 +211,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			if queryText == "" {
 				fmt.Fprintln(stderr, "yups: --query requires a question or prompt argument")
 				if logger != nil {
+					logger.LogIncident("CLI_USAGE_ERROR", "--query requires a question or prompt argument")
 					logger.LogConclusion("", "", "", "MISSING_QUERY_ARG", ExitUsage)
 				}
 				return ExitUsage
@@ -227,6 +229,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "yups: unknown option %q\n\n", arg)
 			fmt.Fprint(stderr, helpText)
 			if logger != nil {
+				logger.LogIncident("CLI_USAGE_ERROR", "unknown option %q", arg)
 				logger.LogConclusion("", "", "", "UNKNOWN_OPTION", ExitUsage)
 			}
 			return ExitUsage

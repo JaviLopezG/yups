@@ -73,6 +73,9 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 
 	// 5. Query LLM for the whole pipeline
 	if err := resolver.QueryLLMPipeline(ctx, pipeline, exp, "", stdout); err != nil {
+		if env.Logger != nil {
+			env.Logger.LogIncident("LLM_CONNECTION_ERROR", "connection failed to %s: %v", endpoint, err)
+		}
 		FormatConnectionError(stdout, endpoint, err, env.IsInstalled, opts)
 		return 0
 	}

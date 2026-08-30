@@ -17,20 +17,22 @@ import (
 
 // SessionLogger captures step-by-step decisions and Ollama interactions for a yups run.
 type SessionLogger struct {
-	mu          sync.Mutex
-	homeDir     string
-	sessionID   string
-	logPath     string
-	summaryPath string
-	startTime   time.Time
-	pid         int
-	commandLine string
-	args        []string
-	buf         bytes.Buffer
-	turnCount   int
-	modelUsed   string
-	closed      bool
-	disabled    bool
+	mu            sync.Mutex
+	homeDir       string
+	sessionID     string
+	logPath       string
+	summaryPath   string
+	incidentsPath string
+	requestsDir   string
+	startTime     time.Time
+	pid           int
+	commandLine   string
+	args          []string
+	buf           bytes.Buffer
+	turnCount     int
+	modelUsed     string
+	closed        bool
+	disabled      bool
 }
 
 // New initializes a new SessionLogger for the given user home directory and CLI arguments.
@@ -43,6 +45,7 @@ func New(homeDir string, args []string) *SessionLogger {
 	pid := os.Getpid()
 	sessionID := fmt.Sprintf("%s-%d", now.Format("20060102-150405"), pid)
 	logsDir := filepath.Join(homeDir, ".yups", "logs")
+	sessionDirName := fmt.Sprintf("session-%s", sessionID)
 
 	cmdStr := "yups"
 	if len(args) > 0 {
@@ -50,15 +53,17 @@ func New(homeDir string, args []string) *SessionLogger {
 	}
 
 	l := &SessionLogger{
-		homeDir:     homeDir,
-		sessionID:   sessionID,
-		logPath:     filepath.Join(logsDir, fmt.Sprintf("session-%s.log", sessionID)),
-		summaryPath: filepath.Join(logsDir, "sessions.log"),
-		startTime:   now,
-		pid:         pid,
-		commandLine: cmdStr,
-		args:        args,
-		disabled:    false,
+		homeDir:       homeDir,
+		sessionID:     sessionID,
+		logPath:       filepath.Join(logsDir, fmt.Sprintf("%s.log", sessionDirName)),
+		summaryPath:   filepath.Join(logsDir, "sessions.log"),
+		incidentsPath: filepath.Join(logsDir, "incidents.log"),
+		requestsDir:   filepath.Join(logsDir, "llm-requests", sessionDirName),
+		startTime:     now,
+		pid:           pid,
+		commandLine:   cmdStr,
+		args:          args,
+		disabled:      false,
 	}
 
 	l.buf.WriteString("================================================================================\n")
@@ -139,7 +144,8 @@ func (l *SessionLogger) LogModelResolution(model string, isAdvanced bool, reason
 	l.buf.WriteString(fmt.Sprintf("Rationale:      %s\n", reason))
 }
 
-// LogInteraction records an entire exchange with Ollama /api/chat.
+// LogInteraction records an entire exchange with Ollama /api/chat both in the
+// in-memory session trace and in a dedicated per-interaction file under llm-requests/.
 func (l *SessionLogger) LogInteraction(turn int, model, endpoint string, req llm.ChatRequest, resp llm.ChatResponse, duration time.Duration, err error) {
 	if l == nil {
 		return
@@ -149,10 +155,11 @@ func (l *SessionLogger) LogInteraction(turn int, model, endpoint string, req llm
 
 	l.turnCount++
 	l.modelUsed = model
+	now := time.Now()
 
 	l.buf.WriteString(fmt.Sprintf("\n>>> [OLLAMA INTERACTION Turn %d] >>>\n", turn))
 	l.buf.WriteString(fmt.Sprintf("Timestamp: %s | Duration: %v | Endpoint: %s | Model: %s\n",
-		time.Now().Format("15:04:05.000"), duration, endpoint, model))
+		now.Format("15:04:05.000"), duration, endpoint, model))
 
 	reqJSON, jsonErr := json.MarshalIndent(req, "", "  ")
 	if jsonErr == nil {
@@ -163,14 +170,61 @@ func (l *SessionLogger) LogInteraction(turn int, model, endpoint string, req llm
 
 	if err != nil {
 		l.buf.WriteString(fmt.Sprintf("<<< ERROR: %v <<<\n", err))
-		return
+	} else {
+		respJSON, jErr := json.MarshalIndent(resp, "", "  ")
+		if jErr == nil {
+			l.buf.WriteString("<<< Response Payload:\n")
+			l.buf.WriteString(string(respJSON))
+			l.buf.WriteString("\n<<< END INTERACTION <<<\n")
+		}
 	}
 
-	respJSON, jsonErr := json.MarshalIndent(resp, "", "  ")
-	if jsonErr == nil {
-		l.buf.WriteString("<<< Response Payload:\n")
-		l.buf.WriteString(string(respJSON))
-		l.buf.WriteString("\n<<< END INTERACTION <<<\n")
+	// Write dedicated per-interaction request/response file under ~/.yups/logs/llm-requests/session-.../
+	if !l.disabled && l.homeDir != "" {
+		stateDir := filepath.Join(l.homeDir, ".yups")
+		if _, statErr := os.Stat(stateDir); statErr == nil {
+			if mkErr := os.MkdirAll(l.requestsDir, 0o755); mkErr == nil {
+				reqFileName := fmt.Sprintf("request-%s-turn-%d.log", now.Format("20060102-150405"), turn)
+				reqFilePath := filepath.Join(l.requestsDir, reqFileName)
+
+				var reqBuf bytes.Buffer
+				reqBuf.WriteString("================================================================================\n")
+				reqBuf.WriteString("YUPS LLM REQUEST / RESPONSE INTERACTION\n")
+				reqBuf.WriteString("================================================================================\n")
+				reqBuf.WriteString(fmt.Sprintf("Session ID:  %s\n", l.sessionID))
+				reqBuf.WriteString(fmt.Sprintf("Turn:        %d\n", turn))
+				reqBuf.WriteString(fmt.Sprintf("Timestamp:   %s\n", now.Format(time.RFC3339)))
+				reqBuf.WriteString(fmt.Sprintf("Model:       %s\n", model))
+				reqBuf.WriteString(fmt.Sprintf("Endpoint:    %s\n", endpoint))
+				reqBuf.WriteString(fmt.Sprintf("Duration:    %v\n", duration))
+				if err != nil {
+					reqBuf.WriteString(fmt.Sprintf("Error:       %v\n", err))
+				} else {
+					reqBuf.WriteString("Error:       none\n")
+				}
+				reqBuf.WriteString("--------------------------------------------------------------------------------\n")
+				reqBuf.WriteString("REQUEST PAYLOAD:\n")
+				reqBuf.WriteString("--------------------------------------------------------------------------------\n")
+				if jsonErr == nil {
+					reqBuf.Write(reqJSON)
+				}
+				reqBuf.WriteString("\n\n--------------------------------------------------------------------------------\n")
+				reqBuf.WriteString("RESPONSE PAYLOAD:\n")
+				reqBuf.WriteString("--------------------------------------------------------------------------------\n")
+				if err != nil {
+					reqBuf.WriteString(fmt.Sprintf("ERROR: %v\n", err))
+				} else {
+					respJSON, jErr := json.MarshalIndent(resp, "", "  ")
+					if jErr == nil {
+						reqBuf.Write(respJSON)
+					}
+					reqBuf.WriteString("\n")
+				}
+				reqBuf.WriteString("================================================================================\n")
+
+				_ = os.WriteFile(reqFilePath, reqBuf.Bytes(), 0o644)
+			}
+		}
 	}
 }
 
@@ -198,17 +252,101 @@ func (l *SessionLogger) LogToolExecution(turn int, toolName string, args map[str
 	l.buf.WriteString("--- [END TOOL EXECUTION] ---\n")
 }
 
-// LogLimitReached records when turn limit or timeout was reached and user response.
-func (l *SessionLogger) LogLimitReached(limitType, details string, userAborted bool) {
+// LogIncident records an anomalous event, rejected action, or controlled exception
+// both in the session trace and in the aggregated ~/.yups/logs/incidents.log file.
+func (l *SessionLogger) LogIncident(category string, format string, args ...any) {
 	if l == nil {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	details := fmt.Sprintf(format, args...)
+	now := time.Now()
+
+	l.buf.WriteString(fmt.Sprintf("\n[! INCIDENT: %s !]\n", category))
+	l.buf.WriteString(fmt.Sprintf("Details: %s\n", details))
+
+	if l.disabled || l.homeDir == "" {
+		return
+	}
+
+	stateDir := filepath.Join(l.homeDir, ".yups")
+	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
+		return
+	}
+
+	logsDir := filepath.Dir(l.incidentsPath)
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		return
+	}
+
+	incidentLine := fmt.Sprintf("[%s] id=%s type=%s cmd=%q details=%q\n",
+		now.Format(time.RFC3339),
+		l.sessionID,
+		category,
+		l.commandLine,
+		details,
+	)
+
+	if f, err := os.OpenFile(l.incidentsPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+		_, _ = f.WriteString(incidentLine)
+		_ = f.Close()
+	}
+}
+
+// RecordIncident records an incident directly into ~/.yups/logs/incidents.log
+// when a SessionLogger instance is not in scope.
+func RecordIncident(homeDir, sessionID, cmdStr, category string, format string, args ...any) {
+	if homeDir == "" {
+		return
+	}
+	stateDir := filepath.Join(homeDir, ".yups")
+	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
+		return
+	}
+
+	logsDir := filepath.Join(homeDir, ".yups", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		return
+	}
+
+	incidentsPath := filepath.Join(logsDir, "incidents.log")
+	now := time.Now()
+	details := fmt.Sprintf(format, args...)
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("%s-%d", now.Format("20060102-150405"), os.Getpid())
+	}
+	if cmdStr == "" {
+		cmdStr = "yups"
+	}
+
+	incidentLine := fmt.Sprintf("[%s] id=%s type=%s cmd=%q details=%q\n",
+		now.Format(time.RFC3339),
+		sessionID,
+		category,
+		cmdStr,
+		details,
+	)
+
+	if f, err := os.OpenFile(incidentsPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+		_, _ = f.WriteString(incidentLine)
+		_ = f.Close()
+	}
+}
+
+// LogLimitReached records when turn limit or timeout was reached and user response.
+func (l *SessionLogger) LogLimitReached(limitType, details string, userAborted bool) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
 	l.buf.WriteString(fmt.Sprintf("\n[! LIMIT REACHED: %s !]\n", limitType))
 	l.buf.WriteString(fmt.Sprintf("Details:      %s\n", details))
 	l.buf.WriteString(fmt.Sprintf("User Aborted: %t\n", userAborted))
+	l.mu.Unlock()
+
+	l.LogIncident("LIMIT_REACHED", "type=%s details=%s userAborted=%t", limitType, details, userAborted)
 }
 
 // LogConclusion finalizes the session log and writes summary to sessions.log.
@@ -302,6 +440,22 @@ func (l *SessionLogger) LogPath() string {
 		return ""
 	}
 	return l.logPath
+}
+
+// IncidentsPath returns the path to the aggregated incidents log file.
+func (l *SessionLogger) IncidentsPath() string {
+	if l == nil {
+		return ""
+	}
+	return l.incidentsPath
+}
+
+// RequestsDir returns the path to the directory containing per-interaction LLM logs.
+func (l *SessionLogger) RequestsDir() string {
+	if l == nil {
+		return ""
+	}
+	return l.requestsDir
 }
 
 // BufferString returns the in-memory buffered log content (useful for testing).

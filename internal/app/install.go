@@ -10,6 +10,7 @@ import (
 
 	"yups/internal/config"
 	"yups/internal/llm"
+	"yups/internal/sessionlog"
 )
 
 // Install implements `yups --install-yups`:
@@ -39,8 +40,10 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 	destDir := firstWritableDir(env, pathDirs)
 
 	yupsDirExists := false
+	var userHome string
 	if env.UserHomeDir != nil && env.PathExists != nil {
 		if home, err := env.UserHomeDir(); err == nil {
+			userHome = home
 			yupsDirExists = env.PathExists(config.Dir(home)) || env.PathExists(config.Path(home))
 		}
 	}
@@ -48,6 +51,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 	foundInPath := findInDirs(env, pathDirs, ProgramName)
 	if len(foundInPath) > 0 && yupsDirExists {
 		reportInstallAnomaly(env, foundInPath, stdout)
+		if userHome != "" {
+			sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_ALREADY_INSTALLED", "already installed in %s", quotedJoin(foundInPath))
+		}
 		fmt.Fprintf(stdout, "%s is already installed in %s.\n", ProgramName, quotedJoin(foundInPath))
 		return ExitOK
 	}
@@ -55,6 +61,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 	foundInKnown := findInDirs(env, env.KnownBinDirs(), ProgramName)
 	if len(foundInKnown) > 0 && yupsDirExists {
 		reportInstallAnomaly(env, foundInKnown, stdout)
+		if userHome != "" {
+			sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_ALREADY_INSTALLED", "already installed (found outside PATH in %s)", quotedJoin(foundInKnown))
+		}
 		fmt.Fprintf(stdout, "%s is already installed (found outside PATH in %s).\n", ProgramName, quotedJoin(foundInKnown))
 		return ExitOK
 	}
@@ -65,6 +74,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		destPath = filepath.Join(foundInPath[0], ProgramName)
 	} else {
 		if destDir == "" {
+			if userHome != "" {
+				sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_PERMISSION_DENIED", "none of the PATH directories is writable")
+			}
 			if isAdmin(env) {
 				fmt.Fprintf(stdout,
 					"Cannot install %s: none of the PATH directories is writable, but you have administrator privileges; retry the previous command with sudo (sudo !!).\n",
@@ -79,6 +91,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 
 		sourcePath, err := env.ExecutablePath()
 		if err != nil {
+			if userHome != "" {
+				sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_ERROR", "cannot determine executable path: %v", err)
+			}
 			fmt.Fprintf(stderr, "Cannot install %s: %v.\n", ProgramName, err)
 			return ExitError
 		}
@@ -86,6 +101,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		var installErr error
 		destPath, installErr = env.InstallTo(sourcePath, destDir)
 		if installErr != nil {
+			if userHome != "" {
+				sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_ERROR", "cannot install to %s: %v", destDir, installErr)
+			}
 			fmt.Fprintf(stderr, "Cannot install %s: %v.\n", ProgramName, installErr)
 			return ExitError
 		}
@@ -210,6 +228,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		// Configure bash key binding if desired
 		ConfigureBashBindingInteractively(env, home, stdout, stderr)
 
+		// Install utility scripts into ~/.yups/scripts/
+		_ = InstallScripts(env, home)
+
 		_ = env.SaveConfig(cfgPath, cfg)
 		fmt.Fprintf(stdout, "\nConfiguration saved to %s.\n", cfgPath)
 
@@ -233,6 +254,11 @@ func reportInstallAnomaly(env *Env, found []string, stdout io.Writer) {
 		return
 	}
 	keeper, others := firstInPath(env, found)
+	if env.UserHomeDir != nil {
+		if home, err := env.UserHomeDir(); err == nil {
+			sessionlog.RecordIncident(home, "", "yups --install-yups", "INSTALL_MULTIPLE_BINARIES", "multiple installations detected (%s)", quotedJoin(found))
+		}
+	}
 	fmt.Fprintf(stdout,
 		"Warning: %s is installed in several places (%s); operating on %s.\n",
 		ProgramName, quotedJoin(others), filepath.Join(keeper, ProgramName))
