@@ -198,9 +198,24 @@ func ShellDir(home string) string {
 	return filepath.Join(Dir(home), "shell")
 }
 
-// ShellScriptPath returns the path to the bash integration script.
+// ShellScriptPath returns the path to the main bash integration entrypoint script.
 func ShellScriptPath(home string) string {
 	return filepath.Join(ShellDir(home), "yups.bash")
+}
+
+// KeybindingScriptPath returns the path to the readline keybinding integration script.
+func KeybindingScriptPath(home string) string {
+	return filepath.Join(ShellDir(home), "keybinding.bash")
+}
+
+// CompletionScriptPath returns the path to the bash tab-completion script.
+func CompletionScriptPath(home string) string {
+	return filepath.Join(ShellDir(home), "completion.bash")
+}
+
+// EnvScriptPath returns the path to the yups shell wrapper script.
+func EnvScriptPath(home string) string {
+	return filepath.Join(ShellDir(home), "env.bash")
 }
 
 // StatePath returns the path to the internal state.toml file.

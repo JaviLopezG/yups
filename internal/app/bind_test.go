@@ -3,6 +3,9 @@ package app
 import (
 	"bytes"
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -168,20 +171,65 @@ func TestInstallBashBinding(t *testing.T) {
 		t.Fatalf("InstallBashBinding: %v", err)
 	}
 
-	// Verify standalone script was created in ~/.yups/shell/yups.bash
+	// 1. Verify main loader script in ~/.yups/shell/yups.bash
 	shellScript := config.ShellScriptPath(fs.home)
-	scriptContent, ok := fs.fileContents[shellScript]
+	mainContent, ok := fs.fileContents[shellScript]
 	if !ok {
-		t.Fatalf("shell script was not written to %s", shellScript)
+		t.Fatalf("main shell script was not written to %s", shellScript)
 	}
-	if !strings.Contains(scriptContent, "_yups-readline-binding") || !strings.Contains(scriptContent, SeqF1) {
-		t.Errorf("shell script missing binding content:\n%s", scriptContent)
+	if !strings.Contains(mainContent, "# yups.bash - Main entrypoint for YUPS shell integration.") {
+		t.Errorf("main script missing expected header:\n%s", mainContent)
 	}
-	if !strings.Contains(scriptContent, "_yups-completion") || !strings.Contains(scriptContent, "complete -F _yups-completion yups") {
-		t.Errorf("shell script missing autocompletion function:\n%s", scriptContent)
+	if !strings.Contains(mainContent, "source \"$_yups_script\"") {
+		t.Errorf("main script missing sourcing loop:\n%s", mainContent)
 	}
 
-	// Verify ~/.bashrc has source block
+	// 2. Verify keybinding script in ~/.yups/shell/keybinding.bash
+	keyScript := config.KeybindingScriptPath(fs.home)
+	keyContent, ok := fs.fileContents[keyScript]
+	if !ok {
+		t.Fatalf("keybinding script was not written to %s", keyScript)
+	}
+	if !strings.Contains(keyContent, "# keybinding.bash - Readline key binding integration for yups.") {
+		t.Errorf("keybinding script missing expected header:\n%s", keyContent)
+	}
+	if !strings.Contains(keyContent, "_yups-readline-binding") || !strings.Contains(keyContent, SeqF1) {
+		t.Errorf("keybinding script missing binding content:\n%s", keyContent)
+	}
+	if !strings.Contains(keyContent, "COMMON KEY CODES REFERENCE TABLE") {
+		t.Errorf("keybinding script missing key codes reference table:\n%s", keyContent)
+	}
+	if !strings.Contains(keyContent, "Active key: F1") {
+		t.Errorf("keybinding script missing active key indicator:\n%s", keyContent)
+	}
+
+	// 3. Verify completion script in ~/.yups/shell/completion.bash
+	compScript := config.CompletionScriptPath(fs.home)
+	compContent, ok := fs.fileContents[compScript]
+	if !ok {
+		t.Fatalf("completion script was not written to %s", compScript)
+	}
+	if !strings.Contains(compContent, "# completion.bash - Programmable tab-completion for yups.") {
+		t.Errorf("completion script missing expected header:\n%s", compContent)
+	}
+	if !strings.Contains(compContent, "_yups-completion") || !strings.Contains(compContent, "complete -F _yups-completion yups") {
+		t.Errorf("completion script missing autocompletion function:\n%s", compContent)
+	}
+
+	// 4. Verify env wrapper script in ~/.yups/shell/env.bash
+	envScript := config.EnvScriptPath(fs.home)
+	envContent, ok := fs.fileContents[envScript]
+	if !ok {
+		t.Fatalf("env wrapper script was not written to %s", envScript)
+	}
+	if !strings.Contains(envContent, "# env.bash - Shell wrapper function for the yups command.") {
+		t.Errorf("env script missing expected header:\n%s", envContent)
+	}
+	if !strings.Contains(envContent, "yups()") || !strings.Contains(envContent, "YUPS_SESSION_HISTORY") {
+		t.Errorf("env script missing wrapper function:\n%s", envContent)
+	}
+
+	// 5. Verify ~/.bashrc has source block
 	rcContent := fs.fileContents[rcPath]
 	if !strings.Contains(rcContent, BashIntegrationHeader) || !strings.Contains(rcContent, "source \""+shellScript+"\"") {
 		t.Errorf("bashrc missing source snippet:\n%s", rcContent)
@@ -198,9 +246,9 @@ func TestInstallBashBinding(t *testing.T) {
 		t.Errorf("expected exactly 1 integration header, got %d:\n%s", strings.Count(updatedRc, BashIntegrationHeader), updatedRc)
 	}
 
-	updatedScript := fs.fileContents[shellScript]
-	if !strings.Contains(updatedScript, SeqCtrlG) {
-		t.Errorf("shell script missing updated sequence %s:\n%s", SeqCtrlG, updatedScript)
+	updatedKeyScript := fs.fileContents[keyScript]
+	if !strings.Contains(updatedKeyScript, SeqCtrlG) || !strings.Contains(updatedKeyScript, "Active key: Ctrl+g") {
+		t.Errorf("keybinding script missing updated sequence %s:\n%s", SeqCtrlG, updatedKeyScript)
 	}
 }
 
@@ -237,13 +285,13 @@ func TestConfigureBashBindingInteractively(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		ConfigureBashBindingInteractively(env, fs.home, &stdout, &stderr)
 
-		shellScript := config.ShellScriptPath(fs.home)
-		scriptContent, ok := fs.fileContents[shellScript]
+		keyScript := config.KeybindingScriptPath(fs.home)
+		keyContent, ok := fs.fileContents[keyScript]
 		if !ok {
-			t.Fatalf("shell script was not written")
+			t.Fatalf("keybinding script was not written")
 		}
-		if !strings.Contains(scriptContent, SeqF1) {
-			t.Errorf("expected SeqF1 in shell script:\n%s", scriptContent)
+		if !strings.Contains(keyContent, SeqF1) {
+			t.Errorf("expected SeqF1 in keybinding script:\n%s", keyContent)
 		}
 		if !strings.Contains(stdout.String(), "Updated /home/user/.bashrc with YUPS shell integration.") {
 			t.Errorf("stdout missing confirmation message:\n%s", stdout.String())
@@ -266,13 +314,13 @@ func TestConfigureBashBindingInteractively(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		ConfigureBashBindingInteractively(env, fs.home, &stdout, &stderr)
 
-		shellScript := config.ShellScriptPath(fs.home)
-		scriptContent, ok := fs.fileContents[shellScript]
+		keyScript := config.KeybindingScriptPath(fs.home)
+		keyContent, ok := fs.fileContents[keyScript]
 		if !ok {
-			t.Fatalf("shell script was not written")
+			t.Fatalf("keybinding script was not written")
 		}
-		if !strings.Contains(scriptContent, SeqCtrlG) {
-			t.Errorf("expected SeqCtrlG in shell script:\n%s", scriptContent)
+		if !strings.Contains(keyContent, SeqCtrlG) {
+			t.Errorf("expected SeqCtrlG in keybinding script:\n%s", keyContent)
 		}
 		if !strings.Contains(stdout.String(), "Configured key binding (Ctrl+g)") {
 			t.Errorf("stdout missing confirmation message:\n%s", stdout.String())
@@ -302,5 +350,72 @@ func TestRemoveBashBinding(t *testing.T) {
 	rcClean := fs.fileContents[rcPath]
 	if strings.Contains(rcClean, BashIntegrationHeader) || strings.Contains(rcClean, "yups.bash") {
 		t.Errorf("bashrc still contains yups integration after removal:\n%s", rcClean)
+	}
+}
+
+func TestEnsureBashBindingUpdated(t *testing.T) {
+	t.Run("preserves-existing-binding-from-keybinding-bash", func(t *testing.T) {
+		fs := newFakeFS()
+		env := fs.env()
+
+		// Initial install with SeqCtrlG
+		_, err := InstallBashBinding(env, fs.home, SeqCtrlG)
+		if err != nil {
+			t.Fatalf("InstallBashBinding: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		EnsureBashBindingUpdated(env, fs.home, &stdout, &stderr)
+
+		keyScript := config.KeybindingScriptPath(fs.home)
+		keyContent := fs.fileContents[keyScript]
+		if !strings.Contains(keyContent, SeqCtrlG) {
+			t.Errorf("expected SeqCtrlG to be preserved, got:\n%s", keyContent)
+		}
+	})
+
+	t.Run("preserves-existing-binding-from-legacy-yups-bash", func(t *testing.T) {
+		fs := newFakeFS()
+		env := fs.env()
+
+		// Simulate legacy yups.bash having the binding and .bashrc sourced
+		shellScript := config.ShellScriptPath(fs.home)
+		fs.fileContents[shellScript] = `bind -x '"\C-h": _yups-readline-binding'`
+		rcPath := filepath.Join(fs.home, ".bashrc")
+		fs.fileContents[rcPath] = GenerateBashrcSourceBlock(shellScript)
+
+		var stdout, stderr bytes.Buffer
+		EnsureBashBindingUpdated(env, fs.home, &stdout, &stderr)
+
+		keyScript := config.KeybindingScriptPath(fs.home)
+		keyContent := fs.fileContents[keyScript]
+		if !strings.Contains(keyContent, SeqCtrlH) {
+			t.Errorf("expected SeqCtrlH to be preserved from legacy script, got:\n%s", keyContent)
+		}
+	})
+}
+
+func TestShellScriptsSourcing(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available in PATH")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "yups-shell-test-*.kk")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	env := NewOSEnv()
+	_, err = InstallBashBinding(env, tmpDir, SeqF1)
+	if err != nil {
+		t.Fatalf("InstallBashBinding: %v", err)
+	}
+
+	mainScript := config.ShellScriptPath(tmpDir)
+	cmd := exec.Command("bash", "-c", "source \"$1\" && type _yups-readline-binding && type _yups-completion && type yups", "bash", mainScript)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sourcing yups.bash failed in bash: %v\nOutput:\n%s", err, string(out))
 	}
 }

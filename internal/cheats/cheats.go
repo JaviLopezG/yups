@@ -100,10 +100,8 @@ func Sync(client *http.Client, destBaseDir string, cachedVersions map[string]str
 	}
 
 	newVersions := make(map[string]string)
-	if cachedVersions != nil {
-		for k, v := range cachedVersions {
-			newVersions[k] = v
-		}
+	for k, v := range cachedVersions {
+		newVersions[k] = v
 	}
 
 	now := time.Now().UTC()
