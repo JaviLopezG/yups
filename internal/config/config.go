@@ -27,8 +27,8 @@ const (
 	DefaultYUPSRepo                    = "https://code.javilopezg.com/javilopezg/yups"
 	DefaultYUPSRepoFallback            = "https://github.com/JaviLopezG/yups"
 	DefaultInferenceEndpoint           = "http://localhost:11434"
-	DefaultModel                       = "qwen2.5-coder:latest"
-	DefaultAdvancedModel               = "qwen3.8:latest"
+	DefaultModel                       = "qwen3-coder:latest"
+	DefaultAdvancedModel               = "gemma4:latest"
 	DefaultLLMEnabled                  = true
 	DefaultLLMTimeoutSeconds           = 60
 	DefaultToolExecutionTimeoutSeconds = 5

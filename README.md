@@ -1,13 +1,17 @@
 # yups
 
-`yups` explains shell commands, prints the `#_?` marker in ANSI 256-colour 214,
-and manages its own installation.
+`yups` is a fast, concise, contextual terminal assistant and shell command explainer that operates entirely within your trusted environment.
+
+- **Private & Local**: No data is sent to the internet; all assistance is generated using local system documentation and your configured Ollama host.
+- **Fast & Concise**: Delivers direct explanations, suggestions, and scripts without conversational fluff.
+- **Interactive**: Enables one-key execution, inline editing, or multi-turn refining for suggested commands and scripts.
 
 ```bash
 $ yups                # prints #_? in colour 214
 $ yups -- ls -al /var/cache/man/
 $ yups -- "ls -l || ps aux"
-$ yups --help         # help with the options available so far
+$ yups --query "how to check active processes by memory"
+$ yups --help         # help with the options available
 $ yups --install-yups
 $ yups --uninstall-yups
 $ yups --update-yups
@@ -20,20 +24,20 @@ $ yups --update-yups
   `|&`, `&`), unpacks clustered flags (`-al` -> `-a`, `-l`), identifies
   wrappers (`sudo`, `time`...), inspects positional arguments on the filesystem,
   and fetches documentation prioritizing `<command> --help` before falling back
-  to `man` and `whatis`.
+  to `man`, `whatis`, and community cheatsheets.
   Local basic documentation is displayed immediately. When a command or flag is
-  not found locally, or when the command line includes a comment (`#...`),
+  not found locally, or when the command line includes a natural language comment (`#...`),
   it announces the query and connects to the configured Ollama inference
   endpoint via direct HTTP. Shell comments are interpreted as user goals or
   questions, allowing the LLM to explain discrepancies and suggest optimal
-  commands along with low-cost system context (OS distribution, working directory
-  structure, referenced file snippets, and recent shell history).
-  If the LLM suggests a command, `yups` prompts for action:
-  `[Yes/no/edit/modifications]` (`y` executes immediately in subshell, `n` aborts,
-  `e` enables interactive inline editing with cursor navigation, `m` sends
-  feedback/followup to the LLM in a multi-turn conversation).
-  If Ollama is unreachable, `yups` reports the connection error and, if unconfigured,
-  suggests running `yups --install-yups`.
+  commands and multiline scripts along with low-cost system context (OS distribution,
+  working directory structure, referenced file snippets, and recent shell history).
+
+  If the LLM suggests a multiline script or command:
+  - **Script Suggestions**: Printed before commands, with line numbers and smart terminal-height truncation. Prompt `[yes/no/Edit/modifications]` (default: Edit) allows editing in `$VISUAL`/`$EDITOR`, saves to `~/.yups/scripts/`, and exports `$YUPS_SCRIPT` for command referencing.
+  - **Command Suggestions**: Prompt `[Yes/no/edit/modifications]` (`y` executes immediately in subshell, `n` aborts, `e` enables interactive inline editing with cursor navigation, `m` sends feedback/followup to the LLM in a multi-turn conversation).
+
+- `--query <prompt>`: asks a natural language question or requests a script directly without prefixing with `#`.
 
 - `--help`: shows the help.
 

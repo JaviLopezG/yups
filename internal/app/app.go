@@ -6,8 +6,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"yups/internal/config"
 	"yups/internal/explain"
@@ -36,12 +39,18 @@ const (
 // ColoredLogo is Logo wrapped in ANSI 256-colour 214 (orange).
 const ColoredLogo = "\x1b[38;5;214m" + Logo + "\x1b[0m"
 
-const helpText = `yups - prints the ` + Logo + ` logo and manages its own installation
+const helpText = `yups - fast, concise, contextual terminal assistant
+
+yups operates entirely within your trusted environment: no data is sent to the
+internet. All analysis is performed using local system documentation and your
+configured Ollama instance. It delivers fast, straight-to-the-point assistance
+without conversational fluff.
 
 Usage:
   yups                  Print the logo (` + Logo + `) in ANSI colour 214
   yups -- <command...>  Explain the given command line, flags, and operators
   yups <command...>     Explain the given command line
+  yups --query <prompt> Ask a question or goal directly
   yups --model <tag>    Use a specific Ollama model for inference
   yups --advanced       Use the advanced reasoning model directly
   yups --test-models    Run latency benchmark test on all installed models
@@ -87,9 +96,47 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 		homeDir, _ = env.UserHomeDir()
 	}
 	logger := sessionlog.New(homeDir, args)
+	color := env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout)
+
+	code := dispatchInternal(env, args, stdout, stderr, logger, color)
+
+	if logger != nil && logger.HasWritten() {
+		if color {
+			fmt.Fprintf(stdout, "\n%sSession:%s %s\n", ansiOrange, ansiReset, logger.Slug())
+		} else {
+			fmt.Fprintf(stdout, "\nSession: %s\n", logger.Slug())
+		}
+	}
+
+	return code
+}
+
+func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger *sessionlog.SessionLogger, color bool) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+
+	go func() {
+		select {
+		case sig, ok := <-sigCh:
+			if !ok || sig == nil {
+				return
+			}
+			if logger != nil {
+				logger.LogIncident("SIGNAL_RECEIVED", "Received signal %s (PID: %d)", sig.String(), os.Getpid())
+				logger.LogConclusion("", "", "", fmt.Sprintf("INTERRUPTED (%s)", sig.String()), 130)
+			}
+			cancel()
+			signal.Stop(sigCh)
+		case <-ctx.Done():
+			return
+		}
+	}()
 
 	isInstalled := isSystemInstalled(env)
-	color := env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout)
 
 	if len(args) == 0 {
 		fmt.Fprintln(stdout, ColoredLogo)
@@ -230,7 +277,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			if overrideModel != "" {
 				docEnv.OverrideModel = overrideModel
 			}
-			return explain.Explain(context.Background(), docEnv, []string{"# " + queryText}, stdout, stderr, color)
+			return explain.Explain(ctx, docEnv, []string{"# " + queryText}, stdout, stderr, color)
 		}
 		if strings.HasPrefix(arg, "-") {
 			return HandleUnknownFlag(env, args, i, stdout, stderr, color, logger)
@@ -273,7 +320,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	docEnv.OverrideModel = overrideModel
 	docEnv.UseAdvanced = useAdvanced
 
-	return explain.Explain(context.Background(), docEnv, cmdArgs, stdout, stderr, color)
+	return explain.Explain(ctx, docEnv, cmdArgs, stdout, stderr, color)
 }
 
 // findInDirs returns the directories from dirs that contain an executable

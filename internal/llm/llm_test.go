@@ -184,14 +184,14 @@ func TestSelectBestModels(t *testing.T) {
 			wantAdvanced: "gemma4:latest",
 		},
 		{
-			name: "qwen3.8 prioritized for advanced",
+			name: "gemma4 prioritized for advanced",
 			models: []ModelInfo{
 				{Name: "qwen2.5-coder:7b", Size: 4500000000},
 				{Name: "qwen3.8:latest", Size: 12000000000},
 				{Name: "gemma4:latest", Size: 10000000000},
 			},
 			wantDefault:  "qwen2.5-coder:7b",
-			wantAdvanced: "qwen3.8:latest",
+			wantAdvanced: "gemma4:latest",
 		},
 	}
 
@@ -250,15 +250,15 @@ type fakeLLMEnv struct {
 	home      string
 	cwd       string
 	osRelease string
-	history   []string
+	history   []HistoryEntry
 	snippets  map[string]string
 	dirItems  map[string][]string
 }
 
-func (f *fakeLLMEnv) UserHomeDir() (string, error)                   { return f.home, nil }
-func (f *fakeLLMEnv) Getwd() (string, error)                         { return f.cwd, nil }
-func (f *fakeLLMEnv) ReadOSRelease() string                          { return f.osRelease }
-func (f *fakeLLMEnv) ReadHistory(home string, maxLines int) []string { return f.history }
+func (f *fakeLLMEnv) UserHomeDir() (string, error)                         { return f.home, nil }
+func (f *fakeLLMEnv) Getwd() (string, error)                               { return f.cwd, nil }
+func (f *fakeLLMEnv) ReadOSRelease() string                                { return f.osRelease }
+func (f *fakeLLMEnv) ReadHistory(home string, maxLines int) []HistoryEntry { return f.history }
 func (f *fakeLLMEnv) ReadFileSnippet(path string, max int) (string, error) {
 	return f.snippets[path], nil
 }
@@ -271,7 +271,7 @@ func TestGatherContext(t *testing.T) {
 		home:      "/home/alice",
 		cwd:       "/home/alice/project",
 		osRelease: "Ubuntu 24.04 LTS",
-		history:   []string{"git status", "make test"},
+		history:   []HistoryEntry{{Timestamp: "2026-08-31 12:00:00", Command: "git status"}, {Command: "make test"}},
 		dirItems: map[string][]string{
 			".":  {"main.go", "go.mod", "script.sh"},
 			"..": {"project", "other"},
@@ -431,6 +431,9 @@ func TestBuildChatRequestIncludesTools(t *testing.T) {
 	if req.Tools[1].Function.Name != "command-run" {
 		t.Errorf("tool 1 name = %q, want 'command-run'", req.Tools[1].Function.Name)
 	}
+	if !strings.Contains(req.Messages[0].Content, "$YUPS_SCRIPT") {
+		t.Errorf("expected $YUPS_SCRIPT instruction in system prompt:\n%s", req.Messages[0].Content)
+	}
 }
 
 func TestFormatToolResponse(t *testing.T) {
@@ -452,8 +455,9 @@ func TestFormatToolResponse(t *testing.T) {
 		},
 	}
 
-	formatted := FormatToolResponse(cmdDoc)
+	formatted := FormatToolResponse(cmdDoc, "abc12345")
 	for _, want := range []string{
+		`<tool-output-abc12345 name="fetch-command-documentation" command="tar">`,
 		"--- [tar] --help output ---",
 		"-c, --create",
 		"--- [tar] man page ---",
@@ -462,10 +466,27 @@ func TestFormatToolResponse(t *testing.T) {
 		"tar -czvf target.tar.gz",
 		"--- [tar] cheat-sh cheatsheet (tar) ---",
 		"tar -xvf file.tar",
+		"</tool-output-abc12345>",
 	} {
 		if !strings.Contains(formatted, want) {
 			t.Errorf("formatted tool response missing expected chunk %q\nFull output:\n%s", want, formatted)
 		}
+	}
+}
+
+func TestExtractNonce(t *testing.T) {
+	msgs := []Message{
+		{Role: "system", Content: "System prompt"},
+		{Role: "user", Content: "<user-input-fedcba98>\nls -la\n</user-input-fedcba98>"},
+	}
+	nonce := ExtractNonce(msgs)
+	if nonce != "fedcba98" {
+		t.Fatalf("ExtractNonce() = %q, want %q", nonce, "fedcba98")
+	}
+
+	emptyNonce := ExtractNonce([]Message{{Role: "user", Content: "plain text"}})
+	if emptyNonce != "" {
+		t.Fatalf("ExtractNonce() on plain message = %q, want empty", emptyNonce)
 	}
 }
 
@@ -529,11 +550,17 @@ func TestExtractToolCalls(t *testing.T) {
 
 func TestBuildChatRequestDynamicNonceXMLBoundaries(t *testing.T) {
 	sysCtx := SystemContext{
-		OSRelease: "Fedora 43",
-		CWD:       "/home/javi",
-		RecentHistory: []string{
-			"ls -javi # quiero diferenciar entre binarios y archivos de texto",
-			"yups --test-models",
+		CurrentTime: "2026-08-31 12:30:00",
+		OSRelease:   "Fedora 43",
+		CWD:         "/home/javi",
+		RecentHistory: []HistoryEntry{
+			{
+				Timestamp: "2026-08-31 12:28:15",
+				Command:   "ls -javi # quiero diferenciar entre binarios y archivos de texto",
+			},
+			{
+				Command: "yups --test-models",
+			},
 		},
 		FileSnippets: map[string]string{
 			"script.sh": "#!/bin/bash\necho test\n",
@@ -561,16 +588,22 @@ func TestBuildChatRequestDynamicNonceXMLBoundaries(t *testing.T) {
 	if !strings.Contains(sysMsg, "<system-context-") {
 		t.Errorf("sysMsg missing <system-context- tag:\n%s", sysMsg)
 	}
+	if !strings.Contains(sysMsg, "<current-time>2026-08-31 12:30:00</current-time>") {
+		t.Errorf("sysMsg missing <current-time> tag:\n%s", sysMsg)
+	}
 	if !strings.Contains(sysMsg, "<recent-shell-history-") {
 		t.Errorf("sysMsg missing <recent-shell-history- tag:\n%s", sysMsg)
 	}
-	if !strings.Contains(sysMsg, "<history-entry>ls -javi # quiero diferenciar entre binarios y archivos de texto</history-entry>") {
-		t.Errorf("sysMsg missing history entry:\n%s", sysMsg)
+	if !strings.Contains(sysMsg, `<history-entry time="2026-08-31 12:28:15">ls -javi # quiero diferenciar entre binarios y archivos de texto</history-entry>`) {
+		t.Errorf("sysMsg missing history entry with timestamp:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, `<history-entry>yups --test-models</history-entry>`) {
+		t.Errorf("sysMsg missing history entry without timestamp:\n%s", sysMsg)
 	}
 
 	// Check that user message contains XML tags and strict JSON task instruction
-	if !strings.Contains(userMsg, "<user-command-line-") || !strings.Contains(userMsg, "grep -r pattern .") {
-		t.Errorf("userMsg missing <user-command-line- tag:\n%s", userMsg)
+	if !strings.Contains(userMsg, "<user-input-") || !strings.Contains(userMsg, "grep -r pattern .") {
+		t.Errorf("userMsg missing <user-input- tag:\n%s", userMsg)
 	}
 	if !strings.Contains(userMsg, "<unknown-items-") || !strings.Contains(userMsg, "- -r") {
 		t.Errorf("userMsg missing <unknown-items- tag:\n%s", userMsg)

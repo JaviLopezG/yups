@@ -433,9 +433,12 @@ func writeWordPart(sb *strings.Builder, part syntax.WordPart) {
 	case *syntax.ParamExp:
 		if p.Param != nil {
 			if p.Short {
-				sb.WriteString("$" + p.Param.Value)
+				sb.WriteString("$")
+				sb.WriteString(p.Param.Value)
 			} else {
-				sb.WriteString("${" + p.Param.Value + "}")
+				sb.WriteString("${")
+				sb.WriteString(p.Param.Value)
+				sb.WriteString("}")
 			}
 		}
 	case *syntax.CmdSubst:

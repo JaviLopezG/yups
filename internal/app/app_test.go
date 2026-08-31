@@ -1138,18 +1138,18 @@ func TestDispatchWithFlagsAndSessionLogging(t *testing.T) {
 func TestOSReadHistory(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// 1. Test live session history via YUPS_SESSION_HISTORY
+	// 1. Test live session history with timestamps via YUPS_SESSION_HISTORY
 	sessionHistFile := filepath.Join(tempDir, "session-history.kk")
-	sessionContent := `  966  ls -javi # quiero diferenciar entre binarios y archivos de texto
-  967  yups ls -javi # quiero diferenciar entre binarios y archivos de texto
-  968  yups --uninstall-yups
-  969  repos/yups/yups --install-yups
-  970  cd
+	sessionContent := `  966  2026-08-31 12:10:00  ls -javi # quiero diferenciar entre binarios y archivos de texto
+  967  2026-08-31 12:10:05  yups ls -javi # quiero diferenciar entre binarios y archivos de texto
+  968  2026-08-31 12:10:10  yups --uninstall-yups
+  969  2026-08-31 12:10:15  repos/yups/yups --install-yups
+  970  2026-08-31 12:10:20  cd
   971  find . -type f -exec file {} \; | grep -E "(ASCII text|Unicode text|empty)"
-  972  ls #marca
-  973  cat .bash_history
-  974  history
-  975  history|tail
+  972  2026-08-31 12:15:30  ls #marca
+  973  2026-08-31 12:16:00  cat .bash_history
+  974  2026-08-31 12:16:30  history
+  975  2026-08-31 12:17:00  history|tail
 `
 	if err := os.WriteFile(sessionHistFile, []byte(sessionContent), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
@@ -1161,14 +1161,14 @@ func TestOSReadHistory(t *testing.T) {
 	if len(lines) != 5 {
 		t.Fatalf("len(lines) = %d, want 5", len(lines))
 	}
-	if lines[len(lines)-1] != "cat .bash_history" {
-		t.Errorf("last line = %q, want 'cat .bash_history'", lines[len(lines)-1])
+	if lines[len(lines)-1].Command != "cat .bash_history" || lines[len(lines)-1].Timestamp != "2026-08-31 12:16:00" {
+		t.Errorf("last line = %+v, want 'cat .bash_history' with timestamp '2026-08-31 12:16:00'", lines[len(lines)-1])
 	}
-	if lines[len(lines)-2] != "ls #marca" {
-		t.Errorf("second to last line = %q, want 'ls #marca'", lines[len(lines)-2])
+	if lines[len(lines)-2].Command != "ls #marca" || lines[len(lines)-2].Timestamp != "2026-08-31 12:15:30" {
+		t.Errorf("second to last line = %+v, want 'ls #marca' with timestamp '2026-08-31 12:15:30'", lines[len(lines)-2])
 	}
 
-	// 2. Test fallback to .bash_history when YUPS_SESSION_HISTORY is unset
+	// 2. Test that when YUPS_SESSION_HISTORY is unset, returns nil (no disk fallback)
 	t.Setenv("YUPS_SESSION_HISTORY", "")
 	bashHistFile := filepath.Join(tempDir, ".bash_history")
 	bashHistContent := "#1629837264\ngit status\n#1629837270\ngit diff\n"
@@ -1177,11 +1177,8 @@ func TestOSReadHistory(t *testing.T) {
 	}
 
 	fallbackLines := osReadHistory(tempDir, 10)
-	if len(fallbackLines) != 2 {
-		t.Fatalf("len(fallbackLines) = %d, want 2, got %v", len(fallbackLines), fallbackLines)
-	}
-	if fallbackLines[0] != "git status" || fallbackLines[1] != "git diff" {
-		t.Errorf("fallbackLines = %v, want ['git status', 'git diff']", fallbackLines)
+	if fallbackLines != nil {
+		t.Fatalf("fallbackLines = %v, want nil (no disk fallback)", fallbackLines)
 	}
 }
 
@@ -1207,5 +1204,26 @@ func TestDispatchUninstalledOffersInstallation(t *testing.T) {
 	}
 	if !strings.Contains(out, "Run 'yups --install-yups' at any time to install.") {
 		t.Errorf("stdout missing install hint:\n%s", out)
+	}
+}
+
+func TestDispatchPrintsSessionSlugOnSuccess(t *testing.T) {
+	fs := newFakeFS()
+	env := fs.env()
+	tempHome := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tempHome, ".yups"), 0o755)
+	env.UserHomeDir = func() (string, error) {
+		return tempHome, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{"--help"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("Dispatch(--help) = %d, want %d", code, ExitOK)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Session: ") {
+		t.Errorf("stdout missing 'Session: ' footer:\n%s", out)
 	}
 }

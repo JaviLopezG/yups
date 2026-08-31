@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"yups/internal/llm"
 )
@@ -73,6 +75,9 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 
 	// 5. Query LLM for the whole pipeline
 	if err := resolver.QueryLLMPipeline(ctx, pipeline, exp, "", stdout); err != nil {
+		if ctx.Err() != nil {
+			return 130
+		}
 		if env.Logger != nil {
 			env.Logger.LogIncident("LLM_CONNECTION_ERROR", "connection failed to %s: %v", endpoint, err)
 		}
@@ -83,77 +88,205 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 	// 6. Print LLM result
 	FormatLLMPipelineResult(stdout, exp, opts)
 
-	// 7. Interactive execution loop [y/n/e/m]
-	if exp.SuggestedCommand == "" || env.AskPrompt == nil {
+	// 7. Interactive execution loop
+	if (exp.SuggestedCommand == "" && exp.SuggestedScript == "") || env.AskPrompt == nil {
 		return 0
 	}
 
-	currentCmd := exp.SuggestedCommand
-	for {
-		promptStr := FormatPromptChoice(opts)
-		choice := env.AskPrompt(promptStr, "y")
-		cleanChoice := strings.ToLower(strings.TrimSpace(choice))
+	if env.FlushStdin != nil {
+		env.FlushStdin()
+	}
 
-		switch cleanChoice {
-		case "y", "yes", "":
-			if env.ExecShell != nil {
+	currentCmd := exp.SuggestedCommand
+	currentScript := exp.SuggestedScript
+	scriptProcessed := (currentScript == "")
+
+	for {
+		// 7a. Script interaction
+		if !scriptProcessed && currentScript != "" {
+			promptStr := FormatPromptChoiceScript(opts)
+			choice := env.AskPrompt(promptStr, "e")
+			cleanChoice := strings.ToLower(strings.TrimSpace(choice))
+
+			switch cleanChoice {
+			case "y", "yes":
+				scriptsDir := env.ScriptsDir
+				if scriptsDir == "" {
+					if home, err := os.UserHomeDir(); err == nil {
+						scriptsDir = filepath.Join(home, ".yups", "scripts")
+					} else {
+						scriptsDir = filepath.Join(os.TempDir(), "yups-scripts")
+					}
+				}
+				_ = os.MkdirAll(scriptsDir, 0o755)
+				timestamp := time.Now().Format("2006-01-02-15-04-05")
+				scriptPath := filepath.Join(scriptsDir, timestamp+".sh")
+				if err := os.WriteFile(scriptPath, []byte(currentScript), 0o755); err != nil {
+					fmt.Fprintf(stderr, "Failed to write script: %v\n", err)
+					return 1
+				}
+				_ = os.Setenv("YUPS_SCRIPT", scriptPath)
 				if marker := os.Getenv("YUPS_READLINE_MARKER"); marker != "" {
 					_ = os.WriteFile(marker, []byte("executed\n"), 0o600)
 				}
-				fmt.Fprintf(stdout, "\nExecuting: %s\n", currentCmd)
-				return env.ExecShell(currentCmd, stdout, stderr)
-			}
-			return 0
-		case "n", "no":
-			return 0
-		case "e", "edit":
-			editPrompt := "Edit command"
-			if color {
-				editPrompt = "\x1b[38;5;214mEdit command\x1b[0m"
-			}
-			var edited string
-			if env.AskEditPrompt != nil {
-				edited = env.AskEditPrompt(editPrompt, currentCmd)
-			} else if env.AskPrompt != nil {
-				edited = env.AskPrompt(editPrompt, currentCmd)
-			}
-			if strings.TrimSpace(edited) != "" {
-				currentCmd = strings.TrimSpace(edited)
-			}
-			fmt.Fprintf(stdout, "\nUpdated command:\n  %s\n\n", currentCmd)
-		case "m", "modifications":
-			modPrompt := "Enter modifications or additional context for LLM"
-			if color {
-				modPrompt = "\x1b[38;5;214mEnter modifications or additional context for LLM\x1b[0m"
-			}
-			mod := env.AskPrompt(modPrompt, "")
-			if strings.TrimSpace(mod) == "" {
+				fmt.Fprintf(stdout, "\nExecuting: %s\n", scriptPath)
+				if env.ExecShell != nil {
+					return env.ExecShell(fmt.Sprintf("bash %q", scriptPath), stdout, stderr)
+				}
+				return 0
+
+			case "e", "edit", "":
+				scriptsDir := env.ScriptsDir
+				if scriptsDir == "" {
+					if home, err := os.UserHomeDir(); err == nil {
+						scriptsDir = filepath.Join(home, ".yups", "scripts")
+					} else {
+						scriptsDir = filepath.Join(os.TempDir(), "yups-scripts")
+					}
+				}
+				_ = os.MkdirAll(scriptsDir, 0o755)
+				timestamp := time.Now().Format("2006-01-02-15-04-05")
+				scriptPath := filepath.Join(scriptsDir, timestamp+".sh")
+				if err := os.WriteFile(scriptPath, []byte(currentScript), 0o755); err != nil {
+					fmt.Fprintf(stderr, "Failed to write script: %v\n", err)
+					return 1
+				}
+				_ = os.Setenv("YUPS_SCRIPT", scriptPath)
+				if env.OpenEditor != nil {
+					_ = env.OpenEditor(scriptPath, nil, stdout, stderr)
+				}
+				if data, err := os.ReadFile(scriptPath); err == nil && len(data) > 0 {
+					currentScript = string(data)
+				}
+				fmt.Fprintf(stdout, "\nScript saved to %s (available as $YUPS_SCRIPT)\n\n", scriptPath)
+				scriptProcessed = true
+				if currentCmd != "" {
+					continue
+				}
+				return 0
+
+			case "n", "no":
+				scriptProcessed = true
+				if currentCmd != "" {
+					continue
+				}
+				return 0
+
+			case "m", "modifications":
+				modPrompt := "Enter modifications or additional context for LLM"
+				if color {
+					modPrompt = "\x1b[38;5;214mEnter modifications or additional context for LLM\x1b[0m"
+				}
+				mod := env.AskPrompt(modPrompt, "")
+				if strings.TrimSpace(mod) == "" {
+					continue
+				}
+				if env.OverrideModel == "" {
+					resolver.env.UseAdvanced = true
+				}
+				modAdv := resolver.env.UseAdvanced
+				modModel := env.DefaultModel
+				if env.OverrideModel != "" {
+					modModel = env.OverrideModel
+				} else if modAdv {
+					modModel = env.AdvancedModel
+					if modModel == "" {
+						modModel = llm.FallbackAdvancedModel
+					}
+				}
+				FormatLLMNotice(stdout, endpoint, modModel, modAdv, opts)
+				if err := resolver.QueryLLMPipeline(ctx, pipeline, exp, mod, stdout); err != nil {
+					FormatConnectionError(stdout, endpoint, err, env.IsInstalled, opts)
+					return 0
+				}
+				FormatLLMPipelineResult(stdout, exp, opts)
+				currentScript = exp.SuggestedScript
+				currentCmd = exp.SuggestedCommand
+				scriptProcessed = (currentScript == "")
+				continue
+
+			default:
+				fmt.Fprintln(stdout, "Please answer y (yes), n (no), e (edit), or m (modifications).")
 				continue
 			}
-			if env.OverrideModel == "" {
-				resolver.env.UseAdvanced = true
-			}
-			modAdv := resolver.env.UseAdvanced
-			modModel := env.DefaultModel
-			if env.OverrideModel != "" {
-				modModel = env.OverrideModel
-			} else if modAdv {
-				modModel = env.AdvancedModel
-				if modModel == "" {
-					modModel = llm.FallbackAdvancedModel
-				}
-			}
-			FormatLLMNotice(stdout, endpoint, modModel, modAdv, opts)
-			if err := resolver.QueryLLMPipeline(ctx, pipeline, exp, mod, stdout); err != nil {
-				FormatConnectionError(stdout, endpoint, err, env.IsInstalled, opts)
-				return 0
-			}
-			FormatLLMPipelineResult(stdout, exp, opts)
-			if exp.SuggestedCommand != "" {
-				currentCmd = exp.SuggestedCommand
-			}
-		default:
-			fmt.Fprintln(stdout, "Please answer y (yes), n (no), e (edit), or m (modifications).")
 		}
+
+		// 7b. Command interaction
+		if currentCmd != "" {
+			promptStr := FormatPromptChoice(opts)
+			choice := env.AskPrompt(promptStr, "y")
+			cleanChoice := strings.ToLower(strings.TrimSpace(choice))
+
+			switch cleanChoice {
+			case "y", "yes", "":
+				if env.ExecShell != nil {
+					if marker := os.Getenv("YUPS_READLINE_MARKER"); marker != "" {
+						_ = os.WriteFile(marker, []byte("executed\n"), 0o600)
+					}
+					fmt.Fprintf(stdout, "\nExecuting: %s\n", currentCmd)
+					return env.ExecShell(currentCmd, stdout, stderr)
+				}
+				return 0
+
+			case "n", "no":
+				return 0
+
+			case "e", "edit":
+				editPrompt := "Edit command"
+				if color {
+					editPrompt = "\x1b[38;5;214mEdit command\x1b[0m"
+				}
+				var edited string
+				if env.AskEditPrompt != nil {
+					edited = env.AskEditPrompt(editPrompt, currentCmd)
+				} else if env.AskPrompt != nil {
+					edited = env.AskPrompt(editPrompt, currentCmd)
+				}
+				if strings.TrimSpace(edited) != "" {
+					currentCmd = strings.TrimSpace(edited)
+				}
+				fmt.Fprintf(stdout, "\nUpdated command:\n  %s\n\n", currentCmd)
+				continue
+
+			case "m", "modifications":
+				modPrompt := "Enter modifications or additional context for LLM"
+				if color {
+					modPrompt = "\x1b[38;5;214mEnter modifications or additional context for LLM\x1b[0m"
+				}
+				mod := env.AskPrompt(modPrompt, "")
+				if strings.TrimSpace(mod) == "" {
+					continue
+				}
+				if env.OverrideModel == "" {
+					resolver.env.UseAdvanced = true
+				}
+				modAdv := resolver.env.UseAdvanced
+				modModel := env.DefaultModel
+				if env.OverrideModel != "" {
+					modModel = env.OverrideModel
+				} else if modAdv {
+					modModel = env.AdvancedModel
+					if modModel == "" {
+						modModel = llm.FallbackAdvancedModel
+					}
+				}
+				FormatLLMNotice(stdout, endpoint, modModel, modAdv, opts)
+				if err := resolver.QueryLLMPipeline(ctx, pipeline, exp, mod, stdout); err != nil {
+					FormatConnectionError(stdout, endpoint, err, env.IsInstalled, opts)
+					return 0
+				}
+				FormatLLMPipelineResult(stdout, exp, opts)
+				currentScript = exp.SuggestedScript
+				currentCmd = exp.SuggestedCommand
+				scriptProcessed = (currentScript == "")
+				continue
+
+			default:
+				fmt.Fprintln(stdout, "Please answer y (yes), n (no), e (edit), or m (modifications).")
+				continue
+			}
+		}
+
+		return 0
 	}
 }

@@ -85,11 +85,12 @@ def decode_escaped_string(s: str) -> str:
 
 
 class SessionInfo:
-    def __init__(self, filepath: str, session_id: str = "", timestamp: str = "",
+    def __init__(self, filepath: str, session_id: str = "", slug: str = "", timestamp: str = "",
                  pid: str = "", cmd: str = "", model: str = "", turns: int = 0,
                  status: str = "", duration: str = ""):
         self.filepath = filepath
         self.session_id = session_id or os.path.basename(filepath).replace("session-", "").replace(".log", "")
+        self.slug = slug or self._extract_slug(self.session_id)
         self.timestamp = timestamp
         self.pid = pid
         self.cmd = cmd
@@ -97,6 +98,13 @@ class SessionInfo:
         self.turns = turns
         self.status = status
         self.duration = duration
+
+    @staticmethod
+    def _extract_slug(sid: str) -> str:
+        parts = sid.split("-")
+        if len(parts) >= 3 and not parts[-1].isdigit():
+            return parts[-1]
+        return ""
 
 
 class Step:
@@ -138,6 +146,8 @@ def discover_sessions(logs_dir: str) -> List[SessionInfo]:
                     ts = ts_match.group(1) if ts_match else ""
                     id_match = re.search(r"id=([^\s]+)", line)
                     sid = id_match.group(1) if id_match else ""
+                    slug_match = re.search(r"slug=([^\s]+)", line)
+                    slug = slug_match.group(1) if slug_match else ""
                     pid_match = re.search(r"pid=([^\s]+)", line)
                     pid = pid_match.group(1) if pid_match else ""
                     cmd_match = re.search(r'cmd="([^"]*)"', line)
@@ -158,6 +168,7 @@ def discover_sessions(logs_dir: str) -> List[SessionInfo]:
                         sessions_map[sid] = SessionInfo(
                             filepath=log_path,
                             session_id=sid,
+                            slug=slug,
                             timestamp=ts,
                             pid=pid,
                             cmd=cmd,
@@ -174,10 +185,11 @@ def discover_sessions(logs_dir: str) -> List[SessionInfo]:
         base = os.path.basename(fpath)
         sid = base.replace("session-", "").replace(".log", "")
         if sid not in sessions_map:
-            ts, cmd, pid = extract_session_header(fpath)
+            ts, cmd, pid, slug = extract_session_header(fpath)
             sessions_map[sid] = SessionInfo(
                 filepath=fpath,
                 session_id=sid,
+                slug=slug,
                 timestamp=ts,
                 pid=pid,
                 cmd=cmd
@@ -188,8 +200,8 @@ def discover_sessions(logs_dir: str) -> List[SessionInfo]:
     return res
 
 
-def extract_session_header(filepath: str) -> Tuple[str, str, str]:
-    ts, cmd, pid = "", "", ""
+def extract_session_header(filepath: str) -> Tuple[str, str, str, str]:
+    ts, cmd, pid, slug = "", "", "", ""
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for _ in range(25):
@@ -202,9 +214,11 @@ def extract_session_header(filepath: str) -> Tuple[str, str, str]:
                     cmd = line.split(":", 1)[1].strip()
                 elif line.startswith("PID:"):
                     pid = line.split(":", 1)[1].strip()
+                elif line.startswith("Slug:"):
+                    slug = line.split(":", 1)[1].strip()
     except Exception:
         pass
-    return ts, cmd, pid
+    return ts, cmd, pid, slug
 
 
 def format_decoded_json_payload(raw_json: str, is_request: bool = True) -> str:
@@ -531,9 +545,10 @@ def session_picker_ui(sessions: List[SessionInfo]) -> Optional[SessionInfo]:
     for i, s in enumerate(sessions):
         num_str = f"[{i + 1}]"
         ts_str = s.timestamp[:19].replace("T", " ") if s.timestamp else s.session_id
+        slug_str = f"{yellow(s.slug):<14}" if s.slug else ""
         cmd_str = s.cmd if s.cmd else "(no command)"
-        if len(cmd_str) > 45:
-            cmd_str = cmd_str[:42] + "..."
+        if len(cmd_str) > 40:
+            cmd_str = cmd_str[:37] + "..."
 
         status_colored = s.status or "OK"
         if "SUCCESS" in status_colored or "OK" in status_colored:
@@ -546,11 +561,11 @@ def session_picker_ui(sessions: List[SessionInfo]) -> Optional[SessionInfo]:
         meta = " ".join(filter(None, [s.model, turns_str, dur_str, status_colored]))
 
         latest_mark = orange(" (latest)") if i == len(sessions) - 1 else ""
-        print(f"  {bold(num_str):<5} {ts_str} | {meta} | {cyan(cmd_str)}{latest_mark}")
+        print(f"  {bold(num_str):<5} {ts_str}  {slug_str} | {meta} | {cyan(cmd_str)}{latest_mark}")
 
     print(hr("-", "2"))
     default_idx = len(sessions)
-    prompt = f"Select session [1-{len(sessions)}, {bold('Default: ' + str(default_idx))} (latest)] (or 'q' to quit): "
+    prompt = f"Select session [1-{len(sessions)}, slug (e.g. {bold('sevilla37')}), {bold('Default: ' + str(default_idx))} (latest)] (or 'q' to quit): "
 
     while True:
         try:
@@ -567,7 +582,10 @@ def session_picker_ui(sessions: List[SessionInfo]) -> Optional[SessionInfo]:
             val = int(choice)
             if 1 <= val <= len(sessions):
                 return sessions[val - 1]
-        print(red(f"Please enter a number between 1 and {len(sessions)}, or 'q' to quit."))
+        for s in reversed(sessions):
+            if s.slug.lower() == choice or s.session_id.lower() == choice or s.session_id.lower().endswith("-" + choice):
+                return s
+        print(red(f"Please enter a number between 1 and {len(sessions)}, a valid session slug, or 'q' to quit."))
 
 
 def inspect_session(session: SessionInfo, sessions_list: List[SessionInfo]) -> None:
@@ -644,12 +662,12 @@ def main() -> int:
     logs_dir = resolve_logs_dir()
 
     target_session: Optional[SessionInfo] = None
-    sessions: List[SessionInfo] = []
+    sessions: List[SessionInfo] = discover_sessions(logs_dir)
 
     if len(sys.argv) > 1:
-        arg = sys.argv[1]
+        arg = sys.argv[1].strip()
         if arg in ("-h", "--help", "help"):
-            print("Usage: inspect-session.py [SESSION_ID | /path/to/session.log]")
+            print("Usage: inspect-session.py [SESSION_SLUG | SESSION_ID | /path/to/session.log]")
             print("\nNavigation Keys:")
             print("  n / Enter     Next step")
             print("  p / b         Previous step")
@@ -669,11 +687,14 @@ def main() -> int:
             if os.path.isfile(candidate):
                 target_session = SessionInfo(filepath=candidate, session_id=arg)
             else:
-                candidate2 = os.path.join(logs_dir, arg)
-                if os.path.isfile(candidate2):
-                    target_session = SessionInfo(filepath=candidate2)
-
-    sessions = discover_sessions(logs_dir)
+                for s in reversed(sessions):
+                    if s.slug.lower() == arg.lower() or s.session_id.lower() == arg.lower() or s.session_id.lower().endswith("-" + arg.lower()) or arg.lower() in s.session_id.lower():
+                        target_session = s
+                        break
+                if target_session is None:
+                    matches = glob.glob(os.path.join(logs_dir, f"*{arg}*.log"))
+                    if matches:
+                        target_session = SessionInfo(filepath=matches[-1])
 
     if target_session is None:
         target_session = session_picker_ui(sessions)

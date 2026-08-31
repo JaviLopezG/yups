@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"yups/internal/config"
 	"yups/internal/explain"
 	"yups/internal/llm"
 	"yups/internal/sessionlog"
@@ -65,7 +66,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 
 	if len(models) == 0 {
 		fmt.Fprintf(stdout, "Connected to Ollama at %s, but no models are installed.\n", endpoint)
-		fmt.Fprintln(stdout, "Run 'ollama pull qwen2.5-coder:7b' to install a recommended model.")
+		fmt.Fprintf(stdout, "Run 'ollama pull %s' to install a recommended model.\n", config.DefaultModel)
 		if logger != nil {
 			logger.LogConclusion("", "", "", "NO_MODELS_INSTALLED", ExitOK)
 		}

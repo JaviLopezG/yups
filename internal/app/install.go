@@ -161,8 +161,8 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 						fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
 
 						if env.AskPrompt != nil && (!hasQwen || !hasGemma) {
-							fmt.Fprintln(stdout, "\nRecommended models (qwen2.5-coder for default, qwen3.8 for advanced) are not fully available:")
-							fmt.Fprintln(stdout, "  [1] Pull recommended models (qwen2.5-coder:7b and qwen3.8:latest)")
+							fmt.Fprintf(stdout, "\nRecommended models (%s for default, %s for advanced) are not fully available:\n", config.DefaultModel, config.DefaultAdvancedModel)
+							fmt.Fprintf(stdout, "  [1] Pull recommended models (%s and %s)\n", config.DefaultModel, config.DefaultAdvancedModel)
 							fmt.Fprintln(stdout, "  [2] Choose models from your installed list")
 							fmt.Fprintln(stdout, "  [3] Run model benchmark test (--test-models) and choose")
 							fmt.Fprintf(stdout, "  [4] Use automatic selection (%s / %s)\n", def, adv)
@@ -170,19 +170,19 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 							choice := strings.TrimSpace(env.AskPrompt("Model setup choice [1/2/3/4]", "4"))
 							switch choice {
 							case "1":
-								fmt.Fprintln(stdout, "Pulling qwen2.5-coder:7b...")
+								fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultModel)
 								pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-								_ = llmClient.PullModel(pullCtx, "qwen2.5-coder:7b", stdout)
+								_ = llmClient.PullModel(pullCtx, config.DefaultModel, stdout)
 								pullCancel()
-								def = "qwen2.5-coder:7b"
+								def = config.DefaultModel
 
-								fmt.Fprintln(stdout, "Pulling qwen3.8:latest...")
+								fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultAdvancedModel)
 								pullCtx2, pullCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
-								_ = llmClient.PullModel(pullCtx2, "qwen3.8:latest", stdout)
+								_ = llmClient.PullModel(pullCtx2, config.DefaultAdvancedModel, stdout)
 								pullCancel2()
-								adv = "qwen3.8:latest"
+								adv = config.DefaultAdvancedModel
 
-								cfg.Inference.AvailableModels = append(cfg.Inference.AvailableModels, "qwen2.5-coder:7b", "qwen3.8:latest")
+								cfg.Inference.AvailableModels = append(cfg.Inference.AvailableModels, config.DefaultModel, config.DefaultAdvancedModel)
 
 							case "2":
 								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
@@ -199,13 +199,13 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 						fmt.Fprintf(stdout, "Configured models: default-model = %s, advanced-model = %s.\n", def, adv)
 					} else {
 						fmt.Fprintf(stdout, "Connected to Ollama at %s (no models found).\n", endpoint)
-						if env.AskConfirmation != nil && env.AskConfirmation("Would you like to pull the recommended qwen2.5-coder:7b model now?", true) {
-							fmt.Fprintln(stdout, "Pulling qwen2.5-coder:7b...")
+						if env.AskConfirmation != nil && env.AskConfirmation(fmt.Sprintf("Would you like to pull the recommended %s model now?", config.DefaultModel), true) {
+							fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultModel)
 							pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-							if err := llmClient.PullModel(pullCtx, "qwen2.5-coder:7b", stdout); err == nil {
-								cfg.Inference.DefaultModel = "qwen2.5-coder:7b"
-								cfg.Inference.AdvancedModel = "qwen2.5-coder:7b"
-								cfg.Inference.AvailableModels = []string{"qwen2.5-coder:7b"}
+							if err := llmClient.PullModel(pullCtx, config.DefaultModel, stdout); err == nil {
+								cfg.Inference.DefaultModel = config.DefaultModel
+								cfg.Inference.AdvancedModel = config.DefaultModel
+								cfg.Inference.AvailableModels = []string{config.DefaultModel}
 							}
 							pullCancel()
 						}

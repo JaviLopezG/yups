@@ -3,8 +3,34 @@ package explain
 import (
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
+	"syscall"
+	"unsafe"
 )
+
+// GetTerminalHeight returns the current terminal row count, or 24 as fallback default.
+func GetTerminalHeight() int {
+	ws := &struct {
+		Row    uint16
+		Col    uint16
+		Xpixel uint16
+		Ypixel uint16
+	}{}
+	for _, fd := range []uintptr{os.Stdout.Fd(), os.Stderr.Fd(), os.Stdin.Fd()} {
+		_, _, err := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(ws)))
+		if err == 0 && ws.Row > 0 {
+			return int(ws.Row)
+		}
+	}
+	if linesStr := os.Getenv("LINES"); linesStr != "" {
+		if l, err := strconv.Atoi(linesStr); err == nil && l > 0 {
+			return l
+		}
+	}
+	return 24
+}
 
 // ANSI color escape codes
 const (
@@ -224,9 +250,9 @@ func FormatConnectionError(w io.Writer, endpoint string, err error, isInstalled 
 	}
 }
 
-// FormatLLMPipelineResult prints the explanation, suggested command, and script for a pipeline.
+// FormatLLMPipelineResult prints the LLM explanation, suggested script, and suggested command.
 func FormatLLMPipelineResult(w io.Writer, exp *PipelineExplanation, opts FormatOptions) {
-	if exp == nil {
+	if exp == nil || !exp.LLMQueried {
 		return
 	}
 
@@ -242,22 +268,66 @@ func FormatLLMPipelineResult(w io.Writer, exp *PipelineExplanation, opts FormatO
 		}
 	}
 
+	if exp.SuggestedScript != "" {
+		FormatSuggestedScript(w, exp.SuggestedScript, opts)
+	}
+
 	if exp.SuggestedCommand != "" {
 		FormatSuggestedCommand(w, exp.SuggestedCommand, opts)
 	}
+}
 
-	if exp.SuggestedScript != "" {
-		fmt.Fprintln(w)
+// FormatSuggestedScript prints the script block with line numbers, summarizing
+// it with first 5 and last 5 lines if it exceeds 12 lines and (terminal lines - 10).
+func FormatSuggestedScript(w io.Writer, script string, opts FormatOptions) {
+	if script == "" {
+		return
+	}
+	fmt.Fprintln(w)
+	if opts.Color {
+		fmt.Fprintf(w, "%sSuggested script:%s\n", ansiBold, ansiReset)
+	} else {
+		fmt.Fprintln(w, "Suggested script:")
+	}
+
+	rawLines := strings.Split(strings.TrimRight(script, "\r\n"), "\n")
+	n := len(rawLines)
+	termHeight := GetTerminalHeight()
+	shouldTruncate := n > 12 && n > (termHeight-10)
+
+	pad := len(fmt.Sprintf("%d", n))
+	if pad < 2 {
+		pad = 2
+	}
+
+	printLine := func(lineNum int, line string) {
 		if opts.Color {
-			fmt.Fprintf(w, "%sSuggested script:%s\n", ansiBold, ansiReset)
+			fmt.Fprintf(w, "  %s%*d |%s %s\n", ansiGray, pad, lineNum, ansiReset, line)
 		} else {
-			fmt.Fprintln(w, "Suggested script:")
+			fmt.Fprintf(w, "  %*d | %s\n", pad, lineNum, line)
 		}
-		fmt.Fprintln(w, "  ```bash")
-		for _, line := range strings.Split(exp.SuggestedScript, "\n") {
-			fmt.Fprintf(w, "  %s\n", line)
+	}
+
+	if shouldTruncate {
+		for i := 0; i < 5; i++ {
+			printLine(i+1, rawLines[i])
 		}
-		fmt.Fprintln(w, "  ```")
+		if opts.Color {
+			fmt.Fprintf(w, "  %s-----------------------%s\n", ansiGray, ansiReset)
+			fmt.Fprintf(w, "  %s(...)%s\n", ansiGray, ansiReset)
+			fmt.Fprintf(w, "  %s-----------------------%s\n", ansiGray, ansiReset)
+		} else {
+			fmt.Fprintln(w, "  -----------------------")
+			fmt.Fprintln(w, "  (...)")
+			fmt.Fprintln(w, "  -----------------------")
+		}
+		for i := n - 5; i < n; i++ {
+			printLine(i+1, rawLines[i])
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			printLine(i+1, rawLines[i])
+		}
 	}
 }
 
@@ -283,6 +353,7 @@ func FormatLLMResult(w io.Writer, exp *CommandExplanation, opts FormatOptions) {
 		LLMExplanation:   exp.LLMExplanation,
 		SuggestedCommand: exp.SuggestedCommand,
 		SuggestedScript:  exp.SuggestedScript,
+		LLMQueried:       exp.LLMQueried,
 	}
 	FormatLLMPipelineResult(w, pExp, opts)
 }
@@ -297,6 +368,18 @@ func FormatPromptChoice(opts FormatOptions) string {
 			ansiUnderline + "m" + ansiReset + ansiOrange + "odifications] (default: Yes): " + ansiReset
 	}
 	return "Do you want to run this command? [Yes/no/edit/modifications] (default: Yes): "
+}
+
+// FormatPromptChoiceScript renders the choice prompt for scripts (default: Edit).
+func FormatPromptChoiceScript(opts FormatOptions) string {
+	if opts.Color {
+		return ansiOrange + "Do you want to run this script? [" +
+			ansiUnderline + "y" + ansiReset + ansiOrange + "es/" +
+			ansiUnderline + "n" + ansiReset + ansiOrange + "o/" +
+			ansiUnderline + "E" + ansiReset + ansiOrange + "dit/" +
+			ansiUnderline + "m" + ansiReset + ansiOrange + "odifications] (default: Edit): " + ansiReset
+	}
+	return "Do you want to run this script? [yes/no/Edit/modifications] (default: Edit): "
 }
 
 // FormatPromptChoiceNoMod renders the choice prompt without modifications option.

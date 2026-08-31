@@ -110,6 +110,8 @@ type Env struct {
 	AskPrompt func(prompt, defaultValue string) string
 	// AskEditPrompt allows inline editing with a pre-filled editable string on terminals.
 	AskEditPrompt func(prompt, initialValue string) string
+	// FlushStdin flushes pending unread characters in the stdin buffer.
+	FlushStdin func()
 
 	// RunCmdTimeout runs name with args, bounded by the given timeout.
 	RunCmdTimeout func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error)
@@ -126,7 +128,7 @@ type Env struct {
 
 	// Environment context gathering for LLM inference
 	ReadOSRelease   func() string
-	ReadHistory     func(home string, maxLines int) []string
+	ReadHistory     func(home string, maxLines int) []llm.HistoryEntry
 	ReadFileSnippet func(path string, maxLines int) (string, error)
 	ListDirNames    func(dir string, maxItems int) []string
 	Getwd           func() (string, error)
@@ -151,10 +153,12 @@ type Env struct {
 func (e *Env) DocEnv() explain.DocEnv {
 	cfg := config.Defaults()
 	isInstalled := false
+	scriptsDir := ""
 	cheatsDir := ""
 	configFileExists := false
 	if e.UserHomeDir != nil {
 		if home, err := e.UserHomeDir(); err == nil {
+			scriptsDir = config.ScriptsDir(home)
 			if e.CheatsheetsDir != nil {
 				cheatsDir = e.CheatsheetsDir(home)
 			} else {
@@ -232,8 +236,11 @@ func (e *Env) DocEnv() explain.DocEnv {
 		AskConfirmation:      e.AskConfirmation,
 		AskPrompt:            e.AskPrompt,
 		AskEditPrompt:        e.AskEditPrompt,
+		FlushStdin:           e.FlushStdin,
 		ExecShell:            e.ExecShell,
 		CheatsheetsDir:       cheatsDir,
+		ScriptsDir:           scriptsDir,
+		OpenEditor:           e.OpenEditor,
 	}
 }
 
@@ -267,7 +274,7 @@ func (a *envLLMAdapter) ReadOSRelease() string {
 	return a.env.ReadOSRelease()
 }
 
-func (a *envLLMAdapter) ReadHistory(home string, maxLines int) []string {
+func (a *envLLMAdapter) ReadHistory(home string, maxLines int) []llm.HistoryEntry {
 	if a.env.ReadHistory == nil {
 		return nil
 	}
@@ -299,9 +306,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 // terminal forever.
 var releaseHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-// llmHTTPClient is the client used for LLM inference calls, which can
-// take longer during model prompt evaluations.
-var llmHTTPClient = &http.Client{Timeout: 90 * time.Second}
+// llmHTTPClient is the client used for LLM inference calls. Request timeouts
+// and cancellations are governed by context.Context, allowing long reasoning
+// generations and interactive user continuation prompts.
+var llmHTTPClient = &http.Client{}
 
 // NewOSEnv returns an Env backed by the real operating system.
 func NewOSEnv() *Env {
@@ -331,6 +339,7 @@ func NewOSEnv() *Env {
 		AskConfirmation:     osAskConfirmation,
 		AskPrompt:           osAskPrompt,
 		AskEditPrompt:       osAskEditPrompt,
+		FlushStdin:          osFlushStdin,
 		RunCmdTimeout:       osRunCmdTimeout,
 		Whatis:              osWhatis,
 		ManPage:             osManPage,
@@ -571,10 +580,39 @@ var stdinReader = sync.OnceValue(func() *bufio.Reader {
 	return bufio.NewReader(os.Stdin)
 })
 
+const (
+	ioctlTCFLSH   = 0x540B
+	ioctlTCIFLUSH = 0
+)
+
+// osFlushStdin discards unread characters currently pending in the input buffer.
+func osFlushStdin() {
+	if osIsTerminalOutput(os.Stdin) {
+		reader := stdinReader()
+		if reader != nil && reader.Buffered() > 0 {
+			_, _ = reader.Discard(reader.Buffered())
+		}
+		_ = tcflush(int(os.Stdin.Fd()))
+	}
+	if tty, err := os.Open("/dev/tty"); err == nil {
+		_ = tcflush(int(tty.Fd()))
+		_ = tty.Close()
+	}
+}
+
+func tcflush(fd int) error {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), uintptr(ioctlTCFLSH), uintptr(ioctlTCIFLUSH))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
 // osAskConfirmation reads a yes/no answer from stdin. An empty answer
 // (plain Enter), EOF or three invalid answers fall back to the default,
 // so piped or unattended invocations never hang on a question.
 func osAskConfirmation(prompt string, defaultYes bool) bool {
+	osFlushStdin()
 	hint := "(y/N)"
 	if defaultYes {
 		hint = "(Y/n)"
@@ -699,6 +737,7 @@ func osIsTerminalOutput(w io.Writer) bool {
 
 // osAskPrompt prompts for user text input, returning defaultValue if empty.
 func osAskPrompt(prompt, defaultValue string) string {
+	osFlushStdin()
 	isTerm := osIsTerminalOutput(os.Stdout)
 	if defaultValue != "" {
 		if isTerm {
@@ -742,52 +781,37 @@ func osReadOSRelease() string {
 }
 
 var (
-	historyNumRegex = regexp.MustCompile(`^\s*\d+\s+`)
-	zshHistoryRegex = regexp.MustCompile(`^:\s*\d+:\d+;`)
+	historyNumRegex       = regexp.MustCompile(`^\s*\d+\s+`)
+	historyTimestampRegex = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(.*)$`)
+	zshHistoryRegex       = regexp.MustCompile(`^:\s*\d+:\d+;`)
 )
 
-// osReadHistory reads up to maxLines of shell history. It prioritizes live session history
-// passed via YUPS_SESSION_HISTORY before falling back to HISTFILE and ~/.bash_history.
-func osReadHistory(home string, maxLines int) []string {
+// osReadHistory reads up to maxLines of live shell history passed via YUPS_SESSION_HISTORY.
+// If not running within an active yups shell session wrapper, it returns nil so that
+// stale historical commands from disk files are never mixed in.
+func osReadHistory(home string, maxLines int) []llm.HistoryEntry {
 	if maxLines <= 0 {
 		maxLines = 10
 	}
 
-	var data []byte
-	var err error
-
-	// 1. Check live session history file passed by yups shell wrapper or readline binding
-	if sessionHist := os.Getenv("YUPS_SESSION_HISTORY"); sessionHist != "" {
-		data, err = os.ReadFile(sessionHist)
+	sessionHist := os.Getenv("YUPS_SESSION_HISTORY")
+	if sessionHist == "" {
+		return nil
 	}
 
-	// 2. Check explicit HISTFILE environment variable
-	if (err != nil || len(data) == 0) && os.Getenv("HISTFILE") != "" {
-		data, err = os.ReadFile(os.Getenv("HISTFILE"))
-	}
-
-	// 3. Check ~/.bash_history
-	if (err != nil || len(data) == 0) && home != "" {
-		data, err = os.ReadFile(filepath.Join(home, ".bash_history"))
-	}
-
-	// 4. Check ~/.zsh_history
-	if (err != nil || len(data) == 0) && home != "" {
-		data, err = os.ReadFile(filepath.Join(home, ".zsh_history"))
-	}
-
+	data, err := os.ReadFile(sessionHist)
 	if err != nil || len(data) == 0 {
 		return nil
 	}
 
 	rawLines := strings.Split(string(data), "\n")
-	var valid []string
+	var valid []llm.HistoryEntry
 	for _, l := range rawLines {
 		trimmed := strings.TrimSpace(l)
 		if trimmed == "" {
 			continue
 		}
-		// Strip leading bash history line numbers e.g. "  972  ls -la"
+		// Strip leading bash history line numbers e.g. "  972  2026-08-31 12:15:30  ls -la"
 		trimmed = historyNumRegex.ReplaceAllString(trimmed, "")
 		// Strip zsh extended history timestamp e.g. ": 1629837264:0;ls -la"
 		trimmed = zshHistoryRegex.ReplaceAllString(trimmed, "")
@@ -795,11 +819,22 @@ func osReadHistory(home string, maxLines int) []string {
 		if strings.HasPrefix(trimmed, "#") && len(trimmed) > 1 && isNumeric(trimmed[1:]) {
 			continue
 		}
+
+		timestamp := ""
+		cmd := trimmed
+		if m := historyTimestampRegex.FindStringSubmatch(trimmed); len(m) == 3 {
+			timestamp = m[1]
+			cmd = strings.TrimSpace(m[2])
+		}
+
 		// Skip history command noise
-		if strings.HasPrefix(trimmed, "history") || strings.HasPrefix(trimmed, "HISTTIMEFORMAT=") {
+		if strings.HasPrefix(cmd, "history") || strings.HasPrefix(cmd, "HISTTIMEFORMAT=") || cmd == "" {
 			continue
 		}
-		valid = append(valid, trimmed)
+		valid = append(valid, llm.HistoryEntry{
+			Timestamp: timestamp,
+			Command:   cmd,
+		})
 	}
 
 	if len(valid) > maxLines {
@@ -900,6 +935,7 @@ func osAskEditPrompt(prompt, initialText string) string {
 }
 
 func editLineTerminal(prompt, initialText string, stdin io.Reader, stdout io.Writer) string {
+	osFlushStdin()
 	fIn, okIn := stdin.(*os.File)
 	fOut, okOut := stdout.(*os.File)
 	isTerm := okIn && okOut && osIsTerminalOutput(fIn) && osIsTerminalOutput(fOut)

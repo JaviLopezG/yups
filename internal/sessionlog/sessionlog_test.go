@@ -268,3 +268,67 @@ func TestRecordIncidentStandalone(t *testing.T) {
 		t.Errorf("unexpected incidents.log content:\n%s", content)
 	}
 }
+
+func TestSessionLoggerSignalInterruption(t *testing.T) {
+	tempHome := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tempHome, ".yups"), 0o755)
+
+	logger := New(tempHome, []string{"ls", "-la"})
+	logger.LogIncident("SIGNAL_RECEIVED", "Received signal %s (PID: %d)", "interrupt", os.Getpid())
+	logger.LogConclusion("", "", "", "INTERRUPTED (interrupt)", 130)
+
+	// Check buffer and written files
+	bufStr := logger.BufferString()
+	if !strings.Contains(bufStr, "[! INCIDENT: SIGNAL_RECEIVED !]") {
+		t.Errorf("buffer missing SIGNAL_RECEIVED incident:\n%s", bufStr)
+	}
+	if !strings.Contains(bufStr, "Status:            INTERRUPTED (interrupt)") {
+		t.Errorf("buffer missing INTERRUPTED status:\n%s", bufStr)
+	}
+	if !strings.Contains(bufStr, "Exit Code:         130") {
+		t.Errorf("buffer missing Exit Code 130:\n%s", bufStr)
+	}
+
+	// Check incidents.log file
+	incidentsData, err := os.ReadFile(logger.IncidentsPath())
+	if err != nil {
+		t.Fatalf("reading incidents.log: %v", err)
+	}
+	if !strings.Contains(string(incidentsData), "type=SIGNAL_RECEIVED") {
+		t.Errorf("incidents.log missing SIGNAL_RECEIVED:\n%s", string(incidentsData))
+	}
+}
+
+func TestGenerateSessionSlugAndSlugLogging(t *testing.T) {
+	slug := GenerateSessionSlug()
+	if len(slug) < 3 {
+		t.Fatalf("GenerateSessionSlug() produced unexpectedly short slug: %q", slug)
+	}
+
+	tempHome := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tempHome, ".yups"), 0o755)
+
+	logger := New(tempHome, []string{"curl", "example.com"})
+	if logger.Slug() == "" {
+		t.Fatal("logger.Slug() is empty")
+	}
+	if !strings.Contains(logger.SessionID(), logger.Slug()) {
+		t.Errorf("SessionID %q does not contain Slug %q", logger.SessionID(), logger.Slug())
+	}
+	if logger.HasWritten() {
+		t.Error("HasWritten() should be false before LogConclusion")
+	}
+
+	logger.LogConclusion("explained", "curl example.com", "", "SUCCESS", 0)
+	if !logger.HasWritten() {
+		t.Error("HasWritten() should be true after LogConclusion")
+	}
+
+	summaryData, err := os.ReadFile(filepath.Join(tempHome, ".yups", "logs", "sessions.log"))
+	if err != nil {
+		t.Fatalf("reading sessions.log: %v", err)
+	}
+	if !strings.Contains(string(summaryData), "slug="+logger.Slug()) {
+		t.Errorf("sessions.log missing slug=%s entry:\n%s", logger.Slug(), string(summaryData))
+	}
+}

@@ -4,8 +4,10 @@ package sessionlog
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,11 +17,38 @@ import (
 	"yups/internal/llm"
 )
 
+var sessionCities = []string{
+	"almeria", "cadiz", "cordoba", "granada", "huelva", "jaen", "malaga", "seville",
+	"huesca", "teruel", "zaragoza", "oviedo", "palma", "gasteiz", "bilbao", "sanse",
+	"laspalmas", "santacruz", "santander", "avila", "burgos", "leon", "palencia",
+	"salamanca", "segovia", "soria", "valladolid", "zamora", "albacete", "ciudadreal",
+	"cuenca", "guadalajara", "toledo", "barcelona", "girona", "lleida", "tarragona",
+	"badajoz", "caceres", "acoruna", "lugo", "ourense", "pontevedra", "logroño",
+	"madrid", "murcia", "pamplona", "alicante", "castellon", "valencia", "ceuta",
+	"melilla",
+}
+
+// GenerateSessionSlug generates a random human-readable slug (e.g. "sevilla37", "barcelona23").
+func GenerateSessionSlug() string {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(sessionCities))))
+	city := sessionCities[0]
+	if err == nil {
+		city = sessionCities[n.Int64()]
+	}
+	digitBig, err := rand.Int(rand.Reader, big.NewInt(100))
+	digit := 0
+	if err == nil {
+		digit = int(digitBig.Int64())
+	}
+	return fmt.Sprintf("%s%02d", city, digit)
+}
+
 // SessionLogger captures step-by-step decisions and Ollama interactions for a yups run.
 type SessionLogger struct {
 	mu            sync.Mutex
 	homeDir       string
 	sessionID     string
+	slug          string
 	logPath       string
 	summaryPath   string
 	incidentsPath string
@@ -31,6 +60,7 @@ type SessionLogger struct {
 	buf           bytes.Buffer
 	turnCount     int
 	modelUsed     string
+	written       bool
 	closed        bool
 	disabled      bool
 }
@@ -43,7 +73,8 @@ func New(homeDir string, args []string) *SessionLogger {
 
 	now := time.Now()
 	pid := os.Getpid()
-	sessionID := fmt.Sprintf("%s-%d", now.Format("20060102-150405"), pid)
+	slug := GenerateSessionSlug()
+	sessionID := fmt.Sprintf("%s-%d-%s", now.Format("20060102-150405"), pid, slug)
 	logsDir := filepath.Join(homeDir, ".yups", "logs")
 	sessionDirName := fmt.Sprintf("session-%s", sessionID)
 
@@ -55,6 +86,7 @@ func New(homeDir string, args []string) *SessionLogger {
 	l := &SessionLogger{
 		homeDir:       homeDir,
 		sessionID:     sessionID,
+		slug:          slug,
 		logPath:       filepath.Join(logsDir, fmt.Sprintf("%s.log", sessionDirName)),
 		summaryPath:   filepath.Join(logsDir, "sessions.log"),
 		incidentsPath: filepath.Join(logsDir, "incidents.log"),
@@ -69,6 +101,8 @@ func New(homeDir string, args []string) *SessionLogger {
 	l.buf.WriteString("================================================================================\n")
 	l.buf.WriteString(fmt.Sprintf("YUPS SESSION LOG: %s\n", sessionID))
 	l.buf.WriteString("================================================================================\n")
+	l.buf.WriteString(fmt.Sprintf("Session ID:  %s\n", sessionID))
+	l.buf.WriteString(fmt.Sprintf("Slug:        %s\n", slug))
 	l.buf.WriteString(fmt.Sprintf("Timestamp:   %s\n", now.Format(time.RFC3339)))
 	l.buf.WriteString(fmt.Sprintf("PID:         %d\n", pid))
 	l.buf.WriteString(fmt.Sprintf("Command:     %s\n", cmdStr))
@@ -399,15 +433,17 @@ func (l *SessionLogger) LogConclusion(explanation, suggestedCmd, suggestedScript
 
 	// Write detailed session log file
 	_ = os.WriteFile(l.logPath, l.buf.Bytes(), 0o644)
+	l.written = true
 
 	// Append one-line summary to sessions.log
 	modelStr := l.modelUsed
 	if modelStr == "" {
 		modelStr = "local-doc"
 	}
-	summaryLine := fmt.Sprintf("[%s] id=%s pid=%d cmd=%q model=%q turns=%d status=%s duration=%s file=%s\n",
+	summaryLine := fmt.Sprintf("[%s] id=%s slug=%s pid=%d cmd=%q model=%q turns=%d status=%s duration=%s file=%s\n",
 		l.startTime.Format(time.RFC3339),
 		l.sessionID,
+		l.slug,
 		l.pid,
 		l.commandLine,
 		modelStr,
@@ -421,6 +457,42 @@ func (l *SessionLogger) LogConclusion(explanation, suggestedCmd, suggestedScript
 		_, _ = f.WriteString(summaryLine)
 		_ = f.Close()
 	}
+}
+
+// SessionID returns the unique session ID string.
+func (l *SessionLogger) SessionID() string {
+	if l == nil {
+		return ""
+	}
+	return l.sessionID
+}
+
+// Slug returns the human-readable city slug (e.g. "sevilla37").
+func (l *SessionLogger) Slug() string {
+	if l == nil {
+		return ""
+	}
+	return l.slug
+}
+
+// HasWritten returns true if a session log was committed to disk.
+func (l *SessionLogger) HasWritten() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.written
+}
+
+// IsDisabled returns true if session logging is disabled.
+func (l *SessionLogger) IsDisabled() bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.disabled
 }
 
 // Disable permanently disables writing session logs to disk.
