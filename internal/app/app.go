@@ -156,6 +156,7 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 	// Parse flags
 	var overrideModel string
 	var useAdvanced bool
+	var noLimits bool
 	i := 0
 	for i < len(args) {
 		arg := args[i]
@@ -222,6 +223,11 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 			i++
 			continue
 		}
+		if arg == "--no-limits" {
+			noLimits = true
+			i++
+			continue
+		}
 		if strings.HasPrefix(arg, "--model=") {
 			overrideModel = strings.TrimPrefix(arg, "--model=")
 			i++
@@ -259,6 +265,7 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 			docEnv.InvocationFlags = invocationFlags
 			docEnv.Logger = logger
 			docEnv.UseAdvanced = true
+			docEnv.NoLimits = noLimits
 			if overrideModel != "" {
 				docEnv.OverrideModel = overrideModel
 			}
@@ -304,6 +311,7 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 	docEnv.Logger = logger
 	docEnv.OverrideModel = overrideModel
 	docEnv.UseAdvanced = useAdvanced
+	docEnv.NoLimits = noLimits
 
 	return explain.Explain(ctx, docEnv, cmdArgs, stdout, stderr, color)
 }

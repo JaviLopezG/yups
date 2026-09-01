@@ -672,8 +672,11 @@ func readSingleLine(r *bufio.Reader) (string, error) {
 // It sets process group isolation so any child processes spawned by shell pipelines
 // are cleanly terminated on timeout.
 func osRunCmdTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

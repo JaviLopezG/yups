@@ -12,6 +12,7 @@ Usage:
   yups --query <prompt> Ask a question or goal directly
   yups --model <tag>    Use a specific Ollama model for inference
   yups --advanced       Use the advanced reasoning model directly
+  yups --no-limits      Disable all timeouts and reasoning round limits
   yups --test-models    Run latency benchmark test on all installed models
   yups --help           Show this help text
   yups --version        Show the yups version

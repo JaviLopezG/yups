@@ -20,7 +20,7 @@ func TestSessionLoggerRecordsTraceAndInteractions(t *testing.T) {
 		t.Fatal("expected non-nil logger")
 	}
 
-	logger.LogConfig("http://localhost:11434", "qwen2.5-coder:latest", "qwen3.8:latest", true, 60*time.Second, 30*time.Second, 10, 4096, 3)
+	logger.LogConfig("http://localhost:11434", "qwen2.5-coder:latest", "qwen3.8:latest", true, 60*time.Second, 30*time.Second, 10, 4096, 3, false)
 	logger.LogModelResolution("qwen3.8:latest", true, "--advanced flag provided")
 
 	chatReq := llm.ChatRequest{

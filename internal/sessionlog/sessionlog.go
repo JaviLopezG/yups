@@ -140,7 +140,7 @@ func (l *SessionLogger) LogInfo(format string, args ...any) {
 }
 
 // LogConfig records loaded configuration settings.
-func (l *SessionLogger) LogConfig(endpoint, defModel, advModel string, llmEnabled bool, llmTimeout, toolTimeout time.Duration, maxTurns, maxBytes, advMult int) {
+func (l *SessionLogger) LogConfig(endpoint, defModel, advModel string, llmEnabled bool, llmTimeout, toolTimeout time.Duration, maxTurns, maxBytes, advMult int, noLimits bool) {
 	if l == nil {
 		return
 	}
@@ -152,6 +152,7 @@ func (l *SessionLogger) LogConfig(endpoint, defModel, advModel string, llmEnable
 	l.buf.WriteString(fmt.Sprintf("Default Model:            %s\n", defModel))
 	l.buf.WriteString(fmt.Sprintf("Advanced Model:           %s\n", advModel))
 	l.buf.WriteString(fmt.Sprintf("LLM Enabled:              %t\n", llmEnabled))
+	l.buf.WriteString(fmt.Sprintf("No Limits (--no-limits):  %t\n", noLimits))
 	l.buf.WriteString(fmt.Sprintf("LLM Timeout:              %v\n", llmTimeout))
 	l.buf.WriteString(fmt.Sprintf("Tool Execution Timeout:   %v\n", toolTimeout))
 	l.buf.WriteString(fmt.Sprintf("Max Tool Turns:           %d\n", maxTurns))

@@ -443,6 +443,7 @@ convierten a YUPS en un verdadero ayudante.
 - `--update-yups`: lanza la auto actualización.
 - `--model <tag>`: fuerza el uso de un modelo específico de Ollama para toda la ejecución (anula el escalado a modelo avanzado).
 - `--advanced`: se usa el modelo avanzado configurado desde el principio (avisando al usuario del mayor tiempo de respuesta estimado).
+- `--no-limits`: desactiva todos los timeouts y límites de ronda y tamaño de salida especificados en la sección `[limits]` de la configuración.
 - `--test-models`: ejecuta una prueba de latencia y benchmark en todos los modelos instalados en Ollama (`ls -javi && yups -hV`), mostrando los resultados en vivo y una tabla resumen ordenada de menor a mayor tiempo.
 - `--config param1=value..paramN=value`: permite cambiar el valor de algún campo
   existente en el archivo de configuración como `default-model`, o forzar

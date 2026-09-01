@@ -1135,6 +1135,46 @@ func TestDispatchWithFlagsAndSessionLogging(t *testing.T) {
 	}
 }
 
+func TestDispatchNoLimitsFlagPreservedInHeader(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: `{"explanation":"lists directory contents","suggested-command":"ls -hal"}`,
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.LoadConfig = func(path string) (config.Config, error) {
+		cfg := config.Defaults()
+		cfg.Inference.Endpoint = ts.URL
+		return cfg, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{"--no-limits", "--", "ls", "-hal"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("Dispatch(--no-limits -- ls -hal) = %d, want %d", code, ExitOK)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "#_? --no-limits -- ls -hal") {
+		t.Errorf("stdout missing flags in header '#_? --no-limits -- ls -hal', got:\n%s", out)
+	}
+}
+
 func TestOSReadHistory(t *testing.T) {
 	tempDir := t.TempDir()
 

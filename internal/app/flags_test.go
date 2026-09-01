@@ -54,6 +54,13 @@ func TestFindFlagsByLetter(t *testing.T) {
 		}
 	})
 
+	t.Run("single-match-no-limits", func(t *testing.T) {
+		matches := FindFlagsByLetter("n", KnownFlags)
+		if len(matches) != 1 || matches[0] != "--no-limits" {
+			t.Errorf("FindFlagsByLetter(n) = %v, want [--no-limits]", matches)
+		}
+	})
+
 	t.Run("zero-matches", func(t *testing.T) {
 		matches := FindFlagsByLetter("x", KnownFlags)
 		if len(matches) != 0 {
@@ -67,6 +74,11 @@ func TestFindSimilarFlags(t *testing.T) {
 		matches := FindSimilarFlags("--install", KnownFlags)
 		if len(matches) == 0 || matches[0] != "--install-yups" {
 			t.Errorf("FindSimilarFlags(--install) = %v, want [--install-yups]", matches)
+		}
+
+		matchesNoLimits := FindSimilarFlags("--no-limit", KnownFlags)
+		if len(matchesNoLimits) == 0 || matchesNoLimits[0] != "--no-limits" {
+			t.Errorf("FindSimilarFlags(--no-limit) = %v, want [--no-limits]", matchesNoLimits)
 		}
 	})
 
@@ -104,6 +116,11 @@ func TestFindSimilarFlags(t *testing.T) {
 		matchesModel := FindSimilarFlags("--modle", KnownFlags)
 		if len(matchesModel) == 0 || matchesModel[0] != "--model" {
 			t.Errorf("FindSimilarFlags(--modle) = %v, want [--model]", matchesModel)
+		}
+
+		matchesNoLimits := FindSimilarFlags("--nolimits", KnownFlags)
+		if len(matchesNoLimits) == 0 || matchesNoLimits[0] != "--no-limits" {
+			t.Errorf("FindSimilarFlags(--nolimits) = %v, want [--no-limits]", matchesNoLimits)
 		}
 	})
 

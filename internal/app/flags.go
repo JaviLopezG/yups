@@ -20,6 +20,7 @@ var KnownFlags = []string{
 	"--uninstall-yups",
 	"--update-yups",
 	"--advanced",
+	"--no-limits",
 	"--model",
 	"--query",
 	"--test-models",

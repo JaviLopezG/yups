@@ -1833,6 +1833,192 @@ func TestTimeoutReachedInformsAndAbortsOrContinues(t *testing.T) {
 	}
 }
 
+func TestNoLimitsDisablesTurnLimit(t *testing.T) {
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			callCount++
+			if callCount <= 4 {
+				// Tool call turns 1 to 4
+				resp := llm.ChatResponse{
+					Model: "qwen2.5-coder:7b",
+					Message: llm.Message{
+						Role: "assistant",
+						ToolCalls: []llm.ToolCall{
+							{
+								Function: llm.ToolCallFunction{
+									Name:      "command-run",
+									Arguments: map[string]any{"command": "ls"},
+								},
+							},
+						},
+					},
+					Done: true,
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Final answer on turn 5
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: `{"explanation":"lists directory contents","suggested-command":"ls -la"}`,
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:    llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel: "qwen2.5-coder:7b",
+		MaxToolTurns: 2, // Would abort after 2 without NoLimits
+		NoLimits:     true,
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("total 0\n"), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	out := stdout.String()
+	if strings.Contains(out, "Execution limit reached") || strings.Contains(out, "maximum reasoning tool rounds reached") {
+		t.Errorf("unexpected turn limit message when NoLimits is true:\n%s", out)
+	}
+	if !strings.Contains(out, "Suggested command:") || !strings.Contains(out, "ls -la") {
+		t.Errorf("missing final suggested command in output:\n%s", out)
+	}
+	if callCount != 5 {
+		t.Errorf("callCount = %d, want 5", callCount)
+	}
+}
+
+func TestNoLimitsDisablesLLMTimeout(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			time.Sleep(50 * time.Millisecond)
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: `{"explanation":"no limits timeout test","suggested-command":"echo ok"}`,
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:    llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel: "qwen2.5-coder:7b",
+		LLMTimeout:   10 * time.Millisecond, // would trigger timeout prompt without NoLimits
+		NoLimits:     true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	out := stdout.String()
+	if strings.Contains(out, "Execution limit reached: query taking longer than") {
+		t.Errorf("unexpected timeout message when NoLimits is true:\n%s", out)
+	}
+	if !strings.Contains(out, "echo ok") {
+		t.Errorf("expected suggested command 'echo ok' in output:\n%s", out)
+	}
+}
+
+func TestNoLimitsDisablesOutputTruncation(t *testing.T) {
+	longOutput := strings.Repeat("long_output_line\n", 50)
+	var capturedToolOutput string
+	callCount := 0
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			callCount++
+			var req llm.ChatRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+
+			if callCount == 1 {
+				// Turn 0: tool call
+				resp := llm.ChatResponse{
+					Model: "qwen2.5-coder:7b",
+					Message: llm.Message{
+						Role: "assistant",
+						ToolCalls: []llm.ToolCall{
+							{
+								Function: llm.ToolCallFunction{
+									Name:      "command-run",
+									Arguments: map[string]any{"command": "ls"},
+								},
+							},
+						},
+					},
+					Done: true,
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Turn 1: final answer, capture tool message
+			for _, m := range req.Messages {
+				if m.Role == "tool" {
+					capturedToolOutput = m.Content
+				}
+			}
+
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: `{"explanation":"done","suggested-command":"ls"}`,
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:          llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel:       "qwen2.5-coder:7b",
+		MaxToolOutputBytes: 20, // would truncate without NoLimits
+		NoLimits:           true,
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte(longOutput), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if strings.Contains(capturedToolOutput, "... (truncated)") {
+		t.Errorf("tool output should not be truncated when NoLimits is true, got:\n%s", capturedToolOutput)
+	}
+	if !strings.Contains(capturedToolOutput, longOutput) {
+		t.Errorf("expected full long output in tool response, got:\n%s", capturedToolOutput)
+	}
+}
+
 func TestFormatSuggestedScriptShort(t *testing.T) {
 	script := "echo 1\necho 2\necho 3"
 	var buf bytes.Buffer
