@@ -13,21 +13,6 @@ import (
 	"time"
 )
 
-// ANSI escape codes for styling
-const (
-	AnsiReset     = "\x1b[0m"
-	AnsiBold      = "\x1b[1m"
-	AnsiDim       = "\x1b[2m"
-	AnsiUnderline = "\x1b[4m"
-	AnsiOrange    = "\x1b[38;5;214m"
-	AnsiBlue      = "\x1b[38;5;39m"
-	AnsiCyan      = "\x1b[1;36m"
-	AnsiGreen     = "\x1b[1;32m"
-	AnsiYellow    = "\x1b[1;33m"
-	AnsiRed       = "\x1b[1;31m"
-	AnsiGray      = "\x1b[90m"
-)
-
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // Spinner renders an animated CLI spinner for asynchronous operations.
@@ -109,10 +94,11 @@ func (s *Spinner) run() {
 			s.mu.Unlock()
 
 			if s.color {
+				theme := GetTheme()
 				fmt.Fprintf(s.w, "\r\x1b[2K%s%s%s %s %s(%.1fs)%s",
-					AnsiCyan, frame, AnsiReset,
+					theme.Info, frame, theme.Reset,
 					msg,
-					AnsiGray, elapsed, AnsiReset)
+					theme.Muted, elapsed, theme.Reset)
 			} else {
 				fmt.Fprintf(s.w, "\r\x1b[2K%s %s (%.1fs)", frame, msg, elapsed)
 			}
@@ -144,9 +130,10 @@ func RenderProgressBar(current, total int, width int, color bool) string {
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
 
 	if color {
-		return fmt.Sprintf("[%s%s%s%s%s] %5.1f%% (%d/%d)",
-			AnsiGreen, strings.Repeat("█", filled), AnsiReset,
-			AnsiGray, strings.Repeat("░", empty)+AnsiReset,
+		theme := GetTheme()
+		return fmt.Sprintf("[%s%s%s%s%s%s] %5.1f%% (%d/%d)",
+			theme.Success, strings.Repeat("█", filled), theme.Reset,
+			theme.Muted, strings.Repeat("░", empty), theme.Reset,
 			pct, current, total)
 	}
 

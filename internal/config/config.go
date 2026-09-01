@@ -51,11 +51,10 @@ type Config struct {
 
 // InferenceConfig holds AI model and endpoint parameters.
 type InferenceConfig struct {
-	Endpoint        string   `toml:"endpoint"`
-	DefaultModel    string   `toml:"default-model"`
-	AdvancedModel   string   `toml:"advanced-model"`
-	AvailableModels []string `toml:"available-models,omitempty"`
-	Disabled        bool     `toml:"disabled,omitempty"`
+	Endpoint      string `toml:"endpoint"`
+	DefaultModel  string `toml:"default-model"`
+	AdvancedModel string `toml:"advanced-model"`
+	Disabled      bool   `toml:"disabled,omitempty"`
 }
 
 // LimitsConfig holds execution limits, timeouts, and multipliers.
@@ -136,18 +135,9 @@ func (c Config) GetAdvancedMultiplier() int {
 	return c.Limits.AdvancedMultiplier
 }
 
-// GetAvailableModels returns the configured models list or default fallbacks.
+// GetAvailableModels returns the configured default and advanced models.
 func (c Config) GetAvailableModels() []string {
-	if len(c.Inference.AvailableModels) > 0 {
-		return c.Inference.AvailableModels
-	}
-	models := []string{DefaultModel, DefaultAdvancedModel}
-	if c.Inference.DefaultModel != "" && c.Inference.DefaultModel != DefaultModel {
-		models = append(models, c.Inference.DefaultModel)
-	}
-	if c.Inference.AdvancedModel != "" && c.Inference.AdvancedModel != DefaultAdvancedModel {
-		models = append(models, c.Inference.AdvancedModel)
-	}
+	models := []string{c.GetDefaultModel(), c.GetAdvancedModel()}
 	return dedupeStrings(models)
 }
 
@@ -339,6 +329,9 @@ func Load(path string) (Config, error) {
 	if versionLineRegex.Match(data) {
 		_, _, _ = CleanLegacyVersion(path)
 	}
+	if availableModelsLineRegex.Match(data) {
+		_, _ = CleanLegacyAvailableModels(path)
+	}
 
 	c := Config{
 		YUPSRepo:         raw.YUPSRepo,
@@ -366,12 +359,6 @@ func Load(path string) (Config, error) {
 		advancedModel = raw.AdvancedModel
 	}
 	c.Inference.AdvancedModel = advancedModel
-
-	if len(raw.Inference.AvailableModels) > 0 {
-		c.Inference.AvailableModels = raw.Inference.AvailableModels
-	} else if len(raw.AvailableModels) > 0 {
-		c.Inference.AvailableModels = raw.AvailableModels
-	}
 
 	if raw.Inference.Disabled != nil {
 		c.Inference.Disabled = *raw.Inference.Disabled
@@ -457,4 +444,27 @@ func CleanLegacyVersion(path string) (string, bool, error) {
 		return legacyVer, false, fmt.Errorf("writing cleaned configuration %q: %w", path, err)
 	}
 	return legacyVer, true, nil
+}
+
+var availableModelsLineRegex = regexp.MustCompile(`(?m)^available-models\s*=\s*\[[^\]]*\]\r?\n?`)
+
+// CleanLegacyAvailableModels removes any legacy `available-models = [...]` entry from the config
+// file at path, preserving comments and formatting. Returns whether the file was updated.
+func CleanLegacyAvailableModels(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	content := string(data)
+	if !availableModelsLineRegex.MatchString(content) {
+		return false, nil
+	}
+	cleaned := availableModelsLineRegex.ReplaceAllString(content, "")
+	if err := os.WriteFile(path, []byte(cleaned), 0o644); err != nil {
+		return false, fmt.Errorf("writing cleaned configuration %q: %w", path, err)
+	}
+	return true, nil
 }

@@ -14,26 +14,21 @@ import (
 	"sync"
 	"time"
 
+	"yups/assets"
 	"yups/internal/llm"
 )
 
-var sessionCities = []string{
-	"almeria", "cadiz", "cordoba", "granada", "huelva", "jaen", "malaga", "seville",
-	"huesca", "teruel", "zaragoza", "oviedo", "palma", "gasteiz", "bilbao", "sanse",
-	"laspalmas", "santacruz", "santander", "avila", "burgos", "leon", "palencia",
-	"salamanca", "segovia", "soria", "valladolid", "zamora", "albacete", "ciudadreal",
-	"cuenca", "guadalajara", "toledo", "barcelona", "girona", "lleida", "tarragona",
-	"badajoz", "caceres", "acoruna", "lugo", "ourense", "pontevedra", "logroño",
-	"madrid", "murcia", "pamplona", "alicante", "castellon", "valencia", "ceuta",
-	"melilla",
-}
-
 // GenerateSessionSlug generates a random human-readable slug (e.g. "sevilla37", "barcelona23").
 func GenerateSessionSlug() string {
-	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(sessionCities))))
-	city := sessionCities[0]
-	if err == nil {
-		city = sessionCities[n.Int64()]
+	cities := assets.GetSessionCities()
+	city := "yups"
+	if len(cities) > 0 {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(cities))))
+		if err == nil {
+			city = cities[n.Int64()]
+		} else {
+			city = cities[0]
+		}
 	}
 	digitBig, err := rand.Int(rand.Reader, big.NewInt(100))
 	digit := 0

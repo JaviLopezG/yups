@@ -1,0 +1,22 @@
+yups - fast, concise, contextual terminal assistant
+
+yups operates entirely within your trusted environment: no data is sent to the
+internet. All analysis is performed using local system documentation and your
+configured Ollama instance. It delivers fast, straight-to-the-point assistance
+without conversational fluff.
+
+Usage:
+  yups                  Print the logo (#_?) in ANSI colour 214
+  yups -- <command...>  Explain the given command line, flags, and operators
+  yups <command...>     Explain the given command line
+  yups --query <prompt> Ask a question or goal directly
+  yups --model <tag>    Use a specific Ollama model for inference
+  yups --advanced       Use the advanced reasoning model directly
+  yups --test-models    Run latency benchmark test on all installed models
+  yups --help           Show this help text
+  yups --version        Show the yups version
+  yups --install-yups   Install the yups executable into the first directory
+                        of the PATH where the current user can write
+  yups --uninstall-yups Remove every yups executable found in the PATH
+  yups --update-yups    Download the latest released version and replace
+                        every installed copy with it

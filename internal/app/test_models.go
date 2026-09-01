@@ -12,6 +12,7 @@ import (
 	"yups/internal/explain"
 	"yups/internal/llm"
 	"yups/internal/sessionlog"
+	"yups/internal/ui"
 )
 
 // ModelBenchmarkResult holds the timing and quality evaluation for a single model.
@@ -21,19 +22,6 @@ type ModelBenchmarkResult struct {
 	Response string
 	Error    string
 }
-
-// ANSI escape codes for test-models output
-const (
-	ansiReset  = "\x1b[0m"
-	ansiBold   = "\x1b[1m"
-	ansiOrange = "\x1b[38;5;214m"
-	ansiBlue   = "\x1b[38;5;39m"
-	ansiCyan   = "\x1b[1;36m"
-	ansiGreen  = "\x1b[1;32m"
-	ansiRed    = "\x1b[1;31m"
-	ansiYellow = "\x1b[1;33m"
-	ansiGray   = "\x1b[90m"
-)
 
 // RunModelBenchmark tests all installed models against a standard prompt
 // ("ls -javi && yups -hV"), measuring latency and outputting a summary table
@@ -83,12 +71,14 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 	}
 
 	estSeconds := len(models) * 30
+	theme := ui.GetTheme()
+
 	if color {
-		fmt.Fprintf(stdout, "%sDiscovered %d installed model(s) on Ollama at %s%s%s:\n", ansiBold, len(models), ansiBlue, endpoint, ansiReset)
+		fmt.Fprintf(stdout, "%sDiscovered %d installed model(s) on Ollama at %s%s%s:\n", theme.Bold, len(models), theme.Important, endpoint, theme.Reset)
 		for _, m := range models {
-			fmt.Fprintf(stdout, "  - %s%s%s\n", ansiCyan, m.Name, ansiReset)
+			fmt.Fprintf(stdout, "  - %s%s%s\n", theme.Info, m.Name, theme.Reset)
 		}
-		fmt.Fprintf(stdout, "\nBenchmark will test each model with standard query: %s%s'ls -javi && yups -hV'%s\n", ansiBold, ansiOrange, ansiReset)
+		fmt.Fprintf(stdout, "\nBenchmark will test each model with standard query: %s%s'ls -javi && yups -hV'%s\n", theme.Bold, theme.Prompt, theme.Reset)
 		fmt.Fprintf(stdout, "Estimated duration: ~%d seconds (%d models * ~30s).\n", estSeconds, len(models))
 	} else {
 		fmt.Fprintf(stdout, "Discovered %d installed model(s) on Ollama at %s:\n", len(models), endpoint)
@@ -115,8 +105,8 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 	var results []ModelBenchmarkResult
 
 	if color {
-		fmt.Fprintf(stdout, "\n%sStarting model benchmark...%s\n", ansiBold, ansiReset)
-		fmt.Fprintln(stdout, ansiGray+"--------------------------------------------------"+ansiReset)
+		fmt.Fprintf(stdout, "\n%sStarting model benchmark...%s\n", theme.Bold, theme.Reset)
+		fmt.Fprintln(stdout, theme.Muted+"--------------------------------------------------"+theme.Reset)
 	} else {
 		fmt.Fprintln(stdout, "\nStarting model benchmark...")
 		fmt.Fprintln(stdout, "--------------------------------------------------")
@@ -124,8 +114,8 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 
 	for i, m := range models {
 		if color {
-			fmt.Fprintf(stdout, "\n[%d/%d] Testing model: %s%s%s\n", i+1, len(models), ansiBold+ansiCyan, m.Name, ansiReset)
-			fmt.Fprintf(stdout, "  %sTest Query:%s %s%s%s\n", ansiBold, ansiReset, ansiOrange, testCmdLine, ansiReset)
+			fmt.Fprintf(stdout, "\n[%d/%d] Testing model: %s%s%s\n", i+1, len(models), theme.Bold+theme.Info, m.Name, theme.Reset)
+			fmt.Fprintf(stdout, "  %sTest Query:%s %s%s%s\n", theme.Bold, theme.Reset, theme.Prompt, testCmdLine, theme.Reset)
 		} else {
 			fmt.Fprintf(stdout, "\n[%d/%d] Testing model '%s'...\n", i+1, len(models), m.Name)
 			fmt.Fprintf(stdout, "  Test Query: %s\n", testCmdLine)
@@ -158,7 +148,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		if err != nil {
 			res.Error = err.Error()
 			if color {
-				fmt.Fprintf(stdout, "  Test Result: %s[FAILED]%s (%v) [%.2fs]\n", ansiBold+ansiRed, ansiReset, err, elapsed.Seconds())
+				fmt.Fprintf(stdout, "  Test Result: %s[FAILED]%s (%v) [%.2fs]\n", theme.Bold+theme.Error, theme.Reset, err, elapsed.Seconds())
 			} else {
 				fmt.Fprintf(stdout, "  Status: Failed (%v) [%.2fs]\n", err, elapsed.Seconds())
 			}
@@ -175,9 +165,9 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 
 			if color {
 				fmt.Fprintf(stdout, "  Test Result: %s[PASSED]%s (duration: %s%.2fs%s)\n",
-					ansiBold+ansiGreen, ansiReset, ansiYellow, elapsed.Seconds(), ansiReset)
+					theme.Bold+theme.Success, theme.Reset, theme.Warning, elapsed.Seconds(), theme.Reset)
 				if res.Response != "" {
-					fmt.Fprintf(stdout, "  %sResponse to verify acceptability:%s\n", ansiBold+ansiYellow, ansiReset)
+					fmt.Fprintf(stdout, "  %sResponse to verify acceptability:%s\n", theme.Bold+theme.Warning, theme.Reset)
 					lines := strings.Split(res.Response, "\n")
 					sampleLines := lines
 					if len(sampleLines) > 6 {
@@ -185,13 +175,13 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 					}
 					for _, sl := range sampleLines {
 						if strings.HasPrefix(sl, "Suggested command:") {
-							fmt.Fprintf(stdout, "    %s%s%s\n", ansiBold+ansiGreen, sl, ansiReset)
+							fmt.Fprintf(stdout, "    %s%s%s\n", theme.Bold+theme.Success, sl, theme.Reset)
 						} else {
-							fmt.Fprintf(stdout, "    %s%s%s\n", ansiGray, sl, ansiReset)
+							fmt.Fprintf(stdout, "    %s%s%s\n", theme.Muted, sl, theme.Reset)
 						}
 					}
 					if len(lines) > 6 {
-						fmt.Fprintf(stdout, "    %s...%s\n", ansiGray, ansiReset)
+						fmt.Fprintf(stdout, "    %s...%s\n", theme.Muted, theme.Reset)
 					}
 				}
 			} else {
@@ -227,22 +217,22 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 	})
 
 	if color {
-		fmt.Fprintln(stdout, "\n"+ansiBold+ansiOrange+"================================================================="+ansiReset)
-		fmt.Fprintln(stdout, ansiBold+"                    MODEL BENCHMARK SUMMARY                    "+ansiReset)
-		fmt.Fprintf(stdout, "                 %sQuery: '%s'%s\n", ansiOrange, testCmdLine, ansiReset)
-		fmt.Fprintln(stdout, ansiBold+ansiOrange+"================================================================="+ansiReset)
-		fmt.Fprintf(stdout, "%s%-35s %-12s %s%s\n", ansiBold, "Model", "Duration", "Test Result", ansiReset)
-		fmt.Fprintln(stdout, ansiGray+"-----------------------------------------------------------------"+ansiReset)
+		fmt.Fprintln(stdout, "\n"+theme.Bold+theme.Prompt+"================================================================="+theme.Reset)
+		fmt.Fprintln(stdout, theme.Bold+"                    MODEL BENCHMARK SUMMARY                    "+theme.Reset)
+		fmt.Fprintf(stdout, "                 %sQuery: '%s'%s\n", theme.Prompt, testCmdLine, theme.Reset)
+		fmt.Fprintln(stdout, theme.Bold+theme.Prompt+"================================================================="+theme.Reset)
+		fmt.Fprintf(stdout, "%s%-35s %-12s %s%s\n", theme.Bold, "Model", "Duration", "Test Result", theme.Reset)
+		fmt.Fprintln(stdout, theme.Muted+"-----------------------------------------------------------------"+theme.Reset)
 		for _, r := range results {
-			statusStr := ansiBold + ansiGreen + "[PASSED]" + ansiReset
+			statusStr := theme.Bold + theme.Success + "[PASSED]" + theme.Reset
 			if r.Error != "" {
-				statusStr = ansiBold + ansiRed + "[FAILED]" + ansiReset
+				statusStr = theme.Bold + theme.Error + "[FAILED]" + theme.Reset
 			}
-			modelStr := ansiCyan + fmt.Sprintf("%-35s", r.Model) + ansiReset
+			modelStr := theme.Info + fmt.Sprintf("%-35s", r.Model) + theme.Reset
 			durStr := fmt.Sprintf("%.2fs", r.Duration.Seconds())
 			fmt.Fprintf(stdout, "%s %-12s %s\n", modelStr, durStr, statusStr)
 		}
-		fmt.Fprintln(stdout, ansiBold+ansiOrange+"================================================================="+ansiReset)
+		fmt.Fprintln(stdout, theme.Bold+theme.Prompt+"================================================================="+theme.Reset)
 	} else {
 		fmt.Fprintln(stdout, "\n=================================================================")
 		fmt.Fprintln(stdout, "                    MODEL BENCHMARK SUMMARY                    ")

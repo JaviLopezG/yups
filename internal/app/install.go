@@ -123,6 +123,7 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 			hasOllama = env.AskConfirmation("Do you have an Ollama instance available for AI assistance?", true)
 		}
 
+		var discoveredModels []string
 		if !hasOllama {
 			cfg.Inference.Disabled = true
 			fmt.Fprintln(stdout, "Note: AI assistance is disabled (llm-disabled = true). yups will operate in fast local documentation mode (manpages, --help, wrappers, cheatsheets).")
@@ -134,94 +135,100 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 			}
 			cfg.Inference.Endpoint = endpoint
 
-			if env.HTTPClient != nil {
-				llmClient := llm.NewClient(env.HTTPClient(), endpoint)
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				models, err := llmClient.ListModels(ctx)
-				cancel()
-				if err == nil {
-					if len(models) > 0 {
-						def, adv := llm.SelectBestModels(models)
+			if env.HTTPClient != nil && env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout) {
+				endpoint := cfg.GetInferenceEndpoint()
+				if endpoint != "" {
+					llmClient := llm.NewClient(env.HTTPClient(), endpoint)
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					models, err := llmClient.ListModels(ctx)
+					cancel()
+					if err == nil {
+						if len(models) > 0 {
+							def, adv := llm.SelectBestModels(models)
 
-						var modelNames []string
-						hasQwen := false
-						hasGemma := false
-						for _, m := range models {
-							modelNames = append(modelNames, m.Name)
-							lower := strings.ToLower(m.Name)
-							if strings.Contains(lower, "qwen") {
-								hasQwen = true
+							var modelNames []string
+							hasQwen := false
+							hasGemma := false
+							for _, m := range models {
+								modelNames = append(modelNames, m.Name)
+								lower := strings.ToLower(m.Name)
+								if strings.Contains(lower, "qwen") {
+									hasQwen = true
+								}
+								if strings.Contains(lower, "gemma") {
+									hasGemma = true
+								}
 							}
-							if strings.Contains(lower, "gemma") {
-								hasGemma = true
+							discoveredModels = modelNames
+
+							fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
+
+							if env.AskPrompt != nil && (!hasQwen || !hasGemma) {
+								fmt.Fprintf(stdout, "\nRecommended models (%s for default, %s for advanced) are not fully available:\n", config.DefaultModel, config.DefaultAdvancedModel)
+								fmt.Fprintf(stdout, "  [1] Pull recommended models (%s and %s)\n", config.DefaultModel, config.DefaultAdvancedModel)
+								fmt.Fprintln(stdout, "  [2] Choose models from your installed list")
+								fmt.Fprintln(stdout, "  [3] Run model benchmark test (--test-models) and choose")
+								fmt.Fprintf(stdout, "  [4] Use automatic selection (%s / %s)\n", def, adv)
+
+								choice := strings.TrimSpace(env.AskPrompt("Model setup choice [1/2/3/4]", "4"))
+								switch choice {
+								case "1":
+									fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultModel)
+									pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+									_ = llmClient.PullModel(pullCtx, config.DefaultModel, stdout)
+									pullCancel()
+									def = config.DefaultModel
+
+									fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultAdvancedModel)
+									pullCtx2, pullCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
+									_ = llmClient.PullModel(pullCtx2, config.DefaultAdvancedModel, stdout)
+									pullCancel2()
+									adv = config.DefaultAdvancedModel
+
+									discoveredModels = append(discoveredModels, config.DefaultModel, config.DefaultAdvancedModel)
+
+								case "2":
+									def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
+								case "3":
+									RunModelBenchmark(env, stdout, stderr, nil)
+									def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
+								case "4", "":
+									// use automatic selection
+								}
 							}
-						}
-						cfg.Inference.AvailableModels = modelNames
 
-						fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
-
-						if env.AskPrompt != nil && (!hasQwen || !hasGemma) {
-							fmt.Fprintf(stdout, "\nRecommended models (%s for default, %s for advanced) are not fully available:\n", config.DefaultModel, config.DefaultAdvancedModel)
-							fmt.Fprintf(stdout, "  [1] Pull recommended models (%s and %s)\n", config.DefaultModel, config.DefaultAdvancedModel)
-							fmt.Fprintln(stdout, "  [2] Choose models from your installed list")
-							fmt.Fprintln(stdout, "  [3] Run model benchmark test (--test-models) and choose")
-							fmt.Fprintf(stdout, "  [4] Use automatic selection (%s / %s)\n", def, adv)
-
-							choice := strings.TrimSpace(env.AskPrompt("Model setup choice [1/2/3/4]", "4"))
-							switch choice {
-							case "1":
+							cfg.Inference.DefaultModel = def
+							cfg.Inference.AdvancedModel = adv
+							fmt.Fprintf(stdout, "Configured models: default-model = %s, advanced-model = %s.\n", def, adv)
+						} else {
+							fmt.Fprintf(stdout, "Connected to Ollama at %s (no models found).\n", endpoint)
+							if env.AskConfirmation != nil && env.AskConfirmation(fmt.Sprintf("Would you like to pull the recommended %s model now?", config.DefaultModel), true) {
 								fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultModel)
 								pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-								_ = llmClient.PullModel(pullCtx, config.DefaultModel, stdout)
+								if err := llmClient.PullModel(pullCtx, config.DefaultModel, stdout); err == nil {
+									cfg.Inference.DefaultModel = config.DefaultModel
+									cfg.Inference.AdvancedModel = config.DefaultModel
+									discoveredModels = []string{config.DefaultModel}
+								}
 								pullCancel()
-								def = config.DefaultModel
-
-								fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultAdvancedModel)
-								pullCtx2, pullCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
-								_ = llmClient.PullModel(pullCtx2, config.DefaultAdvancedModel, stdout)
-								pullCancel2()
-								adv = config.DefaultAdvancedModel
-
-								cfg.Inference.AvailableModels = append(cfg.Inference.AvailableModels, config.DefaultModel, config.DefaultAdvancedModel)
-
-							case "2":
-								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
-							case "3":
-								RunModelBenchmark(env, stdout, stderr, nil)
-								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
-							case "4", "":
-								// use automatic selection
 							}
 						}
-
-						cfg.Inference.DefaultModel = def
-						cfg.Inference.AdvancedModel = adv
-						fmt.Fprintf(stdout, "Configured models: default-model = %s, advanced-model = %s.\n", def, adv)
 					} else {
-						fmt.Fprintf(stdout, "Connected to Ollama at %s (no models found).\n", endpoint)
-						if env.AskConfirmation != nil && env.AskConfirmation(fmt.Sprintf("Would you like to pull the recommended %s model now?", config.DefaultModel), true) {
-							fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultModel)
-							pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-							if err := llmClient.PullModel(pullCtx, config.DefaultModel, stdout); err == nil {
-								cfg.Inference.DefaultModel = config.DefaultModel
-								cfg.Inference.AdvancedModel = config.DefaultModel
-								cfg.Inference.AvailableModels = []string{config.DefaultModel}
-							}
-							pullCancel()
-						}
+						fmt.Fprintf(stdout, "Ollama is not reachable at %s; yups will operate in basic mode until Ollama is available.\n", endpoint)
 					}
-				} else {
-					fmt.Fprintf(stdout, "Ollama is not reachable at %s; yups will operate in basic mode until Ollama is available.\n", endpoint)
 				}
 			}
 		}
 
-		// Initialize state.toml with version and cheatsheets
+		// Initialize state.toml with version, cheatsheets, and discovered models
 		stateFile := config.StatePath(home)
 		state, _ := env.LoadUpdateState(stateFile)
 		state.Version = Version
 		if state.LastApplied == "" || state.LastApplied == config.FloorVersion {
 			state.LastApplied = Version
+		}
+		if len(discoveredModels) > 0 {
+			state.AvailableModels = discoveredModels
 		}
 
 		// Download or sync community cheatsheets

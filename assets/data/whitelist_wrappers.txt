@@ -1,0 +1,5 @@
+sudo
+env
+time
+nohup
+nice

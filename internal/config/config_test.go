@@ -225,9 +225,9 @@ func TestEnsureDefaultsKeepsUserValues(t *testing.T) {
 	}
 }
 
-func TestAvailableModelsConfig(t *testing.T) {
+func TestAvailableModelsCleanedFromConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	content := "[inference]\navailable-models = [\"qwen2.5-coder:7b\", \"qwen3.8:latest\", \"gemma3:latest\"]\n"
+	content := "[inference]\navailable-models = [\"qwen2.5-coder:7b\", \"qwen3.8:latest\", \"gemma3:latest\"]\ndefault-model = \"qwen3.8:latest\"\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing fixture: %v", err)
 	}
@@ -235,9 +235,43 @@ func TestAvailableModelsConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	models := c.GetAvailableModels()
-	if len(models) != 3 || models[0] != "qwen2.5-coder:7b" || models[1] != "qwen3.8:latest" || models[2] != "gemma3:latest" {
-		t.Errorf("GetAvailableModels() = %v, want 3 models", models)
+	if c.GetDefaultModel() != "qwen3.8:latest" {
+		t.Errorf("GetDefaultModel() = %q, want qwen3.8:latest", c.GetDefaultModel())
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if strings.Contains(string(data), "available-models =") {
+		t.Errorf("available-models still present in config file:\n%s", string(data))
+	}
+}
+
+func TestCleanLegacyAvailableModels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "# Top comment\navailable-models = [\"m1\", \"m2\"]\nendpoint = \"http://localhost:11434\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	cleaned, err := CleanLegacyAvailableModels(path)
+	if err != nil {
+		t.Fatalf("CleanLegacyAvailableModels failed: %v", err)
+	}
+	if !cleaned {
+		t.Errorf("cleaned = false, want true")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading cleaned file: %v", err)
+	}
+	if strings.Contains(string(data), "available-models") {
+		t.Errorf("available-models still present in file:\n%s", string(data))
+	}
+	if !strings.Contains(string(data), "# Top comment") {
+		t.Errorf("comment was lost:\n%s", string(data))
 	}
 }
 

@@ -546,7 +546,8 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 			}
 			if statusWriter != nil {
 				if color {
-					fmt.Fprintf(statusWriter, "\n%sWarning:%s The model %s returned an empty response.\n", ansiYellow, ansiReset, model)
+					theme := ui.GetTheme()
+					fmt.Fprintf(statusWriter, "\n%sWarning:%s The model %s returned an empty response.\n", theme.Warning, theme.Reset, model)
 				} else {
 					fmt.Fprintf(statusWriter, "\nWarning: The model %s returned an empty response.\n", model)
 				}

@@ -13,6 +13,7 @@ import (
 
 	"yups/assets"
 	"yups/internal/config"
+	"yups/internal/ui"
 )
 
 const (
@@ -471,10 +472,11 @@ func CaptureKeybindingInteractively(env *Env, inUse map[string]string, sugName, 
 				if seq != "" {
 					currentSeq = seq
 					currentName = keyName
+					theme := ui.GetTheme()
 					if isKeySeqInUse(seq, inUse) {
-						fmt.Fprintf(stdout, "\r\x1b[KSelected: %s (%s) \x1b[38;5;214m[In use by %q - press another]\x1b[0m", keyName, seq, inUse[seq])
+						fmt.Fprintf(stdout, "\r\x1b[KSelected: %s (%s) %s[In use by %q - press another]%s", keyName, seq, theme.Warning, inUse[seq], theme.Reset)
 					} else {
-						fmt.Fprintf(stdout, "\r\x1b[KSelected: %s (%s) \x1b[32m[Available - press Enter to confirm]\x1b[0m", keyName, seq)
+						fmt.Fprintf(stdout, "\r\x1b[KSelected: %s (%s) %s[Available - press Enter to confirm]%s", keyName, seq, theme.Success, theme.Reset)
 					}
 				}
 			}

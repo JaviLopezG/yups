@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"yups/internal/ui"
 )
 
 // GetTerminalHeight returns the current terminal row count, or 24 as fallback default.
@@ -32,19 +34,8 @@ func GetTerminalHeight() int {
 	return 24
 }
 
-// ANSI color escape codes
-const (
-	ansiReset     = "\x1b[0m"
-	ansiBold      = "\x1b[1m"
-	ansiUnderline = "\x1b[4m"
-	ansiOrange    = "\x1b[38;5;214m"
-	ansiBlue      = "\x1b[38;5;39m"
-	ansiCyan      = "\x1b[1;36m"
-	ansiGreen     = "\x1b[1;32m"
-	ansiYellow    = "\x1b[1;33m"
-	ansiRed       = "\x1b[1;31m"
-	ansiGray      = "\x1b[90m"
-)
+// logoColor is the brand colour for the yups logo #_?.
+const logoColor = "\x1b[38;5;214m"
 
 // FormatOptions configures how explanations are formatted.
 type FormatOptions struct {
@@ -65,16 +56,17 @@ func FormatPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions) {
 func FormatInvocationHeader(w io.Writer, flags, cmd string, color bool) {
 	flags = strings.TrimSpace(flags)
 	cmd = strings.TrimSpace(cmd)
+	theme := ui.GetTheme()
 
 	if color {
 		if flags != "" && cmd != "" {
-			fmt.Fprintf(w, "%s#_?%s %s%s%s %s%s%s\n", ansiOrange, ansiReset, ansiCyan, flags, ansiReset, ansiGray, cmd, ansiReset)
+			fmt.Fprintf(w, "%s#_?%s %s%s%s %s%s%s\n", logoColor, theme.Reset, theme.Info, flags, theme.Reset, theme.Muted, cmd, theme.Reset)
 		} else if flags != "" {
-			fmt.Fprintf(w, "%s#_?%s %s%s%s\n", ansiOrange, ansiReset, ansiCyan, flags, ansiReset)
+			fmt.Fprintf(w, "%s#_?%s %s%s%s\n", logoColor, theme.Reset, theme.Info, flags, theme.Reset)
 		} else if cmd != "" {
-			fmt.Fprintf(w, "%s#_?%s %s%s%s\n", ansiOrange, ansiReset, ansiGray, cmd, ansiReset)
+			fmt.Fprintf(w, "%s#_?%s %s%s%s\n", logoColor, theme.Reset, theme.Muted, cmd, theme.Reset)
 		} else {
-			fmt.Fprintln(w, ansiOrange+"#_?"+ansiReset)
+			fmt.Fprintln(w, logoColor+"#_?"+theme.Reset)
 		}
 	} else {
 		if flags != "" && cmd != "" {
@@ -96,6 +88,7 @@ func FormatBasicPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions
 	}
 
 	FormatInvocationHeader(w, p.InvocationFlags, p.RawCommandLine, opts.Color)
+	theme := ui.GetTheme()
 
 	for i, stage := range p.Stages {
 		if stage.Command != nil {
@@ -105,7 +98,7 @@ func FormatBasicPipeline(w io.Writer, p *PipelineExplanation, opts FormatOptions
 		if stage.Operator != OpNone && stage.OpSummary != "" && i+1 < len(p.Stages) {
 			fmt.Fprintln(w)
 			if opts.Color {
-				fmt.Fprintf(w, "%s%s%s\n", ansiCyan, stage.OpSummary, ansiReset)
+				fmt.Fprintf(w, "%s%s%s\n", theme.Info, stage.OpSummary, theme.Reset)
 			} else {
 				fmt.Fprintln(w, stage.OpSummary)
 			}
@@ -120,17 +113,19 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 		return
 	}
 
+	theme := ui.GetTheme()
+
 	// 1. Found header
 	if cmd.Name != "" {
 		if cmd.Found {
 			if opts.Color {
-				fmt.Fprintf(w, "%sFound:%s %s%s%s\n", ansiBold, ansiReset, ansiBlue, cmd.Name, ansiReset)
+				fmt.Fprintf(w, "%sFound:%s %s%s%s\n", theme.Bold, theme.Reset, theme.Important, cmd.Name, theme.Reset)
 			} else {
 				fmt.Fprintf(w, "Found: %s\n", cmd.Name)
 			}
 		} else {
 			if opts.Color {
-				fmt.Fprintf(w, "%sNo manual entry or help found for %q%s\n", ansiRed, cmd.Name, ansiReset)
+				fmt.Fprintf(w, "%sNo manual entry or help found for %q%s\n", theme.Error, cmd.Name, theme.Reset)
 			} else {
 				fmt.Fprintf(w, "No manual entry or help found for %q\n", cmd.Name)
 			}
@@ -141,9 +136,9 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 	for _, wrapper := range cmd.Wrappers {
 		if opts.Color {
 			if wrapper.Summary != "" {
-				fmt.Fprintf(w, "  %sWrapper:%s %s%s%s - %s\n", ansiBold, ansiReset, ansiBlue, wrapper.Name, ansiReset, wrapper.Summary)
+				fmt.Fprintf(w, "  %sWrapper:%s %s%s%s - %s\n", theme.Bold, theme.Reset, theme.Important, wrapper.Name, theme.Reset, wrapper.Summary)
 			} else {
-				fmt.Fprintf(w, "  %sWrapper:%s %s%s%s\n", ansiBold, ansiReset, ansiBlue, wrapper.Name, ansiReset)
+				fmt.Fprintf(w, "  %sWrapper:%s %s%s%s\n", theme.Bold, theme.Reset, theme.Important, wrapper.Name, theme.Reset)
 			}
 		} else {
 			if wrapper.Summary != "" {
@@ -160,7 +155,7 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 	// 3. Environment variables
 	for _, env := range cmd.EnvVars {
 		if opts.Color {
-			fmt.Fprintf(w, "  %sEnv:%s %s\n", ansiGray, ansiReset, env)
+			fmt.Fprintf(w, "  %sEnv:%s %s\n", theme.Muted, theme.Reset, env)
 		} else {
 			fmt.Fprintf(w, "  Env: %s\n", env)
 		}
@@ -190,7 +185,7 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 	for _, arg := range cmd.PositionalArgs {
 		if arg.Kind == "directory" || arg.Kind == "file" {
 			if opts.Color {
-				fmt.Fprintf(w, "  %s%s%s (%s)\n", ansiBold, arg.Value, ansiReset, arg.Kind)
+				fmt.Fprintf(w, "  %s%s%s (%s)\n", theme.Bold, arg.Value, theme.Reset, arg.Kind)
 			} else {
 				fmt.Fprintf(w, "  %s (%s)\n", arg.Value, arg.Kind)
 			}
@@ -207,7 +202,7 @@ func FormatBasicCommand(w io.Writer, cmd *CommandExplanation, opts FormatOptions
 	// 10. Comment
 	if cmd.Comment != "" {
 		if opts.Color {
-			fmt.Fprintf(w, "  %s# %s%s\n", ansiGray, cmd.Comment, ansiReset)
+			fmt.Fprintf(w, "  %s# %s%s\n", theme.Muted, cmd.Comment, theme.Reset)
 		} else {
 			fmt.Fprintf(w, "  # %s\n", cmd.Comment)
 		}
@@ -233,7 +228,8 @@ func FormatLLMNotice(w io.Writer, endpoint, model string, isAdvanced bool, opts 
 	}
 
 	if opts.Color {
-		fmt.Fprintf(w, "%s%s%s\n", ansiCyan, msg, ansiReset)
+		theme := ui.GetTheme()
+		fmt.Fprintf(w, "%s%s%s\n", theme.Info, msg, theme.Reset)
 	} else {
 		fmt.Fprintln(w, msg)
 	}
@@ -259,7 +255,8 @@ func FormatLLMPipelineResult(w io.Writer, exp *PipelineExplanation, opts FormatO
 	if exp.LLMExplanation != "" {
 		fmt.Fprintln(w)
 		if opts.Color {
-			fmt.Fprintf(w, "%sLLM Explanation:%s\n", ansiCyan, ansiReset)
+			theme := ui.GetTheme()
+			fmt.Fprintf(w, "%sLLM Explanation:%s\n", theme.Info, theme.Reset)
 		} else {
 			fmt.Fprintln(w, "LLM Explanation:")
 		}
@@ -284,8 +281,9 @@ func FormatSuggestedScript(w io.Writer, script string, opts FormatOptions) {
 		return
 	}
 	fmt.Fprintln(w)
+	theme := ui.GetTheme()
 	if opts.Color {
-		fmt.Fprintf(w, "%sSuggested script:%s\n", ansiBold, ansiReset)
+		fmt.Fprintf(w, "%sSuggested script:%s\n", theme.Bold, theme.Reset)
 	} else {
 		fmt.Fprintln(w, "Suggested script:")
 	}
@@ -302,7 +300,7 @@ func FormatSuggestedScript(w io.Writer, script string, opts FormatOptions) {
 
 	printLine := func(lineNum int, line string) {
 		if opts.Color {
-			fmt.Fprintf(w, "  %s%*d |%s %s\n", ansiGray, pad, lineNum, ansiReset, line)
+			fmt.Fprintf(w, "  %s%*d |%s %s\n", theme.Muted, pad, lineNum, theme.Reset, line)
 		} else {
 			fmt.Fprintf(w, "  %*d | %s\n", pad, lineNum, line)
 		}
@@ -313,9 +311,9 @@ func FormatSuggestedScript(w io.Writer, script string, opts FormatOptions) {
 			printLine(i+1, rawLines[i])
 		}
 		if opts.Color {
-			fmt.Fprintf(w, "  %s-----------------------%s\n", ansiGray, ansiReset)
-			fmt.Fprintf(w, "  %s(...)%s\n", ansiGray, ansiReset)
-			fmt.Fprintf(w, "  %s-----------------------%s\n", ansiGray, ansiReset)
+			fmt.Fprintf(w, "  %s-----------------------%s\n", theme.Muted, theme.Reset)
+			fmt.Fprintf(w, "  %s(...)%s\n", theme.Muted, theme.Reset)
+			fmt.Fprintf(w, "  %s-----------------------%s\n", theme.Muted, theme.Reset)
 		} else {
 			fmt.Fprintln(w, "  -----------------------")
 			fmt.Fprintln(w, "  (...)")
@@ -338,7 +336,8 @@ func FormatSuggestedCommand(w io.Writer, cmd string, opts FormatOptions) {
 	}
 	fmt.Fprintln(w)
 	if opts.Color {
-		fmt.Fprintf(w, "%sSuggested command:%s\n  %s%s%s\n", ansiBold, ansiReset, ansiGreen, cmd, ansiReset)
+		theme := ui.GetTheme()
+		fmt.Fprintf(w, "%sSuggested command:%s\n  %s%s%s\n", theme.Bold, theme.Reset, theme.Success, cmd, theme.Reset)
 	} else {
 		fmt.Fprintf(w, "Suggested command:\n  %s\n", cmd)
 	}
@@ -358,14 +357,15 @@ func FormatLLMResult(w io.Writer, exp *CommandExplanation, opts FormatOptions) {
 	FormatLLMPipelineResult(w, pExp, opts)
 }
 
-// FormatPromptChoice renders the choice prompt in yups orange with underlined options.
+// FormatPromptChoice renders the choice prompt in prompt color with underlined options.
 func FormatPromptChoice(opts FormatOptions) string {
 	if opts.Color {
-		return ansiOrange + "Do you want to run this command? [" +
-			ansiUnderline + "Y" + ansiReset + ansiOrange + "es/" +
-			ansiUnderline + "n" + ansiReset + ansiOrange + "o/" +
-			ansiUnderline + "e" + ansiReset + ansiOrange + "dit/" +
-			ansiUnderline + "m" + ansiReset + ansiOrange + "odifications] (default: Yes): " + ansiReset
+		theme := ui.GetTheme()
+		return theme.Prompt + "Do you want to run this command? [" +
+			theme.Underline + "Y" + theme.Reset + theme.Prompt + "es/" +
+			theme.Underline + "n" + theme.Reset + theme.Prompt + "o/" +
+			theme.Underline + "e" + theme.Reset + theme.Prompt + "dit/" +
+			theme.Underline + "m" + theme.Reset + theme.Prompt + "odifications] (default: Yes): " + theme.Reset
 	}
 	return "Do you want to run this command? [Yes/no/edit/modifications] (default: Yes): "
 }
@@ -373,11 +373,12 @@ func FormatPromptChoice(opts FormatOptions) string {
 // FormatPromptChoiceScript renders the choice prompt for scripts (default: Edit).
 func FormatPromptChoiceScript(opts FormatOptions) string {
 	if opts.Color {
-		return ansiOrange + "Do you want to run this script? [" +
-			ansiUnderline + "y" + ansiReset + ansiOrange + "es/" +
-			ansiUnderline + "n" + ansiReset + ansiOrange + "o/" +
-			ansiUnderline + "E" + ansiReset + ansiOrange + "dit/" +
-			ansiUnderline + "m" + ansiReset + ansiOrange + "odifications] (default: Edit): " + ansiReset
+		theme := ui.GetTheme()
+		return theme.Prompt + "Do you want to run this script? [" +
+			theme.Underline + "y" + theme.Reset + theme.Prompt + "es/" +
+			theme.Underline + "n" + theme.Reset + theme.Prompt + "o/" +
+			theme.Underline + "E" + theme.Reset + theme.Prompt + "dit/" +
+			theme.Underline + "m" + theme.Reset + theme.Prompt + "odifications] (default: Edit): " + theme.Reset
 	}
 	return "Do you want to run this script? [yes/no/Edit/modifications] (default: Edit): "
 }
@@ -385,19 +386,21 @@ func FormatPromptChoiceScript(opts FormatOptions) string {
 // FormatPromptChoiceNoMod renders the choice prompt without modifications option.
 func FormatPromptChoiceNoMod(opts FormatOptions) string {
 	if opts.Color {
-		return ansiOrange + "Do you want to run this command? [" +
-			ansiUnderline + "Y" + ansiReset + ansiOrange + "es/" +
-			ansiUnderline + "n" + ansiReset + ansiOrange + "o/" +
-			ansiUnderline + "e" + ansiReset + ansiOrange + "dit] (default: Yes): " + ansiReset
+		theme := ui.GetTheme()
+		return theme.Prompt + "Do you want to run this command? [" +
+			theme.Underline + "Y" + theme.Reset + theme.Prompt + "es/" +
+			theme.Underline + "n" + theme.Reset + theme.Prompt + "o/" +
+			theme.Underline + "e" + theme.Reset + theme.Prompt + "dit] (default: Yes): " + theme.Reset
 	}
 	return "Do you want to run this command? [Yes/no/edit] (default: Yes): "
 }
 
 func formatFlag(w io.Writer, flag FlagExplanation, opts FormatOptions) {
 	flagName := flag.Flag.Name
+	theme := ui.GetTheme()
 	if flag.Found {
 		if opts.Color {
-			fmt.Fprintf(w, "%s%s found:%s\n", ansiYellow, flagName, ansiReset)
+			fmt.Fprintf(w, "%s%s found:%s\n", theme.Warning, flagName, theme.Reset)
 		} else {
 			fmt.Fprintf(w, "%s found:\n", flagName)
 		}
@@ -408,7 +411,7 @@ func formatFlag(w io.Writer, flag FlagExplanation, opts FormatOptions) {
 		}
 	} else {
 		if opts.Color {
-			fmt.Fprintf(w, "%s%s%s: No description found.\n", ansiRed, flagName, ansiReset)
+			fmt.Fprintf(w, "%s%s%s: No description found.\n", theme.Error, flagName, theme.Reset)
 		} else {
 			fmt.Fprintf(w, "%s: No description found.\n", flagName)
 		}

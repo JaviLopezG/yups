@@ -12,9 +12,11 @@ import (
 	"strings"
 	"syscall"
 
+	"yups/assets"
 	"yups/internal/config"
 	"yups/internal/explain"
 	"yups/internal/sessionlog"
+	"yups/internal/ui"
 )
 
 // Version is the version of the binary. It is overridden at build time with
@@ -39,30 +41,7 @@ const (
 // ColoredLogo is Logo wrapped in ANSI 256-colour 214 (orange).
 const ColoredLogo = "\x1b[38;5;214m" + Logo + "\x1b[0m"
 
-const helpText = `yups - fast, concise, contextual terminal assistant
-
-yups operates entirely within your trusted environment: no data is sent to the
-internet. All analysis is performed using local system documentation and your
-configured Ollama instance. It delivers fast, straight-to-the-point assistance
-without conversational fluff.
-
-Usage:
-  yups                  Print the logo (` + Logo + `) in ANSI colour 214
-  yups -- <command...>  Explain the given command line, flags, and operators
-  yups <command...>     Explain the given command line
-  yups --query <prompt> Ask a question or goal directly
-  yups --model <tag>    Use a specific Ollama model for inference
-  yups --advanced       Use the advanced reasoning model directly
-  yups --test-models    Run latency benchmark test on all installed models
-  yups --help           Show this help text
-  yups --version        Show the yups version
-  yups --install-yups   Install the yups executable into the first directory
-                        of the PATH where the current user can write
-  yups --uninstall-yups Remove every yups executable found in the PATH
-  yups --update-yups    Download the latest released version and replace
-                        every installed copy with it
-`
-
+var helpText = assets.GetHelpText()
 func isSystemInstalled(env *Env) bool {
 	if env == nil {
 		return false
@@ -102,7 +81,8 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 
 	if logger != nil && logger.HasWritten() {
 		if color {
-			fmt.Fprintf(stdout, "\n%sSession:%s %s\n", ansiOrange, ansiReset, logger.Slug())
+			theme := ui.GetTheme()
+			fmt.Fprintf(stdout, "\n%sSession:%s %s\n", theme.Important, theme.Reset, logger.Slug())
 		} else {
 			fmt.Fprintf(stdout, "\nSession: %s\n", logger.Slug())
 		}
@@ -188,7 +168,7 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 			if logger != nil {
 				logger.LogConclusion("", "", "", "HELP", ExitOK)
 			}
-			fmt.Fprint(stdout, helpText)
+			fmt.Fprint(stdout, assets.GetHelpText())
 			return ExitOK
 		}
 		if arg == "--version" {
@@ -216,7 +196,7 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 				logger.LogSection("UNINSTALL")
 			}
 			code := Uninstall(env, stdout, stderr)
-			if _, err := env.UserHomeDir(); err == nil {
+			if logger != nil {
 				logger.LogConclusion("", "", "", "UNINSTALL", code)
 			}
 			return code

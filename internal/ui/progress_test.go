@@ -51,7 +51,7 @@ func TestRenderProgressBar(t *testing.T) {
 			total:   6,
 			width:   10,
 			color:   true,
-			wantSub: AnsiGreen,
+			wantSub: GetTheme().Success,
 		},
 		{
 			name:    "invalid total returns empty",

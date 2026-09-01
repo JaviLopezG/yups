@@ -9,6 +9,7 @@ import (
 
 	"yups/internal/explain"
 	"yups/internal/sessionlog"
+	"yups/internal/ui"
 )
 
 // KnownFlags contains all standard user-facing command-line flags accepted by yups.
@@ -146,18 +147,19 @@ func HandleUnknownFlag(env *Env, args []string, flagIdx int, stdout, stderr io.W
 	var matches []string
 	var errNotice string
 
+	theme := ui.GetTheme()
 	if isShortFlag {
 		letter := strings.TrimPrefix(flagPart, "-")
 		matches = FindFlagsByLetter(letter, KnownFlags)
 		if color {
-			errNotice = fmt.Sprintf("yups: yups does not use short flags (%s%q%s)", "\x1b[1;31m", arg, "\x1b[0m")
+			errNotice = fmt.Sprintf("yups: yups does not use short flags (%s%q%s)", theme.Error, arg, theme.Reset)
 		} else {
 			errNotice = fmt.Sprintf("yups: yups does not use short flags (%q)", arg)
 		}
 	} else {
 		matches = FindSimilarFlags(flagPart, KnownFlags)
 		if color {
-			errNotice = fmt.Sprintf("yups: unknown option %s%q%s", "\x1b[1;31m", arg, "\x1b[0m")
+			errNotice = fmt.Sprintf("yups: unknown option %s%q%s", theme.Error, arg, theme.Reset)
 		} else {
 			errNotice = fmt.Sprintf("yups: unknown option %q", arg)
 		}
@@ -203,13 +205,13 @@ func HandleUnknownFlag(env *Env, args []string, flagIdx int, stdout, stderr io.W
 
 	if isShortFlag {
 		if color {
-			fmt.Fprintf(stdout, "\nyups: yups does not use short flags (%s%q%s). Did you mean %s%q%s?\n", "\x1b[1;31m", arg, "\x1b[0m", "\x1b[1;32m", matchedFlag, "\x1b[0m")
+			fmt.Fprintf(stdout, "\nyups: yups does not use short flags (%s%q%s). Did you mean %s%q%s?\n", theme.Error, arg, theme.Reset, theme.Success, matchedFlag, theme.Reset)
 		} else {
 			fmt.Fprintf(stdout, "\nyups: yups does not use short flags (%q). Did you mean %q?\n", arg, matchedFlag)
 		}
 	} else {
 		if color {
-			fmt.Fprintf(stdout, "\nyups: unknown option %s%q%s. Did you mean %s%q%s?\n", "\x1b[1;31m", arg, "\x1b[0m", "\x1b[1;32m", matchedFlag, "\x1b[0m")
+			fmt.Fprintf(stdout, "\nyups: unknown option %s%q%s. Did you mean %s%q%s?\n", theme.Error, arg, theme.Reset, theme.Success, matchedFlag, theme.Reset)
 		} else {
 			fmt.Fprintf(stdout, "\nyups: unknown option %q. Did you mean %q?\n", arg, matchedFlag)
 		}
@@ -250,7 +252,7 @@ func HandleUnknownFlag(env *Env, args []string, flagIdx int, stdout, stderr io.W
 		case "e", "edit":
 			editPrompt := "Edit command"
 			if color {
-				editPrompt = "\x1b[38;5;214mEdit command\x1b[0m"
+				editPrompt = theme.Prompt + "Edit command" + theme.Reset
 			}
 			var edited string
 			if env != nil && env.AskEditPrompt != nil {

@@ -25,6 +25,7 @@ import (
 	"yups/internal/config"
 	"yups/internal/explain"
 	"yups/internal/llm"
+	"yups/internal/ui"
 	"yups/internal/update"
 )
 
@@ -620,9 +621,10 @@ func osAskConfirmation(prompt string, defaultYes bool) bool {
 
 	reader := stdinReader()
 	isTerm := osIsTerminalOutput(os.Stdout)
+	theme := ui.GetTheme()
 	for attempt := 0; attempt < 3; attempt++ {
 		if isTerm {
-			fmt.Printf("\x1b[38;5;214m%s\x1b[0m %s ", prompt, hint)
+			fmt.Printf("%s%s%s %s ", theme.Prompt, prompt, theme.Reset, hint)
 		} else {
 			fmt.Printf("%s %s ", prompt, hint)
 		}
@@ -739,15 +741,16 @@ func osIsTerminalOutput(w io.Writer) bool {
 func osAskPrompt(prompt, defaultValue string) string {
 	osFlushStdin()
 	isTerm := osIsTerminalOutput(os.Stdout)
+	theme := ui.GetTheme()
 	if defaultValue != "" {
 		if isTerm {
-			fmt.Printf("\x1b[38;5;214m%s\x1b[0m [%s]: ", prompt, defaultValue)
+			fmt.Printf("%s%s%s [%s]: ", theme.Prompt, prompt, theme.Reset, defaultValue)
 		} else {
 			fmt.Printf("%s [%s]: ", prompt, defaultValue)
 		}
 	} else {
 		if isTerm {
-			fmt.Printf("\x1b[38;5;214m%s\x1b[0m: ", prompt)
+			fmt.Printf("%s%s%s: ", theme.Prompt, prompt, theme.Reset)
 		} else {
 			fmt.Printf("%s: ", prompt)
 		}

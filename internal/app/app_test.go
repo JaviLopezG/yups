@@ -1227,3 +1227,51 @@ func TestDispatchPrintsSessionSlugOnSuccess(t *testing.T) {
 		t.Errorf("stdout missing 'Session: ' footer:\n%s", out)
 	}
 }
+
+func TestStateGetAvailableModels(t *testing.T) {
+	var s State
+	defaults := s.GetAvailableModels()
+	if len(defaults) != 2 || defaults[0] != config.DefaultModel || defaults[1] != config.DefaultAdvancedModel {
+		t.Errorf("default GetAvailableModels() = %v", defaults)
+	}
+
+	s.AvailableModels = []string{"model1", "model2"}
+	custom := s.GetAvailableModels()
+	if len(custom) != 2 || custom[0] != "model1" || custom[1] != "model2" {
+		t.Errorf("custom GetAvailableModels() = %v", custom)
+	}
+}
+
+func TestInstallSavesAvailableModelsInState(t *testing.T) {
+	fs := newFakeFS()
+	fs.writable["/usr/local/bin"] = true
+	fs.httpResponses["http://localhost:11434/api/tags"] = fakeResponse(
+		http.StatusOK,
+		`{"models": [{"name": "qwen3-coder:latest"}, {"name": "gemma4:latest"}]}`,
+	)
+	env := fs.env()
+	env.IsTerminalOutput = func(w io.Writer) bool { return true }
+
+	out, code := runDispatch(t, env, "--install-yups")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
+	}
+
+	statePath := config.StatePath(fs.home)
+	st, ok := fs.states[statePath]
+	if !ok {
+		t.Fatalf("state not saved at %s", statePath)
+	}
+	if len(st.AvailableModels) != 2 {
+		t.Errorf("state.AvailableModels = %v, want 2 models", st.AvailableModels)
+	}
+
+	cfgPath := config.Path(fs.home)
+	cfg, ok := fs.configs[cfgPath]
+	if !ok {
+		t.Fatalf("config not saved at %s", cfgPath)
+	}
+	if cfg.Inference.DefaultModel == "" {
+		t.Errorf("config.Inference.DefaultModel is empty")
+	}
+}

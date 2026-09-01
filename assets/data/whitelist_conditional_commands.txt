@@ -1,0 +1,16 @@
+rsync
+make
+bash
+sh
+apt
+apt-get
+dnf
+yum
+pacman
+pip
+pip3
+git
+cargo
+npm
+pnpm
+yarn
