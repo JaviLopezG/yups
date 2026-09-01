@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -90,5 +91,33 @@ func TestGetThemeData(t *testing.T) {
 		if !strings.Contains(theme, key) {
 			t.Errorf("ThemeData missing key %q", key)
 		}
+	}
+}
+
+func TestCustomDiskAssetLoading(t *testing.T) {
+	tempHome := t.TempDir()
+	SetOverrideHome(tempHome)
+	defer ResetOverrideHome()
+
+	// 1. Without files on disk, fallback to embedded assets
+	if len(GetSessionCities()) < 50 {
+		t.Errorf("GetSessionCities() fallback returned < 50 cities")
+	}
+
+	// 2. Create custom cities.txt on disk
+	dataDir := tempHome + "/.yups/data"
+	importOS := true
+	_ = importOS
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("Failed creating data dir: %v", err)
+	}
+	customCities := "atlantis\neldorado\n"
+	if err := os.WriteFile(dataDir+"/cities.txt", []byte(customCities), 0o644); err != nil {
+		t.Fatalf("Failed writing custom cities: %v", err)
+	}
+
+	cities := GetSessionCities()
+	if len(cities) != 2 || cities[0] != "atlantis" || cities[1] != "eldorado" {
+		t.Errorf("GetSessionCities() with on-disk override = %v, want [atlantis eldorado]", cities)
 	}
 }

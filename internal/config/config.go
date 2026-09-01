@@ -183,6 +183,16 @@ func ScriptsDir(home string) string {
 	return filepath.Join(Dir(home), "scripts")
 }
 
+// DataDir returns the directory where static data assets live under ~/.yups.
+func DataDir(home string) string {
+	return filepath.Join(Dir(home), "data")
+}
+
+// PromptsDir returns the directory where prompt templates live under ~/.yups.
+func PromptsDir(home string) string {
+	return filepath.Join(Dir(home), "prompts")
+}
+
 // ShellDir returns the directory where shell integration scripts live.
 func ShellDir(home string) string {
 	return filepath.Join(Dir(home), "shell")

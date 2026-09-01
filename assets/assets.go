@@ -2,7 +2,10 @@
 package assets
 
 import (
+	"bytes"
 	_ "embed"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -68,84 +71,107 @@ var SystemPromptTemplate string
 var HelpText string
 
 var (
-	citiesOnce sync.Once
-	citiesList []string
-
-	whitelistCmdsOnce sync.Once
-	whitelistCmdsMap  map[string]bool
-
-	whitelistWrappersOnce sync.Once
-	whitelistWrappersMap  map[string]bool
-
-	whitelistConditionalOnce sync.Once
-	whitelistConditionalList []string
+	overrideHome string
+	overrideMu   sync.RWMutex
 )
+
+// SetOverrideHome allows overriding the home directory for asset lookups (useful for tests).
+func SetOverrideHome(home string) {
+	overrideMu.Lock()
+	defer overrideMu.Unlock()
+	overrideHome = home
+}
+
+// ResetOverrideHome clears any home directory override.
+func ResetOverrideHome() {
+	overrideMu.Lock()
+	defer overrideMu.Unlock()
+	overrideHome = ""
+}
+
+func readAsset(relPath, embedded string) string {
+	overrideMu.RLock()
+	home := overrideHome
+	overrideMu.RUnlock()
+
+	if home == "" {
+		if h, err := os.UserHomeDir(); err == nil && h != "" {
+			home = h
+		}
+	}
+
+	if home != "" {
+		diskPath := filepath.Join(home, ".yups", relPath)
+		if data, err := os.ReadFile(diskPath); err == nil && len(bytes.TrimSpace(data)) > 0 {
+			return string(data)
+		}
+	}
+	return embedded
+}
 
 // GetSessionCities returns the slice of city names for session slugs.
 func GetSessionCities() []string {
-	citiesOnce.Do(func() {
-		for _, line := range strings.Split(CitiesData, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-				citiesList = append(citiesList, trimmed)
-			}
+	data := readAsset("data/cities.txt", CitiesData)
+	var list []string
+	for _, line := range strings.Split(data, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			list = append(list, trimmed)
 		}
-	})
-	return citiesList
+	}
+	return list
 }
 
 // GetWhitelistedCommands returns the map of unconditionally safe read-only inspection commands.
 func GetWhitelistedCommands() map[string]bool {
-	whitelistCmdsOnce.Do(func() {
-		whitelistCmdsMap = make(map[string]bool)
-		for _, line := range strings.Split(WhitelistCommandsData, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-				whitelistCmdsMap[trimmed] = true
-			}
+	data := readAsset("data/whitelist_commands.txt", WhitelistCommandsData)
+	m := make(map[string]bool)
+	for _, line := range strings.Split(data, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			m[trimmed] = true
 		}
-	})
-	return whitelistCmdsMap
+	}
+	return m
 }
 
 // GetWhitelistedWrappers returns the map of safe command wrappers.
 func GetWhitelistedWrappers() map[string]bool {
-	whitelistWrappersOnce.Do(func() {
-		whitelistWrappersMap = make(map[string]bool)
-		for _, line := range strings.Split(WhitelistWrappersData, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-				whitelistWrappersMap[trimmed] = true
-			}
+	data := readAsset("data/whitelist_wrappers.txt", WhitelistWrappersData)
+	m := make(map[string]bool)
+	for _, line := range strings.Split(data, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			m[trimmed] = true
 		}
-	})
-	return whitelistWrappersMap
+	}
+	return m
 }
 
 // GetWhitelistedConditionalCommands returns the slice of commands requiring conditional flag inspection.
 func GetWhitelistedConditionalCommands() []string {
-	whitelistConditionalOnce.Do(func() {
-		for _, line := range strings.Split(WhitelistConditionalCommandsData, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-				whitelistConditionalList = append(whitelistConditionalList, trimmed)
-			}
+	data := readAsset("data/whitelist_conditional_commands.txt", WhitelistConditionalCommandsData)
+	var list []string
+	for _, line := range strings.Split(data, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			list = append(list, trimmed)
 		}
-	})
-	return whitelistConditionalList
+	}
+	return list
 }
 
 // GetThemeData returns the raw semantic theme TOML data.
 func GetThemeData() string {
-	return ThemeData
+	return readAsset("data/theme.toml", ThemeData)
 }
 
 // GetSystemPromptTemplate returns the raw system prompt template.
 func GetSystemPromptTemplate() string {
-	return SystemPromptTemplate
+	return readAsset("prompts/system_prompt.txt", SystemPromptTemplate)
 }
 
 // GetHelpText returns the CLI help text.
 func GetHelpText() string {
-	return HelpText
+	return readAsset("prompts/help.txt", HelpText)
 }

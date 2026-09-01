@@ -267,6 +267,7 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 		}
 		EnsureBashBindingUpdated(env, home, stdout, stderr)
 		_ = EnsureScriptsUpdated(env, home)
+		_ = EnsureAssetsUpdated(env, home)
 	}
 
 	if len(blocked) == 0 {

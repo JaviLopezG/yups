@@ -117,6 +117,11 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 	}()
 
 	isInstalled := isSystemInstalled(env)
+	if isInstalled && env.UserHomeDir != nil {
+		if home, err := env.UserHomeDir(); err == nil {
+			_ = EnsureAssetsUpdated(env, home)
+		}
+	}
 
 	if len(args) == 0 {
 		fmt.Fprintln(stdout, ColoredLogo)

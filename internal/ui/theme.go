@@ -7,7 +7,6 @@ package ui
 
 import (
 	"strings"
-	"sync"
 
 	"github.com/BurntSushi/toml"
 	"yups/assets"
@@ -27,11 +26,6 @@ type Theme struct {
 	Underline string `toml:"underline"`
 	Reset     string `toml:"reset"`
 }
-
-var (
-	themeOnce sync.Once
-	currTheme Theme
-)
 
 // DefaultTheme returns the standard semantic ANSI palette.
 func DefaultTheme() Theme {
@@ -79,26 +73,22 @@ func resolveANSI(val, fallback string) string {
 
 // GetTheme returns the loaded semantic palette, falling back to defaults for any missing fields.
 func GetTheme() Theme {
-	themeOnce.Do(func() {
-		defaults := DefaultTheme()
-		var parsed Theme
-		if err := toml.Unmarshal([]byte(assets.GetThemeData()), &parsed); err == nil {
-			currTheme = Theme{
-				Error:     resolveANSI(parsed.Error, defaults.Error),
-				Warning:   resolveANSI(parsed.Warning, defaults.Warning),
-				Success:   resolveANSI(parsed.Success, defaults.Success),
-				Info:      resolveANSI(parsed.Info, defaults.Info),
-				Important: resolveANSI(parsed.Important, defaults.Important),
-				Prompt:    resolveANSI(parsed.Prompt, defaults.Prompt),
-				Muted:     resolveANSI(parsed.Muted, defaults.Muted),
-				Bold:      resolveANSI(parsed.Bold, defaults.Bold),
-				Dim:       resolveANSI(parsed.Dim, defaults.Dim),
-				Underline: resolveANSI(parsed.Underline, defaults.Underline),
-				Reset:     resolveANSI(parsed.Reset, defaults.Reset),
-			}
-		} else {
-			currTheme = defaults
+	defaults := DefaultTheme()
+	var parsed Theme
+	if err := toml.Unmarshal([]byte(assets.GetThemeData()), &parsed); err == nil {
+		return Theme{
+			Error:     resolveANSI(parsed.Error, defaults.Error),
+			Warning:   resolveANSI(parsed.Warning, defaults.Warning),
+			Success:   resolveANSI(parsed.Success, defaults.Success),
+			Info:      resolveANSI(parsed.Info, defaults.Info),
+			Important: resolveANSI(parsed.Important, defaults.Important),
+			Prompt:    resolveANSI(parsed.Prompt, defaults.Prompt),
+			Muted:     resolveANSI(parsed.Muted, defaults.Muted),
+			Bold:      resolveANSI(parsed.Bold, defaults.Bold),
+			Dim:       resolveANSI(parsed.Dim, defaults.Dim),
+			Underline: resolveANSI(parsed.Underline, defaults.Underline),
+			Reset:     resolveANSI(parsed.Reset, defaults.Reset),
 		}
-	})
-	return currTheme
+	}
+	return defaults
 }

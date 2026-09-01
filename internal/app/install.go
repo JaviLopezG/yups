@@ -246,6 +246,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		// Install utility scripts into ~/.yups/scripts/
 		_ = InstallScripts(env, home)
 
+		// Install static data and prompt assets into ~/.yups/data/ and ~/.yups/prompts/
+		_ = InstallAssets(env, home)
+
 		_ = env.SaveConfig(cfgPath, cfg)
 		fmt.Fprintf(stdout, "\nConfiguration saved to %s.\n", cfgPath)
 
