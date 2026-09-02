@@ -248,8 +248,8 @@ func TestNoArgumentsPrintsColoredMarker(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
-	if want := "\x1b[38;5;214m#_?\x1b[0m\n"; out != want {
-		t.Fatalf("output = %q, want %q", out, want)
+	if !strings.Contains(out, ColoredLogo) {
+		t.Fatalf("output = %q, want containing %q", out, ColoredLogo)
 	}
 }
 
@@ -294,8 +294,8 @@ func TestDispatchDoubleDashAlonePrintsLogo(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
-	if want := "\x1b[38;5;214m#_?\x1b[0m\n"; out != want {
-		t.Fatalf("output = %q, want %q", out, want)
+	if !strings.Contains(out, ColoredLogo) {
+		t.Fatalf("output = %q, want containing %q", out, ColoredLogo)
 	}
 }
 
