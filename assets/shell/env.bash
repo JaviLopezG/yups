@@ -16,7 +16,17 @@ yups() {
         local markerContent
         markerContent=$(cat "$yupsMarker" 2>/dev/null)
         if [ "$markerContent" != "executed" ] && [ -n "$markerContent" ]; then
+            export YUPS_SCRIPT="$markerContent"
             history -s "$markerContent" 2>/dev/null
+            if [ -t 0 ] && [ -t 1 ]; then
+                local nextCmd
+                read -e -i "$markerContent" -p "${PS1@P}" nextCmd
+                if [ -n "$nextCmd" ]; then
+                    history -s "$nextCmd" 2>/dev/null
+                    eval "$nextCmd"
+                    ret=$?
+                fi
+            fi
         fi
     fi
     rm -f "$yupsHist" "$yupsMarker"

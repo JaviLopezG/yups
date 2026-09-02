@@ -38,6 +38,7 @@ _yups-readline-binding() {
             READLINE_LINE=""
             READLINE_POINT=0
         elif [ -n "$markerContent" ]; then
+            export YUPS_SCRIPT="$markerContent"
             READLINE_LINE="$markerContent"
             READLINE_POINT=${#READLINE_LINE}
         else
