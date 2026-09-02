@@ -1,3 +1,5 @@
+# Line-separated list of session slug names.
+# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 almeria
 cadiz
 cordoba

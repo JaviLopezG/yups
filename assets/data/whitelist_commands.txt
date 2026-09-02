@@ -1,3 +1,5 @@
+# Whitelist of unconditionally safe read-only commands.
+# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 ls
 pwd
 stat

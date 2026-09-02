@@ -1,3 +1,5 @@
+# Help text for yups CLI.
+# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 yups - fast, concise, contextual terminal assistant
 
 yups operates entirely within your trusted environment: no data is sent to the

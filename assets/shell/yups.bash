@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # yups.bash - Main entrypoint for YUPS shell integration.
+# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 # Discovers and sources all modular shell scripts (*.bash) located in ~/.yups/shell/.
 
 _yups_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"

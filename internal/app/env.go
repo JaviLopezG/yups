@@ -848,8 +848,8 @@ func osReadHistory(home string, maxLines int) []llm.HistoryEntry {
 			cmd = strings.TrimSpace(m[2])
 		}
 
-		// Skip history command noise
-		if strings.HasPrefix(cmd, "history") || strings.HasPrefix(cmd, "HISTTIMEFORMAT=") || cmd == "" {
+		// Skip history command noise and internal yups shell functions
+		if strings.HasPrefix(cmd, "_yups") || strings.HasPrefix(cmd, "history") || strings.HasPrefix(cmd, "HISTTIMEFORMAT=") || cmd == "" {
 			continue
 		}
 		valid = append(valid, llm.HistoryEntry{

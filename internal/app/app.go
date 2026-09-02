@@ -230,6 +230,7 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 
 				// III - Si el último comando no es vacío y no es de yups, uso ese ultimo comando como si se hubiera llamado a yups ultimo-comando
 				if logger != nil {
+					logger.SetCommandLine(lastCmd)
 					logger.LogInfo("Explaining last command from history: %s", lastCmd)
 				}
 				docEnv := env.DocEnv()

@@ -1,3 +1,5 @@
+# Whitelist of safe command wrappers.
+# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 sudo
 env
 time

@@ -463,12 +463,22 @@ func (l *SessionLogger) SessionID() string {
 	return l.sessionID
 }
 
-// Slug returns the human-readable city slug (e.g. "sevilla37").
+// Slug returns the human-readable slug (e.g. "sevilla37", "barcelona23").
 func (l *SessionLogger) Slug() string {
 	if l == nil {
 		return ""
 	}
 	return l.slug
+}
+
+// SetCommandLine updates the recorded command line for this session (e.g. when explaining from history).
+func (l *SessionLogger) SetCommandLine(cmd string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.commandLine = cmd
 }
 
 // HasWritten returns true if a session log was committed to disk.

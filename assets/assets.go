@@ -181,5 +181,16 @@ func GetSystemPromptTemplate() string {
 
 // GetHelpText returns the CLI help text directly from the embedded binary resource.
 func GetHelpText() string {
-	return HelpText
+	lines := strings.Split(HelpText, "\n")
+	var out []string
+	skippingHeaderComments := true
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if skippingHeaderComments && strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		skippingHeaderComments = false
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # keybinding.bash - Readline key binding integration for yups.
+# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 # Binds a keyboard shortcut to explain or fix the current command line in-place.
 
 _yups-readline-binding() {
