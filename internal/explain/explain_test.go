@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -227,7 +228,7 @@ func TestExplainUnreachableLLMShowsErrorAndInstallHint(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"No manual entry or help found for \"sl\"",
-		"Asking LLM (qwen2.5-coder:7b) at http://127.0.0.1:54321 for more information...",
+		"Asking LLM (" + llm.FallbackDefaultModel + ") at http://127.0.0.1:54321 for more information...",
 		"Cannot connect to Ollama at http://127.0.0.1:54321",
 		"Note: yups is using default settings because it is not installed or configured yet.",
 		"Run 'yups --install-yups'",
@@ -431,15 +432,15 @@ func TestExplainInteractiveExecutionModifications(t *testing.T) {
 }
 
 func TestTokenizeWithComment(t *testing.T) {
-	tokens := Tokenize([]string{"ls", "-avi", "#Quiero listar subdirectorios"})
-	if len(tokens) != 3 {
-		t.Fatalf("len(tokens) = %d, want 3 (%+v)", len(tokens), tokens)
+	p := Parse([]string{"ls", "-avi", "#Quiero listar subdirectorios"})
+	if len(p.Stages) != 1 {
+		t.Fatalf("len(stages) = %d, want 1 (%+v)", len(p.Stages), p.Stages)
 	}
-	if tokens[0].Value != "ls" || tokens[1].Value != "-avi" {
-		t.Errorf("unexpected command tokens: %+v", tokens[:2])
+	if p.Stages[0].Command.Name != "ls" {
+		t.Errorf("unexpected command: %q, want 'ls'", p.Stages[0].Command.Name)
 	}
-	if tokens[2].Type != TokenComment || tokens[2].Value != "Quiero listar subdirectorios" {
-		t.Errorf("unexpected comment token: %+v", tokens[2])
+	if p.Comment != "Quiero listar subdirectorios" {
+		t.Errorf("unexpected comment: %q, want 'Quiero listar subdirectorios'", p.Comment)
 	}
 }
 
@@ -808,6 +809,11 @@ func TestExplainMultiTurnToolCalls(t *testing.T) {
 			// Turn 2: verify tools are still provided, and request documentation for 'yups'
 			if len(chatReq.Tools) > 0 {
 				toolsProvidedInTurn2 = true
+			}
+			// Verify last message is a user message to satisfy Qwen Jinja templates
+			lastMsg := chatReq.Messages[len(chatReq.Messages)-1]
+			if lastMsg.Role != "user" {
+				t.Errorf("expected last message in turn 2 to have role 'user', got %q", lastMsg.Role)
 			}
 			resp := llm.ChatResponse{
 				Model: "qwen2.5-coder:7b",
@@ -1816,13 +1822,565 @@ func TestTimeoutReachedInformsAndAbortsOrContinues(t *testing.T) {
 	}
 
 	out := stdout.String()
-	if !strings.Contains(out, "Execution limit reached: query timed out") {
+	if !strings.Contains(out, "Execution limit reached: query taking longer than") {
 		t.Errorf("expected timeout limit message, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Ctrl+C or Ctrl+Z") {
 		t.Errorf("expected Ctrl+C notice, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Switching to advanced reasoning model (qwen3.8:latest)") {
-		t.Errorf("expected switch to advanced model message, got:\n%s", out)
+	if callCount != 1 {
+		t.Errorf("expected callCount = 1 (continuous background request without restart), got %d", callCount)
+	}
+}
+
+func TestNoLimitsDisablesTurnLimit(t *testing.T) {
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			callCount++
+			if callCount <= 4 {
+				// Tool call turns 1 to 4
+				resp := llm.ChatResponse{
+					Model: "qwen2.5-coder:7b",
+					Message: llm.Message{
+						Role: "assistant",
+						ToolCalls: []llm.ToolCall{
+							{
+								Function: llm.ToolCallFunction{
+									Name:      "command-run",
+									Arguments: map[string]any{"command": "ls"},
+								},
+							},
+						},
+					},
+					Done: true,
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Final answer on turn 5
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: `{"explanation":"lists directory contents","suggested-command":"ls -la"}`,
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:    llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel: "qwen2.5-coder:7b",
+		MaxToolTurns: 2, // Would abort after 2 without NoLimits
+		NoLimits:     true,
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte("total 0\n"), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	out := stdout.String()
+	if strings.Contains(out, "Execution limit reached") || strings.Contains(out, "maximum reasoning tool rounds reached") {
+		t.Errorf("unexpected turn limit message when NoLimits is true:\n%s", out)
+	}
+	if !strings.Contains(out, "Suggested command:") || !strings.Contains(out, "ls -la") {
+		t.Errorf("missing final suggested command in output:\n%s", out)
+	}
+	if callCount != 5 {
+		t.Errorf("callCount = %d, want 5", callCount)
+	}
+}
+
+func TestNoLimitsDisablesLLMTimeout(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			time.Sleep(50 * time.Millisecond)
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: `{"explanation":"no limits timeout test","suggested-command":"echo ok"}`,
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:    llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel: "qwen2.5-coder:7b",
+		LLMTimeout:   10 * time.Millisecond, // would trigger timeout prompt without NoLimits
+		NoLimits:     true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	out := stdout.String()
+	if strings.Contains(out, "Execution limit reached: query taking longer than") {
+		t.Errorf("unexpected timeout message when NoLimits is true:\n%s", out)
+	}
+	if !strings.Contains(out, "echo ok") {
+		t.Errorf("expected suggested command 'echo ok' in output:\n%s", out)
+	}
+}
+
+func TestNoLimitsDisablesOutputTruncation(t *testing.T) {
+	longOutput := strings.Repeat("long_output_line\n", 50)
+	var capturedToolOutput string
+	callCount := 0
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			callCount++
+			var req llm.ChatRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+
+			if callCount == 1 {
+				// Turn 0: tool call
+				resp := llm.ChatResponse{
+					Model: "qwen2.5-coder:7b",
+					Message: llm.Message{
+						Role: "assistant",
+						ToolCalls: []llm.ToolCall{
+							{
+								Function: llm.ToolCallFunction{
+									Name:      "command-run",
+									Arguments: map[string]any{"command": "ls"},
+								},
+							},
+						},
+					},
+					Done: true,
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Turn 1: final answer, capture tool message
+			for _, m := range req.Messages {
+				if m.Role == "tool" {
+					capturedToolOutput = m.Content
+				}
+			}
+
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: `{"explanation":"done","suggested-command":"ls"}`,
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:          llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel:       "qwen2.5-coder:7b",
+		MaxToolOutputBytes: 20, // would truncate without NoLimits
+		NoLimits:           true,
+		RunCmdTimeout: func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+			return []byte(longOutput), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"ls", "-unknown"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if strings.Contains(capturedToolOutput, "... (truncated)") {
+		t.Errorf("tool output should not be truncated when NoLimits is true, got:\n%s", capturedToolOutput)
+	}
+	if !strings.Contains(capturedToolOutput, longOutput) {
+		t.Errorf("expected full long output in tool response, got:\n%s", capturedToolOutput)
+	}
+}
+
+func TestFormatSuggestedScriptShort(t *testing.T) {
+	script := "echo 1\necho 2\necho 3"
+	var buf bytes.Buffer
+	FormatSuggestedScript(&buf, script, FormatOptions{Color: false})
+
+	out := buf.String()
+	if !strings.Contains(out, "Suggested script:") {
+		t.Errorf("missing header: %s", out)
+	}
+	if !strings.Contains(out, " 1 | echo 1") || !strings.Contains(out, " 2 | echo 2") || !strings.Contains(out, " 3 | echo 3") {
+		t.Errorf("missing numbered lines: %s", out)
+	}
+	if strings.Contains(out, "(...)") {
+		t.Errorf("short script should not be truncated:\n%s", out)
+	}
+}
+
+func TestFormatSuggestedScriptLongTruncated(t *testing.T) {
+	t.Setenv("LINES", "24") // 24 - 10 = 14 lines threshold
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, fmt.Sprintf("line_%02d", i))
+	}
+	script := strings.Join(lines, "\n")
+
+	var buf bytes.Buffer
+	FormatSuggestedScript(&buf, script, FormatOptions{Color: false})
+
+	out := buf.String()
+	if !strings.Contains(out, " 1 | line_01") || !strings.Contains(out, " 5 | line_05") {
+		t.Errorf("missing head lines: %s", out)
+	}
+	if !strings.Contains(out, "(...)") || !strings.Contains(out, "-----------------------") {
+		t.Errorf("missing truncation indicator: %s", out)
+	}
+	if !strings.Contains(out, "16 | line_16") || !strings.Contains(out, "20 | line_20") {
+		t.Errorf("missing tail lines: %s", out)
+	}
+	if strings.Contains(out, "line_10") {
+		t.Errorf("line_10 should be hidden by truncation:\n%s", out)
+	}
+}
+
+func TestFormatLLMPipelineResultScriptBeforeCommand(t *testing.T) {
+	exp := &PipelineExplanation{
+		LLMQueried:       true,
+		LLMExplanation:   "This does something.",
+		SuggestedCommand: "echo 'hello cmd'",
+		SuggestedScript:  "echo 'hello script'",
+	}
+
+	var buf bytes.Buffer
+	FormatLLMPipelineResult(&buf, exp, FormatOptions{Color: false})
+	out := buf.String()
+
+	scriptIdx := strings.Index(out, "Suggested script:")
+	cmdIdx := strings.Index(out, "Suggested command:")
+
+	if scriptIdx == -1 || cmdIdx == -1 {
+		t.Fatalf("expected both script and command in output:\n%s", out)
+	}
+	if scriptIdx >= cmdIdx {
+		t.Errorf("expected script to appear before command, scriptIdx=%d, cmdIdx=%d\n%s", scriptIdx, cmdIdx, out)
+	}
+}
+
+func TestExplainDualSuggestionFlow(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Dual suggestion:\n```json\n{\n  \"explanation\": \"Both cmd and script\",\n  \"suggested-command\": \"echo run-cmd\",\n  \"suggested-script\": \"echo run-script-line1\\necho run-script-line2\"\n}\n```",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer ts.Close()
+
+	var promptsAsked []string
+	var executedCmd string
+
+	tempScriptsDir := t.TempDir()
+	docEnv := DocEnv{
+		LLMClient:   llm.NewClient(ts.Client(), ts.URL),
+		UseAdvanced: true,
+		ScriptsDir:  tempScriptsDir,
+		AskPrompt: func(prompt, defaultValue string) string {
+			promptsAsked = append(promptsAsked, prompt)
+			if strings.Contains(prompt, "script") {
+				return "no" // decline script
+			}
+			return "yes" // accept command
+		},
+		ExecShell: func(command string, stdout, stderr io.Writer) int {
+			executedCmd = command
+			return 0
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"my-unknown-command"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if len(promptsAsked) != 2 {
+		t.Fatalf("expected 2 prompts (script then command), got %d: %v", len(promptsAsked), promptsAsked)
+	}
+	if !strings.Contains(promptsAsked[0], "script") {
+		t.Errorf("first prompt should be for script: %q", promptsAsked[0])
+	}
+	if !strings.Contains(promptsAsked[1], "command") {
+		t.Errorf("second prompt should be for command: %q", promptsAsked[1])
+	}
+	if executedCmd != "echo run-cmd" {
+		t.Errorf("executed command = %q, want 'echo run-cmd'", executedCmd)
+	}
+}
+
+func TestExplainScriptEditingFlow(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "qwen2.5-coder:7b",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "```json\n{\n  \"explanation\": \"Only script\",\n  \"suggested-script\": \"echo test-script\\necho line2\"\n}\n```",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer ts.Close()
+
+	tempScriptsDir := t.TempDir()
+	var editorOpenedFile string
+	prompts := []string{"edit", "no"}
+	promptIdx := 0
+
+	docEnv := DocEnv{
+		LLMClient:   llm.NewClient(ts.Client(), ts.URL),
+		UseAdvanced: true,
+		ScriptsDir:  tempScriptsDir,
+		AskPrompt: func(prompt, defaultValue string) string {
+			if promptIdx < len(prompts) {
+				res := prompts[promptIdx]
+				promptIdx++
+				return res
+			}
+			return "no"
+		},
+		OpenEditor: func(path string, stdin io.Reader, stdout, stderr io.Writer) error {
+			editorOpenedFile = path
+			return nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"my-unknown-command"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if editorOpenedFile == "" {
+		t.Fatal("OpenEditor was not called")
+	}
+	if !strings.HasPrefix(editorOpenedFile, tempScriptsDir) {
+		t.Errorf("editor opened file %q outside scriptsDir %q", editorOpenedFile, tempScriptsDir)
+	}
+	if !strings.HasSuffix(editorOpenedFile, ".sh") {
+		t.Errorf("editor opened file %q without .sh extension", editorOpenedFile)
+	}
+	if !strings.Contains(stdout.String(), "Script saved to "+editorOpenedFile+" (available as $YUPS_SCRIPT)") {
+		t.Errorf("missing saved notice in stdout:\n%s", stdout.String())
+	}
+	if os.Getenv("YUPS_SCRIPT") != editorOpenedFile {
+		t.Errorf("YUPS_SCRIPT env = %q, want %q", os.Getenv("YUPS_SCRIPT"), editorOpenedFile)
+	}
+}
+
+func TestExplainEmptyResponseRetriedAndSucceeds(t *testing.T) {
+	callCount := 0
+	retrySawReminder := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			callCount++
+			var req llm.ChatRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+
+			if callCount == 1 {
+				// Turn 1 returns empty content
+				resp := llm.ChatResponse{
+					Model: "qwen3-coder:latest",
+					Message: llm.Message{
+						Role:    "assistant",
+						Content: "",
+					},
+					Done: true,
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			// Turn 2: verify reminder was included in conversation
+			for _, m := range req.Messages {
+				if strings.Contains(m.Content, "Your previous response was completely empty") {
+					retrySawReminder = true
+				}
+			}
+			resp := llm.ChatResponse{
+				Model: "qwen3-coder:latest",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "Now it works.\nSuggested command: ls",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:     llm.NewClient(ts.Client(), ts.URL),
+		AdvancedModel: "test-model",
+		UseAdvanced:   true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"my-unknown-cmd"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if callCount != 2 {
+		t.Errorf("callCount = %d, want 2 (1 empty + 1 retry)", callCount)
+	}
+	if !retrySawReminder {
+		t.Errorf("expected retry request to include reminder message")
+	}
+	if !strings.Contains(stdout.String(), "Suggested command:\n  ls") {
+		t.Errorf("expected successful command suggestion in stdout, got:\n%s", stdout.String())
+	}
+}
+
+func TestExplainConsecutiveEmptyResponsesWarnsAndAborts(t *testing.T) {
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			callCount++
+			resp := llm.ChatResponse{
+				Model: "test-model",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:     llm.NewClient(ts.Client(), ts.URL),
+		AdvancedModel: "test-model",
+		UseAdvanced:   true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"my-unknown-cmd"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if callCount != 2 {
+		t.Errorf("callCount = %d, want 2", callCount)
+	}
+	if !strings.Contains(stdout.String(), "Warning: The model test-model returned an empty response.") {
+		t.Errorf("expected empty response warning in stdout, got:\n%s", stdout.String())
+	}
+}
+
+func TestExplainContextCancellationInterruptsAndReturns130(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			// Simulate long-running request
+			time.Sleep(500 * time.Millisecond)
+			resp := llm.ChatResponse{
+				Model: "test-model",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "done",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel context after 50ms while request is in flight
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	docEnv := DocEnv{
+		LLMClient:     llm.NewClient(ts.Client(), ts.URL),
+		AdvancedModel: "test-model",
+		UseAdvanced:   true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(ctx, docEnv, []string{"my-unknown-cmd"}, &stdout, &stderr, false)
+	if code != 130 {
+		t.Fatalf("exit code = %d, want 130", code)
+	}
+}
+
+func TestExplainFlushesStdinBeforeInteractivePrompt(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			resp := llm.ChatResponse{
+				Model: "test-model",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "```json\n{\n  \"explanation\": \"test\",\n  \"suggested-command\": \"ls -la\"\n}\n```",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer ts.Close()
+
+	flushCalled := false
+	docEnv := DocEnv{
+		LLMClient:     llm.NewClient(ts.Client(), ts.URL),
+		AdvancedModel: "test-model",
+		UseAdvanced:   true,
+		FlushStdin: func() {
+			flushCalled = true
+		},
+		AskPrompt: func(prompt, defaultValue string) string {
+			return "n"
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"my-unknown-cmd"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !flushCalled {
+		t.Errorf("expected FlushStdin to be called before interactive prompt")
 	}
 }

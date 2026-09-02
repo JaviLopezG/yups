@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"yups/internal/config"
+	"yups/internal/sessionlog"
 )
 
 // Uninstall implements `yups --uninstall-yups`:
@@ -34,6 +35,11 @@ func Uninstall(env *Env, stdout, stderr io.Writer) int {
 
 	found := findInDirs(env, candidates, ProgramName)
 	if len(found) == 0 {
+		if env.UserHomeDir != nil {
+			if home, err := env.UserHomeDir(); err == nil {
+				sessionlog.RecordIncident(home, "", "yups --uninstall-yups", "UNINSTALL_ALREADY_UNINSTALLED", "yups is not installed (already uninstalled)")
+			}
+		}
 		fmt.Fprintf(stdout, "%s is not installed (already uninstalled).\n", ProgramName)
 		askToDeleteStateDir(env, stdout)
 		return ExitOK
@@ -81,6 +87,11 @@ func Uninstall(env *Env, stdout, stderr io.Writer) int {
 	exitCode := ExitOK
 	if len(blocked) > 0 {
 		exitCode = ExitError
+		if env.UserHomeDir != nil {
+			if home, err := env.UserHomeDir(); err == nil {
+				sessionlog.RecordIncident(home, "", "yups --uninstall-yups", "UNINSTALL_PERMISSION_DENIED", "could not remove %s", strings.Join(blocked, ", "))
+			}
+		}
 		fmt.Fprintf(stdout, "Could not remove %s.\n", strings.Join(blocked, ", "))
 		if isAdmin(env) {
 			fmt.Fprint(stdout, "You have administrator privileges: retry the previous command with sudo (sudo !!).\n")

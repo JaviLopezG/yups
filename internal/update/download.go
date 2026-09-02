@@ -138,8 +138,15 @@ func ValidateBinary(path, programName, tag string) error {
 		return fmt.Errorf("self-check %s --version failed: %w: %s", path, err, strings.TrimSpace(string(output)))
 	}
 	want := programName + " " + tag
-	if got := strings.TrimSpace(string(output)); got != want {
-		return fmt.Errorf("self-check failed: %s --version reported %q, want %q", path, got, want)
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if strings.TrimSpace(line) == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("self-check failed: %s --version reported %q, want %q", path, strings.TrimSpace(string(output)), want)
 	}
 	return nil
 }

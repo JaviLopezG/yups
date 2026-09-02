@@ -7,7 +7,7 @@
 //
 // Phase 2 (`yups --update-apply`) runs in the NEW binary: only it knows
 // how the system should look after this version. It replaces every
-// installed copy atomically, bumps config.version forward, runs pending
+// installed copy atomically, bumps state.version forward, runs pending
 // migrations and cleans the staging directory.
 package app
 
@@ -20,6 +20,7 @@ import (
 
 	"yups/internal/config"
 	"yups/internal/semver"
+	"yups/internal/sessionlog"
 	"yups/internal/update"
 )
 
@@ -54,12 +55,14 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	cfgPath := config.Path(home)
 	cfg, err := env.LoadConfig(cfgPath)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot load config from %s: %v", cfgPath, err)
 		fmt.Fprintf(stderr, "Cannot update %s: %v.\nFix or remove %s and retry.\n", ProgramName, err, cfgPath)
 		return ExitError
 	}
 
 	release, err := latestRelease(cfg, env.HTTPClient(), stdout)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot check for updates: %v", err)
 		fmt.Fprintf(stderr, "Cannot check for updates: %v.\n", err)
 		return ExitError
 	}
@@ -69,8 +72,13 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s %s is up to date (latest release: %s).\n", ProgramName, Version, release.Tag)
 		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
 			if home, err := env.UserHomeDir(); err == nil {
+				stateFile := config.StatePath(home)
+				state, _ := env.LoadUpdateState(stateFile)
 				cheatsDir := config.CheatsheetsDir(home)
-				_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+				if updated, err := env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, state.Cheatsheets, stdout); err == nil && updated != nil {
+					state.Cheatsheets = updated
+					_ = env.SaveUpdateState(stateFile, state)
+				}
 			}
 		}
 		return ExitOK
@@ -86,21 +94,25 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "Downloading %s...\n", release.Tag)
 	archiveData, err := update.Fetch(env.HTTPClient(), release.AssetURL)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot download %s: %v", update.ArchiveName(release.Tag), err)
 		fmt.Fprintf(stderr, "Cannot download %s: %v.\n", update.ArchiveName(release.Tag), err)
 		return ExitError
 	}
 	checksums, err := update.Fetch(env.HTTPClient(), release.ChecksumURL)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot download %s: %v", update.ChecksumsFileName, err)
 		fmt.Fprintf(stderr, "Cannot download %s: %v.\n", update.ChecksumsFileName, err)
 		return ExitError
 	}
 	if err := update.VerifyChecksums(checksums, update.ArchiveName(release.Tag), archiveData); err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_CHECKSUM_ERROR", "checksum verification failed for %s: %v", release.Tag, err)
 		fmt.Fprintf(stderr, "Aborting update: %v.\n", err)
 		return ExitError
 	}
 
 	binaryPath, err := env.StageBinary(archiveData, release.Tag)
 	if err != nil {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "staging binary failed for %s: %v", release.Tag, err)
 		fmt.Fprintf(stderr, "Aborting update: %v.\n", err)
 		return ExitError
 	}
@@ -110,6 +122,7 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	if len(installed) == 0 {
 		// Best-effort cleanup: the primary message below is what matters.
 		cleanupStaging(env, filepath.Dir(binaryPath))
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_NOT_INSTALLED", "yups is not installed")
 		fmt.Fprintf(stdout, "%s is not installed; run 'yups --install-yups' instead of updating.\n", ProgramName)
 		return ExitError
 	}
@@ -118,6 +131,7 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	// duplicates are reported and left untouched.
 	keeper, duplicates := firstInPath(env, installed)
 	if len(duplicates) > 0 {
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_MULTIPLE_BINARIES", "several copies found (%s)", quotedJoin(duplicates))
 		fmt.Fprintf(stdout,
 			"Warning: %s is installed in several places (%s); only %s will be updated, duplicates are left untouched.\n",
 			ProgramName, quotedJoin(duplicates), filepath.Join(keeper, ProgramName))
@@ -129,6 +143,7 @@ func Update(env *Env, stdout, stderr io.Writer) int {
 	if err := env.ExecSelf(binaryPath, argv); err != nil {
 		// Best-effort cleanup: the exec failure is the error to report.
 		cleanupStaging(env, stagingDir)
+		sessionlog.RecordIncident(home, "", "yups --update-yups", "UPDATE_ERROR", "cannot exec %s: %v", binaryPath, err)
 		fmt.Fprintf(stderr, "Cannot hand over to the new binary: %v.\n", err)
 		return ExitError
 	}
@@ -209,6 +224,9 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 	exitCode := ExitOK
 	if len(blocked) > 0 {
 		exitCode = ExitError
+		if home, err := env.UserHomeDir(); err == nil {
+			sessionlog.RecordIncident(home, "", "yups --update-apply", "UPDATE_PERMISSION_DENIED", "could not update %s", strings.Join(blocked, ", "))
+		}
 		fmt.Fprintf(stdout, "Could not update %s.\n", strings.Join(blocked, ", "))
 		if isAdmin(env) {
 			fmt.Fprint(stdout, "You have administrator privileges: retry the previous command with sudo (sudo !!).\n")
@@ -219,21 +237,26 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 		// exact command line, which still points at the staged binary.
 	}
 
-	// Record progress before anything else can fail: config.version is
-	// updated to the newly running version. A corrupt config is reported
+	// Record progress before anything else can fail: state.version is
+	// updated to the newly running version. A corrupt state is reported
 	// but does not abort: the binaries are already replaced; migrations
 	// track themselves in state.toml independently.
 	home, homeErr := env.UserHomeDir()
 	if homeErr != nil {
-		fmt.Fprintf(stdout, "Warning: cannot locate the home directory (%v); config.version and migrations skipped.\n", homeErr)
+		fmt.Fprintf(stdout, "Warning: cannot locate the home directory (%v); state.version and migrations skipped.\n", homeErr)
 	} else if err := recordUpdateProgress(env, home, stdout); err != nil {
 		fmt.Fprintf(stdout, "Warning: %v.\n", err)
 	}
 
 	if homeErr == nil {
+		stateFile := config.StatePath(home)
+		state, _ := env.LoadUpdateState(stateFile)
 		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
 			cheatsDir := config.CheatsheetsDir(home)
-			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+			if updated, err := env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, state.Cheatsheets, stdout); err == nil && updated != nil {
+				state.Cheatsheets = updated
+				_ = env.SaveUpdateState(stateFile, state)
+			}
 		}
 		applied, err := RunMigrations(env, home, Version)
 		if err != nil {
@@ -243,6 +266,8 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "Applied %d migration(s).\n", applied)
 		}
 		EnsureBashBindingUpdated(env, home, stdout, stderr)
+		_ = EnsureScriptsUpdated(env, home)
+		_ = EnsureAssetsUpdated(env, home)
 	}
 
 	if len(blocked) == 0 {
@@ -255,18 +280,22 @@ func UpdateApply(env *Env, args []string, stdout, stderr io.Writer) int {
 	return exitCode
 }
 
-// recordUpdateProgress sets config.version to the newly installed version.
+// recordUpdateProgress sets state.version to the newly installed version
+// and cleans any legacy version string from config.toml.
 func recordUpdateProgress(env *Env, home string, stdout io.Writer) error {
 	cfgPath := config.Path(home)
-	cfg, err := env.LoadConfig(cfgPath)
+	_, _, _ = config.CleanLegacyVersion(cfgPath)
+
+	statePath := config.StatePath(home)
+	state, err := env.LoadUpdateState(statePath)
 	if err != nil {
-		return fmt.Errorf("cannot read %s (%v); config.version not updated", cfgPath, err)
+		state = State{Version: config.FloorVersion, LastApplied: config.FloorVersion}
 	}
-	if !config.SetVersion(&cfg, Version) {
+	if !state.SetVersion(Version) {
 		return nil
 	}
-	if err := env.SaveConfig(cfgPath, cfg); err != nil {
-		return fmt.Errorf("cannot write %s: %w", cfgPath, err)
+	if err := env.SaveUpdateState(statePath, state); err != nil {
+		return fmt.Errorf("cannot write %s: %w", statePath, err)
 	}
 	return nil
 }

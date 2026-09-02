@@ -44,12 +44,16 @@ type DocEnv struct {
 	MaxToolTurns         int
 	MaxToolOutputBytes   int
 	AdvancedMultiplier   int
+	NoLimits             bool
 	IsTerminalOutput     func(w io.Writer) bool
 	AskConfirmation      func(prompt string, defaultYes bool) bool
 	AskPrompt            func(prompt, defaultValue string) string
 	AskEditPrompt        func(prompt, initialValue string) string
+	FlushStdin           func()
 	ExecShell            func(command string, stdout, stderr io.Writer) int
 	CheatsheetsDir       string
+	ScriptsDir           string
+	OpenEditor           func(path string, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
 // Resolver coordinates documentation lookup across multiple sources.
@@ -332,6 +336,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 			r.env.MaxToolTurns,
 			r.env.MaxToolOutputBytes,
 			r.env.AdvancedMultiplier,
+			r.env.NoLimits,
 		)
 		r.env.Logger.LogModelResolution(model, isAdvanced, modelReason)
 	}
@@ -379,7 +384,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 	}
 
 	// Advanced model applies multiplier to all limits
-	if isAdvanced {
+	if isAdvanced && !r.env.NoLimits {
 		mult := r.env.AdvancedMultiplier
 		if mult <= 0 {
 			mult = 3
@@ -392,8 +397,9 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 	isTTY := r.env.IsTerminalOutput != nil && statusWriter != nil && r.env.IsTerminalOutput(statusWriter)
 	color := isTTY
 	executedTools := make(map[string]bool)
+	emptyRetryCount := 0
 
-	for turn := 0; turn < maxToolTurns; turn++ {
+	for turn := 0; r.env.NoLimits || turn < maxToolTurns; turn++ {
 		spinMsg := fmt.Sprintf("Querying model (%s)...", model)
 		if isAdvanced {
 			spinMsg = fmt.Sprintf("Querying advanced model (%s)...", model)
@@ -401,14 +407,107 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		spinner := ui.StartSpinner(statusWriter, spinMsg, isTTY, color)
 
 		chatStart := time.Now()
-		turnCtx, turnCancel := context.WithTimeout(ctx, llmTimeout)
+		reqCtx, reqCancel := context.WithCancel(ctx)
+		type chatResult struct {
+			resp llm.ChatResponse
+			err  error
+		}
+		resCh := make(chan chatResult, 1)
 		reqPayload := llm.ChatRequest{
 			Model:    model,
 			Messages: exp.Conversation,
 			Tools:    llm.DefaultTools(),
 		}
-		resp, err := r.env.LLMClient.Chat(turnCtx, reqPayload)
-		turnCancel()
+		go func() {
+			r, e := r.env.LLMClient.Chat(reqCtx, reqPayload)
+			resCh <- chatResult{resp: r, err: e}
+		}()
+
+		var resp llm.ChatResponse
+		var err error
+
+		if r.env.NoLimits {
+			select {
+			case <-ctx.Done():
+				reqCancel()
+				err = ctx.Err()
+				goto QueryFinished
+
+			case res := <-resCh:
+				reqCancel()
+				resp = res.resp
+				err = res.err
+				goto QueryFinished
+			}
+		} else {
+			timer := time.NewTimer(llmTimeout)
+			for {
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					reqCancel()
+					err = ctx.Err()
+					goto QueryFinished
+
+				case res := <-resCh:
+					timer.Stop()
+					reqCancel()
+					resp = res.resp
+					err = res.err
+					goto QueryFinished
+
+				case <-timer.C:
+					spinner.Stop()
+					if statusWriter != nil {
+						fmt.Fprintf(statusWriter, "\nExecution limit reached: query taking longer than %v (model is still running in background)...\n", llmTimeout)
+					}
+					if r.env.Logger != nil {
+						r.env.Logger.LogIncident("LLM_TIMEOUT", "Turn %d: query exceeded timeout checkpoint %v", turn, llmTimeout)
+						r.env.Logger.LogLimitReached("timeout", fmt.Sprintf("exceeded timeout checkpoint %v", llmTimeout), false)
+					}
+
+					abort := true
+					if r.env.AskConfirmation != nil {
+						abort = r.env.AskConfirmation("Do you want to abort execution?", true)
+					}
+					if r.env.Logger != nil {
+						r.env.Logger.LogLimitReached("timeout-prompt", fmt.Sprintf("abort=%t", abort), abort)
+					}
+
+					if abort {
+						reqCancel()
+						if statusWriter != nil {
+							fmt.Fprintln(statusWriter, "Execution aborted.")
+						}
+						exp.LLMError = "execution aborted after timeout"
+						if r.env.Logger != nil {
+							r.env.Logger.LogIncident("USER_ABORT", "execution aborted by user after LLM timeout")
+						}
+						return errors.New("execution aborted after timeout")
+					}
+
+					// Check if result arrived while user was answering prompt
+					select {
+					case res := <-resCh:
+						reqCancel()
+						resp = res.resp
+						err = res.err
+						goto QueryFinished
+					default:
+					}
+
+					if statusWriter != nil {
+						fmt.Fprintln(statusWriter, "You can stop execution at any time using Ctrl+C or Ctrl+Z.")
+					}
+
+					llmTimeout *= 2
+					timer.Reset(llmTimeout)
+					spinner = ui.StartSpinner(statusWriter, spinMsg, isTTY, color)
+				}
+			}
+		}
+
+	QueryFinished:
 		spinner.Stop()
 		chatDuration := time.Since(chatStart)
 
@@ -417,67 +516,9 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		}
 
 		if err != nil {
-			// Check if error was due to timeout
-			isTimeout := errors.Is(err, context.DeadlineExceeded) ||
-				strings.Contains(strings.ToLower(err.Error()), "timeout") ||
-				strings.Contains(strings.ToLower(err.Error()), "deadline")
-			if isTimeout {
-				if statusWriter != nil {
-					fmt.Fprintf(statusWriter, "\nExecution limit reached: query timed out after %v.\n", llmTimeout)
-				}
-				if r.env.Logger != nil {
-					r.env.Logger.LogLimitReached("timeout", fmt.Sprintf("timed out after %v: %v", llmTimeout, err), false)
-				}
-
-				abort := true
-				if r.env.AskConfirmation != nil {
-					abort = r.env.AskConfirmation("Do you want to abort execution?", true)
-				}
-				if r.env.Logger != nil {
-					r.env.Logger.LogLimitReached("timeout_prompt", fmt.Sprintf("abort=%t", abort), abort)
-				}
-
-				if abort {
-					if statusWriter != nil {
-						fmt.Fprintln(statusWriter, "Execution aborted.")
-					}
-					exp.LLMError = "execution aborted after timeout"
-					return nil
-				}
-
-				// User decided NOT to abort
-				if statusWriter != nil {
-					fmt.Fprintln(statusWriter, "You can stop execution at any time using Ctrl+C or Ctrl+Z.")
-				}
-
-				if !isAdvanced {
-					model = r.env.AdvancedModel
-					if model == "" {
-						model = llm.FallbackAdvancedModel
-					}
-					isAdvanced = true
-					mult := r.env.AdvancedMultiplier
-					if mult <= 0 {
-						mult = 3
-					}
-					maxToolTurns = turn + (r.env.MaxToolTurns * mult)
-					llmTimeout = llmTimeout * time.Duration(mult)
-					toolTimeout = toolTimeout * time.Duration(mult)
-					if statusWriter != nil {
-						fmt.Fprintf(statusWriter, "Switching to advanced reasoning model (%s) to continue analysis (this may take longer due to deeper reasoning)...\n", model)
-					}
-				} else {
-					llmTimeout = llmTimeout * 2
-					maxToolTurns = turn + 5
-					if statusWriter != nil {
-						fmt.Fprintf(statusWriter, "Continuing with advanced model (%s) with extended timeout (%v)...\n", model, llmTimeout)
-					}
-				}
-				continue
-			}
-
 			exp.LLMError = err.Error()
 			if r.env.Logger != nil {
+				r.env.Logger.LogIncident("LLM_QUERY_ERROR", "Turn %d: inference failed: %v", turn, err)
 				r.env.Logger.LogConclusion("", "", "", "ERROR: "+err.Error(), 0)
 			}
 			return err
@@ -486,6 +527,54 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		chatResp = resp
 
 		toolCalls := llm.ExtractToolCalls(chatResp.Message)
+		contentTrimmed := strings.TrimSpace(chatResp.Message.Content)
+
+		// Handle empty responses from LLM (no content and no tool calls)
+		if len(toolCalls) == 0 && contentTrimmed == "" {
+			emptyRetryCount++
+			if emptyRetryCount < 2 {
+				if r.env.Logger != nil {
+					r.env.Logger.LogIncident("EMPTY_RESPONSE_RETRY", "Turn %d: model %s returned empty response, retrying with error/restriction reminder...", turn, model)
+				}
+				var originalUserInput string
+				if len(exp.Conversation) > 1 && exp.Conversation[1].Role == "user" {
+					originalUserInput = exp.Conversation[1].Content
+				}
+				retryPrompt := "Your previous response was completely empty. If you encountered an error, constraint, difficulty, or security restriction that prevents you from completing the task, DO NOT return a blank response. Explain the error, restriction, or problem in the \"explanation\" field (with \"suggested-command\" and \"suggested-script\" left empty)."
+				if originalUserInput != "" {
+					retryPrompt = fmt.Sprintf("Your previous response was completely empty.\n\nPlease address the user request:\n%s\n\nIf you encountered an error, constraint, difficulty, or security restriction that prevents you from completing the task, DO NOT return a blank response. Explain the error, restriction, or problem in the \"explanation\" field (with \"suggested-command\" and \"suggested-script\" left empty).", originalUserInput)
+				}
+				exp.Conversation = append(exp.Conversation,
+					llm.Message{
+						Role:    "assistant",
+						Content: "",
+					},
+					llm.Message{
+						Role:    "user",
+						Content: retryPrompt,
+					},
+				)
+				turn--
+				continue
+			}
+			// Second consecutive empty response
+			if r.env.Logger != nil {
+				r.env.Logger.LogIncident("EMPTY_RESPONSE_ABORT", "Turn %d: model %s returned empty response twice consecutively", turn, model)
+			}
+			if statusWriter != nil {
+				if color {
+					theme := ui.GetTheme()
+					fmt.Fprintf(statusWriter, "\n%sWarning:%s The model %s returned an empty response.\n", theme.Warning, theme.Reset, model)
+				} else {
+					fmt.Fprintf(statusWriter, "\nWarning: The model %s returned an empty response.\n", model)
+				}
+			}
+			exp.LLMError = "model returned empty response"
+			break
+		}
+
+		emptyRetryCount = 0
+
 		if len(toolCalls) == 0 {
 			break
 		}
@@ -505,18 +594,20 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 				Subcommand: sName,
 			}
 			help := r.getHelp(ctx, cName, sName)
-			if len(help) > maxOutputBytes {
+			if !r.env.NoLimits && len(help) > maxOutputBytes {
 				help = help[:maxOutputBytes] + "\n... (truncated)"
 			}
 			doc.HelpOutput = help
 
 			man := r.getMan(ctx, cName, sName)
-			maxMan := maxOutputBytes * 3 / 4
-			if help != "" {
-				maxMan = maxOutputBytes * 3 / 8
-			}
-			if len(man) > maxMan {
-				man = man[:maxMan] + "\n... (truncated)"
+			if !r.env.NoLimits {
+				maxMan := maxOutputBytes * 3 / 4
+				if help != "" {
+					maxMan = maxOutputBytes * 3 / 8
+				}
+				if len(man) > maxMan {
+					man = man[:maxMan] + "\n... (truncated)"
+				}
 			}
 			doc.ManOutput = man
 
@@ -560,7 +651,8 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 					docStart := time.Now()
 					doc := gatherDoc(targetCmd, targetSub)
 					docDuration := time.Since(docStart)
-					toolContent := llm.FormatToolResponse(doc)
+					nonce := llm.ExtractNonce(exp.Conversation)
+					toolContent := llm.FormatToolResponse(doc, nonce)
 					exp.Conversation = append(exp.Conversation, llm.Message{
 						Role:    "tool",
 						Content: toolContent,
@@ -578,17 +670,24 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 				}
 
 				if cmdToRun != "" {
+					nonce := llm.ExtractNonce(exp.Conversation)
 					allowed, reason := ValidateWhitelistedCommand(cmdToRun)
 					if !allowed {
 						if statusWriter != nil {
 							fmt.Fprintf(statusWriter, "  LLM requested command '%s' (blocked: %s)\n", cmdToRun, reason)
 						}
-						errMsg := fmt.Sprintf("Error: Command %q was rejected by whitelist: %s. Only safe inspection commands are permitted.", cmdToRun, reason)
+						var errMsg string
+						if nonce != "" {
+							errMsg = fmt.Sprintf("<tool-output-%s name=%q command=%q>\nError: Command %q was rejected by whitelist: %s. Only safe inspection commands are permitted.\n</tool-output-%s>", nonce, "command-run", cmdToRun, cmdToRun, reason, nonce)
+						} else {
+							errMsg = fmt.Sprintf("Error: Command %q was rejected by whitelist: %s. Only safe inspection commands are permitted.", cmdToRun, reason)
+						}
 						exp.Conversation = append(exp.Conversation, llm.Message{
 							Role:    "tool",
 							Content: errMsg,
 						})
 						if r.env.Logger != nil {
+							r.env.Logger.LogIncident("TOOL_WHITELIST_REJECTED", "Turn %d: command %q rejected by whitelist: %s", turn, cmdToRun, reason)
 							r.env.Logger.LogToolExecution(turn, "command-run", tc.Function.Arguments, false, reason, errMsg, 0, nil)
 						}
 					} else {
@@ -598,42 +697,62 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 						}
 
 						execStart := time.Now()
-						cmdTimeout := toolTimeout
-						if cmdTimeout > 15*time.Second {
-							cmdTimeout = 15 * time.Second
+						var cmdTimeout time.Duration
+						if !r.env.NoLimits {
+							cmdTimeout = toolTimeout
+							if cmdTimeout > 15*time.Second {
+								cmdTimeout = 15 * time.Second
+							}
 						}
 						output, err := r.execWhitelisted(ctx, cmdToRun, cmdTimeout)
 						execDuration := time.Since(execStart)
 
-						isTimeout := errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || (err != nil && (strings.Contains(err.Error(), "killed") || strings.Contains(err.Error(), "signal: interrupt")))
+						isTimeout := !r.env.NoLimits && (errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || (err != nil && (strings.Contains(err.Error(), "killed") || strings.Contains(err.Error(), "signal: interrupt"))))
 
 						if isTimeout {
 							if statusWriter != nil {
 								fmt.Fprintf(statusWriter, "  Command execution timed out after %v (cancelled).\n", cmdTimeout)
 							}
-							outStr := fmt.Sprintf("Error: Command %q timed out after %v. Inspection commands must complete quickly. Please refine your command with limits (e.g. use maxdepth, head, or specific paths to avoid heavy scans).", cmdToRun, cmdTimeout)
+							var outStr string
+							if nonce != "" {
+								outStr = fmt.Sprintf("<tool-output-%s name=%q command=%q>\nError: Command %q timed out after %v. Inspection commands must complete quickly. Please refine your command with limits (e.g. use maxdepth, head, or specific paths to avoid heavy scans).\n</tool-output-%s>", nonce, "command-run", cmdToRun, cmdToRun, cmdTimeout, nonce)
+							} else {
+								outStr = fmt.Sprintf("Error: Command %q timed out after %v. Inspection commands must complete quickly. Please refine your command with limits (e.g. use maxdepth, head, or specific paths to avoid heavy scans).", cmdToRun, cmdTimeout)
+							}
 							exp.Conversation = append(exp.Conversation, llm.Message{
 								Role:    "tool",
 								Content: outStr,
 							})
 							if r.env.Logger != nil {
+								r.env.Logger.LogIncident("TOOL_TIMEOUT", "Turn %d: command %q timed out after %v", turn, cmdToRun, cmdTimeout)
 								r.env.Logger.LogToolExecution(turn, "command-run", tc.Function.Arguments, false, "timeout", outStr, execDuration, err)
 							}
 						} else {
-							if err != nil && len(output) == 0 {
-								output = fmt.Appendf([]byte(""), "Error executing command: %v", err)
+							if err != nil {
+								if len(output) == 0 {
+									output = fmt.Appendf([]byte(""), "Error executing command: %v", err)
+								}
+								if r.env.Logger != nil {
+									r.env.Logger.LogIncident("TOOL_ERROR", "Turn %d: command %q failed: %v", turn, cmdToRun, err)
+								}
 							}
 							outStr := string(output)
-							if len(outStr) > maxOutputBytes {
+							if !r.env.NoLimits && len(outStr) > maxOutputBytes {
 								outStr = outStr[:maxOutputBytes] + "\n... (truncated)"
+							}
+							var toolMsgContent string
+							if nonce != "" {
+								toolMsgContent = fmt.Sprintf("<tool-output-%s name=%q command=%q>\nCommand '%s' output:\n%s\n</tool-output-%s>", nonce, "command-run", cmdToRun, cmdToRun, strings.TrimSpace(outStr), nonce)
+							} else {
+								toolMsgContent = fmt.Sprintf("Command '%s' output:\n%s", cmdToRun, strings.TrimSpace(outStr))
 							}
 							exp.Conversation = append(exp.Conversation, llm.Message{
 								Role:    "tool",
-								Content: fmt.Sprintf("Command '%s' output:\n%s", cmdToRun, strings.TrimSpace(outStr)),
+								Content: toolMsgContent,
 							})
 
 							if r.env.Logger != nil {
-								r.env.Logger.LogToolExecution(turn, "command-run", tc.Function.Arguments, true, reason, outStr, execDuration, err)
+								r.env.Logger.LogToolExecution(turn, "command-run", tc.Function.Arguments, true, reason, toolMsgContent, execDuration, err)
 							}
 						}
 					}
@@ -641,13 +760,41 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 			}
 		}
 
+		// Append a follow-up user turn to ensure Jinja chat templates (e.g. Qwen 3.x / Ollama)
+		// that require a user query after tool outputs proceed smoothly without template exceptions.
+		nonce := llm.ExtractNonce(exp.Conversation)
+		var originalUserInput string
+		if len(exp.Conversation) > 1 && exp.Conversation[1].Role == "user" {
+			originalUserInput = exp.Conversation[1].Content
+		}
+
+		var followupContent string
+		if originalUserInput != "" {
+			if nonce != "" {
+				followupContent = fmt.Sprintf("The documentation and tool outputs have been gathered in <tool-output-%s> above. Do NOT call any more tools.\n\nNow fulfill the original user request:\n%s\n\nTask: Output your final response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\").", nonce, originalUserInput)
+			} else {
+				followupContent = fmt.Sprintf("The documentation and tool outputs have been gathered above. Do NOT call any more tools.\n\nNow fulfill the original user request:\n%s\n\nTask: Output your final response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\").", originalUserInput)
+			}
+		} else {
+			if nonce != "" {
+				followupContent = fmt.Sprintf("Now, using the documentation and outputs provided in <tool-output-%s>, fulfill the user request in <user-input-%s>. Do NOT call any more tools. Output your final response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\").", nonce, nonce)
+			} else {
+				followupContent = "Now, using the gathered tool outputs above, fulfill the user request in the initial user-input message. Do NOT call any more tools. Output your final response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\")."
+			}
+		}
+		exp.Conversation = append(exp.Conversation, llm.Message{
+			Role:    "user",
+			Content: followupContent,
+		})
+
 		// Check if this was the last allowed tool turn
-		if turn == maxToolTurns-1 {
+		if !r.env.NoLimits && turn == maxToolTurns-1 {
 			if statusWriter != nil {
 				fmt.Fprintf(statusWriter, "\nExecution limit reached: maximum reasoning tool rounds reached (%d turns).\n", maxToolTurns)
 			}
 			if r.env.Logger != nil {
-				r.env.Logger.LogLimitReached("max_turns", fmt.Sprintf("reached limit of %d turns", maxToolTurns), false)
+				r.env.Logger.LogIncident("MAX_TURNS_REACHED", "reached maximum reasoning turns limit (%d turns)", maxToolTurns)
+				r.env.Logger.LogLimitReached("max-turns", fmt.Sprintf("reached limit of %d turns", maxToolTurns), false)
 			}
 
 			abort := true
@@ -655,12 +802,15 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 				abort = r.env.AskConfirmation("Do you want to abort execution?", true)
 			}
 			if r.env.Logger != nil {
-				r.env.Logger.LogLimitReached("max_turns_prompt", fmt.Sprintf("abort=%t", abort), abort)
+				r.env.Logger.LogLimitReached("max-turns-prompt", fmt.Sprintf("abort=%t", abort), abort)
 			}
 
 			if abort {
 				if statusWriter != nil {
 					fmt.Fprintln(statusWriter, "Execution aborted.")
+				}
+				if r.env.Logger != nil {
+					r.env.Logger.LogIncident("USER_ABORT", "execution aborted by user after reaching max turns (%d)", maxToolTurns)
 				}
 				break
 			}
@@ -720,6 +870,9 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		r.env.Logger.LogConclusion(exp.LLMExplanation, exp.SuggestedCommand, exp.SuggestedScript, status, 0)
 	}
 
+	if exp.LLMError != "" {
+		return errors.New(exp.LLMError)
+	}
 	return nil
 }
 
@@ -752,8 +905,19 @@ func (r *Resolver) QueryLLM(ctx context.Context, cmd *Command, exp *CommandExpla
 }
 
 func (r *Resolver) execWhitelisted(ctx context.Context, cmdStr string, toolTimeout time.Duration) ([]byte, error) {
-	if toolTimeout <= 0 {
-		toolTimeout = 5 * time.Second
+	if r.env.NoLimits || toolTimeout <= 0 {
+		if r.env.RunCmdTimeout != nil {
+			return r.env.RunCmdTimeout(ctx, 0, "bash", "-c", cmdStr)
+		}
+		cmd := exec.CommandContext(ctx, "bash", "-c", cmdStr)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			if cmd.Process != nil && cmd.Process.Pid > 0 {
+				return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+			return nil
+		}
+		return cmd.CombinedOutput()
 	}
 	if r.env.RunCmdTimeout != nil {
 		return r.env.RunCmdTimeout(ctx, toolTimeout, "bash", "-c", cmdStr)

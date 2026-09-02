@@ -2,14 +2,21 @@ package llm
 
 import (
 	"strings"
+	"time"
 )
+
+// HistoryEntry represents a single shell history command with optional timestamp.
+type HistoryEntry struct {
+	Timestamp string
+	Command   string
+}
 
 // LLMEnv defines the environment operations needed to collect system context.
 type LLMEnv interface {
 	UserHomeDir() (string, error)
 	Getwd() (string, error)
 	ReadOSRelease() string
-	ReadHistory(home string, maxLines int) []string
+	ReadHistory(home string, maxLines int) []HistoryEntry
 	ReadFileSnippet(path string, maxLines int) (string, error)
 	ListDirNames(dir string, maxItems int) []string
 }
@@ -21,7 +28,8 @@ type SystemContext struct {
 	CWDListing    []string
 	ParentListing []string
 	FileSnippets  map[string]string // filepath -> text snippet
-	RecentHistory []string
+	RecentHistory []HistoryEntry
+	CurrentTime   string
 }
 
 // CheatsheetDoc represents a single cheatsheet snippet.
@@ -41,10 +49,11 @@ type CommandDoc struct {
 }
 
 // GatherContext collects low-cost system context (distro, cwd, directory files,
-// referenced file snippets, and recent shell history) to give the LLM situational awareness.
+// referenced file snippets, current time, and recent shell history) to give the LLM situational awareness.
 func GatherContext(env LLMEnv, referencedFiles []string) SystemContext {
 	ctx := SystemContext{
 		FileSnippets: make(map[string]string),
+		CurrentTime:  time.Now().Format("2006-01-02 15:04:05"),
 	}
 	if env == nil {
 		return ctx

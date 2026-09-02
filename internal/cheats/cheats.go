@@ -74,24 +74,77 @@ type CheatsheetEntry struct {
 	Content string // text / markdown content
 }
 
+// UpdateInterval defines how often cheatsheets are refreshed from upstream (7 days).
+const UpdateInterval = 7 * 24 * time.Hour
+
 // DownloadAll fetches all configured cheatsheet sources and unpacks them under
 // destBaseDir with path traversal checks and explicit attribution logging.
 func DownloadAll(client *http.Client, destBaseDir string, stdout io.Writer) error {
+	_, err := Sync(client, destBaseDir, nil, stdout)
+	return err
+}
+
+// Sync fetches configured cheatsheet sources conditionally: if a source directory exists
+// and was downloaded less than UpdateInterval ago, download is skipped.
+// Returns the updated map of source IDs to their RFC3339 download timestamp strings.
+func Sync(client *http.Client, destBaseDir string, cachedVersions map[string]string, stdout io.Writer) (map[string]string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
-
-	if err := os.MkdirAll(destBaseDir, 0755); err != nil {
-		return fmt.Errorf("cannot create cheatsheet directory %s: %w", destBaseDir, err)
+	if stdout == nil {
+		stdout = io.Discard
 	}
 
+	if err := os.MkdirAll(destBaseDir, 0755); err != nil {
+		return cachedVersions, fmt.Errorf("cannot create cheatsheet directory %s: %w", destBaseDir, err)
+	}
+
+	newVersions := make(map[string]string)
+	for k, v := range cachedVersions {
+		newVersions[k] = v
+	}
+
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339)
+
 	for idx, src := range DefaultSources {
+		targetDir := filepath.Join(destBaseDir, src.ID)
+		cachedTimeStr := ""
+		if cachedVersions != nil {
+			cachedTimeStr = cachedVersions[src.ID]
+			if cachedTimeStr == "" {
+				cachedTimeStr = cachedVersions["last-updated"]
+			}
+		}
+
+		// Check if local target directory exists and has files
+		hasLocalFiles := false
+		if entries, err := os.ReadDir(targetDir); err == nil && len(entries) > 0 {
+			hasLocalFiles = true
+		}
+
+		if hasLocalFiles && isTimestampFresh(cachedTimeStr, now) {
+			displayDate := cachedTimeStr
+			if t, err := time.Parse(time.RFC3339, cachedTimeStr); err == nil {
+				displayDate = t.Format("2006-01-02")
+			}
+			fmt.Fprintf(stdout, "[%d/%d] Cheatsheets from %s are up to date (downloaded %s).\n", idx+1, len(DefaultSources), src.Name, displayDate)
+			if cachedTimeStr != "" {
+				newVersions[src.ID] = cachedTimeStr
+			}
+			continue
+		}
+
 		fmt.Fprintf(stdout, "[%d/%d] Downloading cheatsheets from %s...\n", idx+1, len(DefaultSources), src.Name)
 		fmt.Fprintf(stdout, "  %s\n", src.Credit)
 
 		data, err := fetchWithRedirects(client, src.URL)
 		if err != nil {
-			fmt.Fprintf(stdout, "  Warning: could not download cheatsheets for %s: %v\n", src.Name, err)
+			if hasLocalFiles {
+				fmt.Fprintf(stdout, "  Warning: could not update %s cheatsheets: %v (using existing local copy)\n", src.Name, err)
+			} else {
+				fmt.Fprintf(stdout, "  Warning: could not download cheatsheets for %s: %v\n", src.Name, err)
+			}
 			continue
 		}
 
@@ -116,19 +169,31 @@ func DownloadAll(client *http.Client, destBaseDir string, stdout io.Writer) erro
 			continue
 		}
 
-		targetDir := filepath.Join(destBaseDir, src.ID)
 		_ = os.RemoveAll(targetDir)
 		if err := os.Rename(stagingDir, targetDir); err != nil {
-			// Fallback if rename fails across partitions
 			_ = os.RemoveAll(stagingDir)
 			fmt.Fprintf(stdout, "  Warning: could not install %s cheatsheets: %v\n", src.Name, err)
 			continue
 		}
 
+		newVersions[src.ID] = nowStr
+		newVersions["last-updated"] = nowStr
 		fmt.Fprintf(stdout, "  Extracted %d KB successfully.\n", len(data)/1024)
 	}
 
-	return nil
+	return newVersions, nil
+}
+
+func isTimestampFresh(timestampStr string, now time.Time) bool {
+	if timestampStr == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, timestampStr)
+	if err != nil {
+		return false
+	}
+	diff := now.Sub(t)
+	return diff >= 0 && diff < UpdateInterval
 }
 
 func fetchWithRedirects(client *http.Client, url string) ([]byte, error) {
@@ -148,7 +213,7 @@ func fetchWithRedirects(client *http.Client, url string) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+		return nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
 
 	return io.ReadAll(resp.Body)

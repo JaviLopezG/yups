@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // ModelInfo represents metadata of a local model reported by Ollama.
@@ -79,7 +78,7 @@ func DefaultTools() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "fetch-command-documentation",
-				Description: "Fetch detailed local manual page, --help output, and community cheatsheets (tldr-pages, navi, cheat.sh, cheat) for a specific command and optional subcommand.",
+				Description: "Fetch detailed local manual page, --help output, and community cheatsheets (tldr-pages, navi, cheat.sh, cheat) for a specific command and optional subcommand. You can request documentation for multiple commands by issuing multiple parallel tool calls.",
 				Parameters: ToolParams{
 					Type: "object",
 					Properties: map[string]ToolProp{
@@ -100,13 +99,13 @@ func DefaultTools() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "command-run",
-				Description: "You can ask for whitelisted commands execution. You can use any Bash way to combine them (&&, ||, |, ;, &). Avoid harmful commands.",
+				Description: "Execute a read-only whitelisted shell command to inspect system state. You can issue multiple parallel command-run tool calls or combine commands with Bash operators (&&, ||, |, ;, &).",
 				Parameters: ToolParams{
 					Type: "object",
 					Properties: map[string]ToolProp{
 						"command": {
 							Type:        "string",
-							Description: "The shell command to run (must only use whitelisted commands: ls, pwd, stat, file, du, df, find, locate, tree, cat, head, tail, grep, ps, free, uptime, lscpu, ip, ss, ping, dig, nslookup, etc.).",
+							Description: "The shell command to run (must only use whitelisted commands: ls, pwd, stat, file, du, df, find, locate, tree, cat, head, tail, grep, ps, free, uptime, lscpu, ip, ss, ping, dig, nslookup, which, whereis, uname, etc.).",
 						},
 					},
 					Required: []string{"command"},
@@ -149,7 +148,7 @@ type Client struct {
 // NewClient initializes an Ollama HTTP client for baseURL (e.g. "http://localhost:11434").
 func NewClient(httpClient *http.Client, baseURL string) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 90 * time.Second}
+		httpClient = &http.Client{}
 	}
 	cleanURL := strings.TrimRight(baseURL, "/")
 	if cleanURL == "" {

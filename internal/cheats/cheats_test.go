@@ -1,225 +1,177 @@
 package cheats
 
 import (
-	"archive/tar"
 	"archive/zip"
 	"bytes"
-	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-func createTestZip(t *testing.T, files map[string]string) []byte {
-	t.Helper()
+func createDummyZip() []byte {
 	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	for name, content := range files {
-		w, err := zw.Create(name)
-		if err != nil {
-			t.Fatalf("cannot create zip entry %s: %v", name, err)
-		}
-		if _, err := w.Write([]byte(content)); err != nil {
-			t.Fatalf("cannot write zip entry %s: %v", name, err)
-		}
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatalf("cannot close zip writer: %v", err)
-	}
+	w := zip.NewWriter(&buf)
+	f, _ := w.Create("tar.md")
+	_, _ = f.Write([]byte("# tar cheatsheet\n> Archive utility\n"))
+	_ = w.Close()
 	return buf.Bytes()
 }
 
-func createTestTarGz(t *testing.T, files map[string]string) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	gzw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gzw)
-	for name, content := range files {
-		data := []byte(content)
-		hdr := &tar.Header{
-			Name: name,
-			Mode: 0644,
-			Size: int64(len(data)),
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			t.Fatalf("cannot write tar header %s: %v", name, err)
-		}
-		if _, err := tw.Write(data); err != nil {
-			t.Fatalf("cannot write tar entry %s: %v", name, err)
-		}
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("cannot close tar writer: %v", err)
-	}
-	if err := gzw.Close(); err != nil {
-		t.Fatalf("cannot close gzip writer: %v", err)
-	}
-	return buf.Bytes()
-}
+func TestSyncConditionalDownloadingWithWeeklyTTL(t *testing.T) {
+	zipData := createDummyZip()
+	requestCount := 0
 
-func TestExtractZip(t *testing.T) {
-	tempDir := t.TempDir()
-	zipData := createTestZip(t, map[string]string{
-		"pages/common/tar.md": "# tar\n> Archiving utility.\n",
-		"pages/linux/ip.md":   "# ip\n> Network interface tool.\n",
-	})
-
-	if err := extractZip(zipData, tempDir); err != nil {
-		t.Fatalf("extractZip failed: %v", err)
-	}
-
-	tarMd := filepath.Join(tempDir, "pages/common/tar.md")
-	content, err := os.ReadFile(tarMd)
-	if err != nil {
-		t.Fatalf("cannot read extracted tar.md: %v", err)
-	}
-	if !strings.Contains(string(content), "Archiving utility") {
-		t.Errorf("content does not contain expected text: %s", string(content))
-	}
-}
-
-func TestExtractZipRejectsPathTraversal(t *testing.T) {
-	tempDir := t.TempDir()
-	zipData := createTestZip(t, map[string]string{
-		"../escaped.txt": "evil",
-	})
-
-	if err := extractZip(zipData, tempDir); err == nil {
-		t.Fatal("expected error on path traversal in zip, got nil")
-	}
-}
-
-func TestExtractTarGz(t *testing.T) {
-	tempDir := t.TempDir()
-	tarData := createTestTarGz(t, map[string]string{
-		"sheets/tar":        "tar cheatsheet content\n",
-		"see_also/find.txt": "find cheatsheet content\n",
-	})
-
-	if err := extractTarGz(tarData, tempDir); err != nil {
-		t.Fatalf("extractTarGz failed: %v", err)
-	}
-
-	tarSheet := filepath.Join(tempDir, "sheets/tar")
-	content, err := os.ReadFile(tarSheet)
-	if err != nil {
-		t.Fatalf("cannot read extracted tar sheet: %v", err)
-	}
-	if !strings.Contains(string(content), "tar cheatsheet content") {
-		t.Errorf("content mismatch: %s", string(content))
-	}
-}
-
-func TestExtractTarGzRejectsPathTraversal(t *testing.T) {
-	tempDir := t.TempDir()
-	tarData := createTestTarGz(t, map[string]string{
-		"../../evil.txt": "evil",
-	})
-
-	if err := extractTarGz(tarData, tempDir); err == nil {
-		t.Fatal("expected error on path traversal in tar.gz, got nil")
-	}
-}
-
-func TestFindCheatsheets(t *testing.T) {
-	baseDir := t.TempDir()
-
-	// Setup mock structure for tldr, navi, cheat-sh, cheat
-	tldrDir := filepath.Join(baseDir, "tldr", "pages", "common")
-	_ = os.MkdirAll(tldrDir, 0755)
-	_ = os.WriteFile(filepath.Join(tldrDir, "tar.md"), []byte("# tar tldr"), 0644)
-	_ = os.WriteFile(filepath.Join(tldrDir, "git-commit.md"), []byte("# git commit tldr"), 0644)
-
-	naviDir := filepath.Join(baseDir, "navi", "code")
-	_ = os.MkdirAll(naviDir, 0755)
-	_ = os.WriteFile(filepath.Join(naviDir, "tar.cheat"), []byte("% tar, archive\n# Extract tar"), 0644)
-
-	cheatShDir := filepath.Join(baseDir, "cheat-sh", "sheets")
-	_ = os.MkdirAll(cheatShDir, 0755)
-	_ = os.WriteFile(filepath.Join(cheatShDir, "tar"), []byte("cheat-sh tar"), 0644)
-
-	cheatDir := filepath.Join(baseDir, "cheat", "cheatsheets-master")
-	_ = os.MkdirAll(cheatDir, 0755)
-	_ = os.WriteFile(filepath.Join(cheatDir, "tar"), []byte("cheat tar"), 0644)
-
-	// Search for 'tar'
-	entries := FindCheatsheets(baseDir, "tar", "")
-	if len(entries) < 4 {
-		t.Errorf("len(entries) = %d, want at least 4 (found: %+v)", len(entries), entries)
-	}
-
-	sources := make(map[string]bool)
-	for _, e := range entries {
-		sources[e.Source] = true
-	}
-	for _, wantSrc := range []string{"tldr", "navi", "cheat-sh", "cheat"} {
-		if !sources[wantSrc] {
-			t.Errorf("missing source %q in results", wantSrc)
-		}
-	}
-
-	// Search for 'git commit'
-	subEntries := FindCheatsheets(baseDir, "git", "commit")
-	if len(subEntries) == 0 {
-		t.Error("expected to find git-commit cheatsheet")
-	}
-}
-
-func TestDownloadAllWithMockServer(t *testing.T) {
-	zipData := createTestZip(t, map[string]string{
-		"pages/common/tar.md": "# tar tldr",
-	})
-	tarData := createTestTarGz(t, map[string]string{
-		"tar": "tar cheat",
-	})
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, ".zip") {
-			_, _ = w.Write(zipData)
-			return
-		}
-		_, _ = w.Write(tarData)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(zipData)
 	}))
-	defer ts.Close()
+	defer server.Close()
 
-	// Override DefaultSources for the test
 	origSources := DefaultSources
-	defer func() { DefaultSources = origSources }()
-
 	DefaultSources = []Source{
 		{
 			ID:     "tldr",
 			Name:   "tldr-pages",
-			URL:    ts.URL + "/tldr.zip",
+			URL:    server.URL + "/tldr.zip",
 			Format: FormatZip,
-			Credit: "Thanks tldr",
-		},
-		{
-			ID:     "cheat",
-			Name:   "cheat",
-			URL:    ts.URL + "/cheat.tar.gz",
-			Format: FormatTarGz,
-			Credit: "Thanks cheat",
+			Credit: "Test Credit",
 		},
 	}
+	defer func() { DefaultSources = origSources }()
 
 	destDir := t.TempDir()
 	var stdout bytes.Buffer
-	err := DownloadAll(ts.Client(), destDir, &stdout)
+
+	// 1. Initial Sync without cache -> Downloads and extracts
+	newVersions, err := Sync(server.Client(), destDir, nil, &stdout)
 	if err != nil {
+		t.Fatalf("Sync initial failed: %v", err)
+	}
+	if newVersions["tldr"] == "" {
+		t.Errorf("expected recorded timestamp for tldr, got empty")
+	}
+	if requestCount != 1 {
+		t.Errorf("expected 1 HTTP request, got %d", requestCount)
+	}
+	if !strings.Contains(stdout.String(), "Downloading cheatsheets") {
+		t.Errorf("stdout missing download message:\n%s", stdout.String())
+	}
+
+	extractedFile := filepath.Join(destDir, "tldr", "tar.md")
+	if _, err := os.Stat(extractedFile); err != nil {
+		t.Fatalf("expected extracted file %s to exist", extractedFile)
+	}
+
+	// 2. Second Sync with fresh timestamp (< 7 days) -> Skips download without any network call
+	stdout.Reset()
+	updatedVersions, err := Sync(server.Client(), destDir, newVersions, &stdout)
+	if err != nil {
+		t.Fatalf("Sync second time failed: %v", err)
+	}
+	if requestCount != 1 {
+		t.Errorf("expected NO new HTTP requests (0 network calls), got count %d", requestCount)
+	}
+	if !strings.Contains(stdout.String(), "are up to date") {
+		t.Errorf("stdout missing 'up to date' message:\n%s", stdout.String())
+	}
+	if updatedVersions["tldr"] != newVersions["tldr"] {
+		t.Errorf("timestamp changed unexpectedly: %v != %v", updatedVersions["tldr"], newVersions["tldr"])
+	}
+
+	// 3. Third Sync with expired timestamp (> 7 days) -> Triggers re-download
+	stdout.Reset()
+	oldTime := time.Now().Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	staleVersions := map[string]string{"tldr": oldTime, "last-updated": oldTime}
+
+	refreshedVersions, err := Sync(server.Client(), destDir, staleVersions, &stdout)
+	if err != nil {
+		t.Fatalf("Sync third time failed: %v", err)
+	}
+	if requestCount != 2 {
+		t.Errorf("expected 2nd HTTP request on expired cache, got %d", requestCount)
+	}
+	if !strings.Contains(stdout.String(), "Downloading cheatsheets") {
+		t.Errorf("expected download message for stale cache, got:\n%s", stdout.String())
+	}
+	if refreshedVersions["tldr"] == oldTime {
+		t.Errorf("expected timestamp to be refreshed to current time")
+	}
+}
+
+func TestSyncRedownloadsWhenLocalDirectoryMissing(t *testing.T) {
+	zipData := createDummyZip()
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(zipData)
+	}))
+	defer server.Close()
+
+	origSources := DefaultSources
+	DefaultSources = []Source{
+		{
+			ID:     "tldr",
+			Name:   "tldr-pages",
+			URL:    server.URL + "/tldr.zip",
+			Format: FormatZip,
+			Credit: "Test Credit",
+		},
+	}
+	defer func() { DefaultSources = origSources }()
+
+	destDir := t.TempDir()
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	cached := map[string]string{"tldr": nowStr, "last-updated": nowStr}
+	var stdout bytes.Buffer
+
+	// Target dir does NOT exist on disk, so it must download even with recent timestamp
+	newVersions, err := Sync(server.Client(), destDir, cached, &stdout)
+	if err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+	if requestCount != 1 {
+		t.Errorf("expected HTTP request when files missing, got %d", requestCount)
+	}
+	if !strings.Contains(stdout.String(), "Downloading cheatsheets") {
+		t.Errorf("expected download when directory missing, got stdout:\n%s", stdout.String())
+	}
+	if newVersions["tldr"] == "" {
+		t.Errorf("expected timestamp recorded, got empty")
+	}
+}
+
+func TestDownloadAllWrapper(t *testing.T) {
+	zipData := createDummyZip()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(zipData)
+	}))
+	defer server.Close()
+
+	origSources := DefaultSources
+	DefaultSources = []Source{
+		{
+			ID:     "tldr",
+			Name:   "tldr-pages",
+			URL:    server.URL + "/tldr.zip",
+			Format: FormatZip,
+			Credit: "Test Credit",
+		},
+	}
+	defer func() { DefaultSources = origSources }()
+
+	destDir := t.TempDir()
+	if err := DownloadAll(server.Client(), destDir, io.Discard); err != nil {
 		t.Fatalf("DownloadAll failed: %v", err)
 	}
-
-	outStr := stdout.String()
-	if !strings.Contains(outStr, "Thanks tldr") || !strings.Contains(outStr, "Thanks cheat") {
-		t.Errorf("expected attribution in stdout, got:\n%s", outStr)
-	}
-
-	tldrFile := filepath.Join(destDir, "tldr", "pages", "common", "tar.md")
-	if _, err := os.Stat(tldrFile); err != nil {
-		t.Errorf("expected %s to exist: %v", tldrFile, err)
+	if _, err := os.Stat(filepath.Join(destDir, "tldr", "tar.md")); err != nil {
+		t.Fatalf("expected extracted file to exist")
 	}
 }

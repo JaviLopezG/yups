@@ -63,7 +63,7 @@ func setVersion(t *testing.T, v string) {
 // the fixed test endpoints.
 func releaseDocument(tag string) string {
 	return fmt.Sprintf(`{"tag_name": %q, "assets": [
-		{"name": "yups_%s_linux_amd64.tar.gz", "browser_download_url": %q},
+		{"name": "yups-%s-linux-amd64.tar.gz", "browser_download_url": %q},
 		{"name": %q, "browser_download_url": %q}]}`,
 		tag, tag, testArchiveURL, update.ChecksumsFileName, testChecksumsURL)
 }
@@ -81,7 +81,7 @@ func serveLatestRelease(fs *fakeFS, tag, archivePayload string) {
 	fs.httpResponses[testPrimaryAPI] = fakeResponse(http.StatusOK, document)
 	fs.httpResponses[testFallbackAPI] = fakeResponse(http.StatusOK, document)
 	fs.httpResponses[testArchiveURL] = fakeResponse(http.StatusOK, archivePayload)
-	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(archivePayload), "yups_"+tag+"_linux_amd64.tar.gz")
+	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(archivePayload), "yups-"+tag+"-linux-amd64.tar.gz")
 	fs.httpResponses[testChecksumsURL] = fakeResponse(http.StatusOK, checksums)
 }
 
@@ -134,7 +134,7 @@ func TestUpdateFallsBackWhenPrimarySourceFails(t *testing.T) {
 	fs.httpResponses[testFallbackAPI] = fakeResponse(http.StatusOK, releaseDocument("v1.1.0"))
 	fs.httpResponses[testArchiveURL] = fakeResponse(http.StatusOK, "payload")
 	fs.httpResponses[testChecksumsURL] = fakeResponse(http.StatusOK,
-		fmt.Sprintf("%s  yups_v1.1.0_linux_amd64.tar.gz\n", sha256Hex("payload")))
+		fmt.Sprintf("%s  yups-v1.1.0-linux-amd64.tar.gz\n", sha256Hex("payload")))
 	fs.stagedBinary = testStagingBinary
 	fs.addExecutable("/usr/bin/yups")
 
@@ -175,7 +175,7 @@ func TestUpdateBadChecksumAbortsUntouched(t *testing.T) {
 	fs.httpResponses[testPrimaryAPI] = fakeResponse(http.StatusOK, document)
 	fs.httpResponses[testArchiveURL] = fakeResponse(http.StatusOK, "tampered payload")
 	fs.httpResponses[testChecksumsURL] = fakeResponse(http.StatusOK,
-		fmt.Sprintf("%s  yups_v1.1.0_linux_amd64.tar.gz\n", sha256Hex("original payload")))
+		fmt.Sprintf("%s  yups-v1.1.0-linux-amd64.tar.gz\n", sha256Hex("original payload")))
 	fs.stagedBinary = testStagingBinary
 	fs.addExecutable("/usr/bin/yups")
 
@@ -322,14 +322,14 @@ func TestFirstInPath(t *testing.T) {
 	}
 }
 
-func TestUpdateApplyRecordsInstalledVersionInConfig(t *testing.T) {
+func TestUpdateApplyRecordsInstalledVersionInState(t *testing.T) {
 	tests := []struct {
 		name       string
 		configured string
 		want       string
 	}{
-		{"older config advances", "v0.9.0", "v1.1.0"},
-		{"downgrade updates config", "v2.0.0", "v1.1.0"},
+		{"older state advances", "v0.9.0", "v1.1.0"},
+		{"downgrade updates state", "v2.0.0", "v1.1.0"},
 	}
 
 	for _, tt := range tests {
@@ -337,19 +337,20 @@ func TestUpdateApplyRecordsInstalledVersionInConfig(t *testing.T) {
 			setVersion(t, "v1.1.0")
 			fs := newFakeFS()
 			storeConfig(fs, config.Config{
-				Version:          tt.configured,
 				YUPSRepo:         testRepoPrimary,
 				YUPSRepoFallback: testRepoFallback,
 			})
+			stateFile := config.StatePath(fs.home)
+			fs.states[stateFile] = State{Version: tt.configured, LastApplied: tt.configured}
 
 			out, code := runDispatch(t, fs.env(),
 				flagUpdateApply, "--from", "/tmp/yups-update-stage123.kk", "--installed", "/usr/bin")
 			if code != ExitOK {
 				t.Fatalf("exit code = %d, want %d (%s)", code, ExitOK, out)
 			}
-			got := fs.configs[config.Path(fs.home)].Version
+			got := fs.states[stateFile].Version
 			if got != tt.want {
-				t.Errorf("config.version = %q, want %q", got, tt.want)
+				t.Errorf("state.version = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -413,7 +414,7 @@ func TestRunMigrationsAppliesPendingInOrderAndRecordsProgress(t *testing.T) {
 	if strings.Join(ranSteps, ",") != "v1.1.0,v1.2.0" {
 		t.Errorf("ran = %v, want ascending order [v1.1.0 v1.2.0]", ranSteps)
 	}
-	if got := fs.stateLast[statePath(fs.home)]; got != "v1.2.0" {
+	if got := fs.states[statePath(fs.home)].LastApplied; got != "v1.2.0" {
 		t.Errorf("recorded progress = %q, want v1.2.0", got)
 	}
 }
@@ -449,7 +450,7 @@ func TestRunMigrationsSkipsAppliedAndOutOfRangeSteps(t *testing.T) {
 	ranSteps = nil
 
 	fs := newFakeFS()
-	fs.stateLast[statePath(fs.home)] = "v1.1.0" // v1.1.0 already applied
+	fs.states[statePath(fs.home)] = State{LastApplied: "v1.1.0"} // v1.1.0 already applied
 
 	applied, err := RunMigrations(fs.env(), fs.home, "v1.2.0")
 	if err != nil {
@@ -492,7 +493,7 @@ func TestRunMigrationsFailureStopsAndKeepsPreviousProgress(t *testing.T) {
 	if applied != 1 {
 		t.Errorf("applied = %d, want 1 (only the step before the failure)", applied)
 	}
-	if got := fs.stateLast[statePath(fs.home)]; got != "v1.1.0" {
+	if got := fs.states[statePath(fs.home)].LastApplied; got != "v1.1.0" {
 		t.Errorf("recorded progress = %q, want v1.1.0", got)
 	}
 }
@@ -714,7 +715,6 @@ func TestUpdateDowngradePrompt(t *testing.T) {
 		fs.addExecutable("/home/user/bin/yups")
 		fs.existingPaths[config.Dir(fs.home)] = true
 		storeConfig(fs, config.Config{
-			Version:          "v1.2.0",
 			YUPSRepo:         testRepoPrimary,
 			YUPSRepoFallback: testRepoFallback,
 		})
@@ -740,7 +740,6 @@ func TestUpdateDowngradePrompt(t *testing.T) {
 		fs.addExecutable("/home/user/bin/yups")
 		fs.existingPaths[config.Dir(fs.home)] = true
 		storeConfig(fs, config.Config{
-			Version:          "v1.2.0",
 			YUPSRepo:         testRepoPrimary,
 			YUPSRepoFallback: testRepoFallback,
 		})
@@ -764,7 +763,6 @@ func TestUpdateDowngradePrompt(t *testing.T) {
 		fs.addExecutable("/home/user/bin/yups")
 		fs.existingPaths[config.Dir(fs.home)] = true
 		storeConfig(fs, config.Config{
-			Version:          "dev",
 			YUPSRepo:         testRepoPrimary,
 			YUPSRepoFallback: testRepoFallback,
 		})

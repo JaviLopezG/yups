@@ -10,6 +10,7 @@ import (
 
 	"yups/internal/config"
 	"yups/internal/llm"
+	"yups/internal/sessionlog"
 )
 
 // Install implements `yups --install-yups`:
@@ -39,8 +40,10 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 	destDir := firstWritableDir(env, pathDirs)
 
 	yupsDirExists := false
+	var userHome string
 	if env.UserHomeDir != nil && env.PathExists != nil {
 		if home, err := env.UserHomeDir(); err == nil {
+			userHome = home
 			yupsDirExists = env.PathExists(config.Dir(home)) || env.PathExists(config.Path(home))
 		}
 	}
@@ -48,6 +51,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 	foundInPath := findInDirs(env, pathDirs, ProgramName)
 	if len(foundInPath) > 0 && yupsDirExists {
 		reportInstallAnomaly(env, foundInPath, stdout)
+		if userHome != "" {
+			sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_ALREADY_INSTALLED", "already installed in %s", quotedJoin(foundInPath))
+		}
 		fmt.Fprintf(stdout, "%s is already installed in %s.\n", ProgramName, quotedJoin(foundInPath))
 		return ExitOK
 	}
@@ -55,6 +61,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 	foundInKnown := findInDirs(env, env.KnownBinDirs(), ProgramName)
 	if len(foundInKnown) > 0 && yupsDirExists {
 		reportInstallAnomaly(env, foundInKnown, stdout)
+		if userHome != "" {
+			sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_ALREADY_INSTALLED", "already installed (found outside PATH in %s)", quotedJoin(foundInKnown))
+		}
 		fmt.Fprintf(stdout, "%s is already installed (found outside PATH in %s).\n", ProgramName, quotedJoin(foundInKnown))
 		return ExitOK
 	}
@@ -65,6 +74,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		destPath = filepath.Join(foundInPath[0], ProgramName)
 	} else {
 		if destDir == "" {
+			if userHome != "" {
+				sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_PERMISSION_DENIED", "none of the PATH directories is writable")
+			}
 			if isAdmin(env) {
 				fmt.Fprintf(stdout,
 					"Cannot install %s: none of the PATH directories is writable, but you have administrator privileges; retry the previous command with sudo (sudo !!).\n",
@@ -79,6 +91,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 
 		sourcePath, err := env.ExecutablePath()
 		if err != nil {
+			if userHome != "" {
+				sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_ERROR", "cannot determine executable path: %v", err)
+			}
 			fmt.Fprintf(stderr, "Cannot install %s: %v.\n", ProgramName, err)
 			return ExitError
 		}
@@ -86,6 +101,9 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 		var installErr error
 		destPath, installErr = env.InstallTo(sourcePath, destDir)
 		if installErr != nil {
+			if userHome != "" {
+				sessionlog.RecordIncident(userHome, "", "yups --install-yups", "INSTALL_ERROR", "cannot install to %s: %v", destDir, installErr)
+			}
 			fmt.Fprintf(stderr, "Cannot install %s: %v.\n", ProgramName, installErr)
 			return ExitError
 		}
@@ -99,15 +117,13 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 			cfg = config.Defaults()
 		}
 		config.EnsureDefaults(&cfg)
-		if cfg.Version == config.FloorVersion || cfg.Version == "" {
-			cfg.Version = Version
-		}
 
 		hasOllama := true
 		if env.AskConfirmation != nil {
 			hasOllama = env.AskConfirmation("Do you have an Ollama instance available for AI assistance?", true)
 		}
 
+		var discoveredModels []string
 		if !hasOllama {
 			cfg.Inference.Disabled = true
 			fmt.Fprintln(stdout, "Note: AI assistance is disabled (llm-disabled = true). yups will operate in fast local documentation mode (manpages, --help, wrappers, cheatsheets).")
@@ -119,96 +135,119 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 			}
 			cfg.Inference.Endpoint = endpoint
 
-			if env.HTTPClient != nil {
-				llmClient := llm.NewClient(env.HTTPClient(), endpoint)
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				models, err := llmClient.ListModels(ctx)
-				cancel()
-				if err == nil {
-					if len(models) > 0 {
-						def, adv := llm.SelectBestModels(models)
+			if env.HTTPClient != nil && env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout) {
+				endpoint := cfg.GetInferenceEndpoint()
+				if endpoint != "" {
+					llmClient := llm.NewClient(env.HTTPClient(), endpoint)
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					models, err := llmClient.ListModels(ctx)
+					cancel()
+					if err == nil {
+						if len(models) > 0 {
+							def, adv := llm.SelectBestModels(models)
 
-						var modelNames []string
-						hasQwen := false
-						hasGemma := false
-						for _, m := range models {
-							modelNames = append(modelNames, m.Name)
-							lower := strings.ToLower(m.Name)
-							if strings.Contains(lower, "qwen") {
-								hasQwen = true
+							var modelNames []string
+							hasQwen := false
+							hasGemma := false
+							for _, m := range models {
+								modelNames = append(modelNames, m.Name)
+								lower := strings.ToLower(m.Name)
+								if strings.Contains(lower, "qwen") {
+									hasQwen = true
+								}
+								if strings.Contains(lower, "gemma") {
+									hasGemma = true
+								}
 							}
-							if strings.Contains(lower, "gemma") {
-								hasGemma = true
+							discoveredModels = modelNames
+
+							fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
+
+							if env.AskPrompt != nil && (!hasQwen || !hasGemma) {
+								fmt.Fprintf(stdout, "\nRecommended models (%s for default, %s for advanced) are not fully available:\n", config.DefaultModel, config.DefaultAdvancedModel)
+								fmt.Fprintf(stdout, "  [1] Pull recommended models (%s and %s)\n", config.DefaultModel, config.DefaultAdvancedModel)
+								fmt.Fprintln(stdout, "  [2] Choose models from your installed list")
+								fmt.Fprintln(stdout, "  [3] Run model benchmark test (--test-models) and choose")
+								fmt.Fprintf(stdout, "  [4] Use automatic selection (%s / %s)\n", def, adv)
+
+								choice := strings.TrimSpace(env.AskPrompt("Model setup choice [1/2/3/4]", "4"))
+								switch choice {
+								case "1":
+									fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultModel)
+									pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+									_ = llmClient.PullModel(pullCtx, config.DefaultModel, stdout)
+									pullCancel()
+									def = config.DefaultModel
+
+									fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultAdvancedModel)
+									pullCtx2, pullCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
+									_ = llmClient.PullModel(pullCtx2, config.DefaultAdvancedModel, stdout)
+									pullCancel2()
+									adv = config.DefaultAdvancedModel
+
+									discoveredModels = append(discoveredModels, config.DefaultModel, config.DefaultAdvancedModel)
+
+								case "2":
+									def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
+								case "3":
+									RunModelBenchmark(env, stdout, stderr, nil)
+									def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
+								case "4", "":
+									// use automatic selection
+								}
 							}
-						}
-						cfg.Inference.AvailableModels = modelNames
 
-						fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
-
-						if env.AskPrompt != nil && (!hasQwen || !hasGemma) {
-							fmt.Fprintln(stdout, "\nRecommended models (qwen2.5-coder for default, qwen3.8 for advanced) are not fully available:")
-							fmt.Fprintln(stdout, "  [1] Pull recommended models (qwen2.5-coder:7b and qwen3.8:latest)")
-							fmt.Fprintln(stdout, "  [2] Choose models from your installed list")
-							fmt.Fprintln(stdout, "  [3] Run model benchmark test (--test-models) and choose")
-							fmt.Fprintf(stdout, "  [4] Use automatic selection (%s / %s)\n", def, adv)
-
-							choice := strings.TrimSpace(env.AskPrompt("Model setup choice [1/2/3/4]", "4"))
-							switch choice {
-							case "1":
-								fmt.Fprintln(stdout, "Pulling qwen2.5-coder:7b...")
+							cfg.Inference.DefaultModel = def
+							cfg.Inference.AdvancedModel = adv
+							fmt.Fprintf(stdout, "Configured models: default-model = %s, advanced-model = %s.\n", def, adv)
+						} else {
+							fmt.Fprintf(stdout, "Connected to Ollama at %s (no models found).\n", endpoint)
+							if env.AskConfirmation != nil && env.AskConfirmation(fmt.Sprintf("Would you like to pull the recommended %s model now?", config.DefaultModel), true) {
+								fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultModel)
 								pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-								_ = llmClient.PullModel(pullCtx, "qwen2.5-coder:7b", stdout)
+								if err := llmClient.PullModel(pullCtx, config.DefaultModel, stdout); err == nil {
+									cfg.Inference.DefaultModel = config.DefaultModel
+									cfg.Inference.AdvancedModel = config.DefaultModel
+									discoveredModels = []string{config.DefaultModel}
+								}
 								pullCancel()
-								def = "qwen2.5-coder:7b"
-
-								fmt.Fprintln(stdout, "Pulling qwen3.8:latest...")
-								pullCtx2, pullCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
-								_ = llmClient.PullModel(pullCtx2, "qwen3.8:latest", stdout)
-								pullCancel2()
-								adv = "qwen3.8:latest"
-
-								cfg.Inference.AvailableModels = append(cfg.Inference.AvailableModels, "qwen2.5-coder:7b", "qwen3.8:latest")
-
-							case "2":
-								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
-							case "3":
-								RunModelBenchmark(env, stdout, stderr, nil)
-								def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
-							case "4", "":
-								// use automatic selection
 							}
 						}
-
-						cfg.Inference.DefaultModel = def
-						cfg.Inference.AdvancedModel = adv
-						fmt.Fprintf(stdout, "Configured models: default-model = %s, advanced-model = %s.\n", def, adv)
 					} else {
-						fmt.Fprintf(stdout, "Connected to Ollama at %s (no models found).\n", endpoint)
-						if env.AskConfirmation != nil && env.AskConfirmation("Would you like to pull the recommended qwen2.5-coder:7b model now?", true) {
-							fmt.Fprintln(stdout, "Pulling qwen2.5-coder:7b...")
-							pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-							if err := llmClient.PullModel(pullCtx, "qwen2.5-coder:7b", stdout); err == nil {
-								cfg.Inference.DefaultModel = "qwen2.5-coder:7b"
-								cfg.Inference.AdvancedModel = "qwen2.5-coder:7b"
-								cfg.Inference.AvailableModels = []string{"qwen2.5-coder:7b"}
-							}
-							pullCancel()
-						}
+						fmt.Fprintf(stdout, "Ollama is not reachable at %s; yups will operate in basic mode until Ollama is available.\n", endpoint)
 					}
-				} else {
-					fmt.Fprintf(stdout, "Ollama is not reachable at %s; yups will operate in basic mode until Ollama is available.\n", endpoint)
 				}
 			}
 		}
 
-		// Download community cheatsheets
+		// Initialize state.toml with version, cheatsheets, and discovered models
+		stateFile := config.StatePath(home)
+		state, _ := env.LoadUpdateState(stateFile)
+		state.Version = Version
+		if state.LastApplied == "" || state.LastApplied == config.FloorVersion {
+			state.LastApplied = Version
+		}
+		if len(discoveredModels) > 0 {
+			state.AvailableModels = discoveredModels
+		}
+
+		// Download or sync community cheatsheets
 		if env.DownloadCheatsheets != nil && env.HTTPClient != nil {
 			cheatsDir := config.CheatsheetsDir(home)
-			_ = env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, stdout)
+			if updated, err := env.DownloadCheatsheets(env.HTTPClient(), cheatsDir, state.Cheatsheets, stdout); err == nil && updated != nil {
+				state.Cheatsheets = updated
+			}
 		}
+		_ = env.SaveUpdateState(stateFile, state)
 
 		// Configure bash key binding if desired
 		ConfigureBashBindingInteractively(env, home, stdout, stderr)
+
+		// Install utility scripts into ~/.yups/scripts/
+		_ = InstallScripts(env, home)
+
+		// Install static data and prompt assets into ~/.yups/data/ and ~/.yups/prompts/
+		_ = InstallAssets(env, home)
 
 		_ = env.SaveConfig(cfgPath, cfg)
 		fmt.Fprintf(stdout, "\nConfiguration saved to %s.\n", cfgPath)
@@ -233,6 +272,11 @@ func reportInstallAnomaly(env *Env, found []string, stdout io.Writer) {
 		return
 	}
 	keeper, others := firstInPath(env, found)
+	if env.UserHomeDir != nil {
+		if home, err := env.UserHomeDir(); err == nil {
+			sessionlog.RecordIncident(home, "", "yups --install-yups", "INSTALL_MULTIPLE_BINARIES", "multiple installations detected (%s)", quotedJoin(found))
+		}
+	}
 	fmt.Fprintf(stdout,
 		"Warning: %s is installed in several places (%s); operating on %s.\n",
 		ProgramName, quotedJoin(others), filepath.Join(keeper, ProgramName))

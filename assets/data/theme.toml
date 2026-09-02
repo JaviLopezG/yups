@@ -1,0 +1,27 @@
+# Semantic terminal theme and color palette for yups.
+# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
+# Levels of information:
+#   error:     errors, command/manual entry not found, unrecognised flags
+#   warning:   warnings, in-use keys, flag headings
+#   success:   suggested command, successful completion, available keys
+#   info:      LLM notices, explanation headers, pipeline operator summaries
+#   important: found command name, wrapper name, benchmark metrics
+#   prompt:    interactive choice prompts and questions
+#   muted:     comments, script line numbers, raw command line, env vars
+#   bold:      section titles and item names
+#   dim:       secondary or de-emphasized text
+#   underline: prompt choice shortcuts
+#   reset:     reset terminal attributes
+
+error = "\x1b[1;31m"
+warning = "\x1b[1;33m"
+success = "\x1b[1;32m"
+info = "\x1b[1;36m"
+important = "\x1b[38;5;39m"
+prompt = "\x1b[38;5;214m"
+muted = "\x1b[90m"
+
+bold = "\x1b[1m"
+dim = "\x1b[2m"
+underline = "\x1b[4m"
+reset = "\x1b[0m"

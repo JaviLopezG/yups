@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"yups/internal/config"
 	"yups/internal/explain"
 	"yups/internal/llm"
 	"yups/internal/sessionlog"
+	"yups/internal/ui"
 )
 
 // ModelBenchmarkResult holds the timing and quality evaluation for a single model.
@@ -21,19 +23,6 @@ type ModelBenchmarkResult struct {
 	Error    string
 }
 
-// ANSI escape codes for test-models output
-const (
-	ansiReset  = "\x1b[0m"
-	ansiBold   = "\x1b[1m"
-	ansiOrange = "\x1b[38;5;214m"
-	ansiBlue   = "\x1b[38;5;39m"
-	ansiCyan   = "\x1b[1;36m"
-	ansiGreen  = "\x1b[1;32m"
-	ansiRed    = "\x1b[1;31m"
-	ansiYellow = "\x1b[1;33m"
-	ansiGray   = "\x1b[90m"
-)
-
 // RunModelBenchmark tests all installed models against a standard prompt
 // ("ls -javi && yups -hV"), measuring latency and outputting a summary table
 // sorted from fastest to slowest.
@@ -42,6 +31,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 	if docEnv.LLMClient == nil {
 		fmt.Fprintln(stderr, "Error: No Ollama endpoint is configured. Run 'yups --install-yups' first.")
 		if logger != nil {
+			logger.LogIncident("NO_OLLAMA_ENDPOINT", "No Ollama endpoint configured")
 			logger.LogConclusion("", "", "", "NO_OLLAMA_ENDPOINT", ExitError)
 		}
 		return nil, ExitError
@@ -56,6 +46,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 	if err != nil {
 		fmt.Fprintf(stderr, "Error connecting to Ollama at %s: %v\n", endpoint, err)
 		if logger != nil {
+			logger.LogIncident("LLM_CONNECTION_ERROR", "Error connecting to Ollama at %s: %v", endpoint, err)
 			logger.LogConclusion("", "", "", fmt.Sprintf("OLLAMA_CONNECTION_ERROR: %v", err), ExitError)
 		}
 		return nil, ExitError
@@ -63,7 +54,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 
 	if len(models) == 0 {
 		fmt.Fprintf(stdout, "Connected to Ollama at %s, but no models are installed.\n", endpoint)
-		fmt.Fprintln(stdout, "Run 'ollama pull qwen2.5-coder:7b' to install a recommended model.")
+		fmt.Fprintf(stdout, "Run 'ollama pull %s' to install a recommended model.\n", config.DefaultModel)
 		if logger != nil {
 			logger.LogConclusion("", "", "", "NO_MODELS_INSTALLED", ExitOK)
 		}
@@ -80,12 +71,14 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 	}
 
 	estSeconds := len(models) * 30
+	theme := ui.GetTheme()
+
 	if color {
-		fmt.Fprintf(stdout, "%sDiscovered %d installed model(s) on Ollama at %s%s%s:\n", ansiBold, len(models), ansiBlue, endpoint, ansiReset)
+		fmt.Fprintf(stdout, "%sDiscovered %d installed model(s) on Ollama at %s%s%s:\n", theme.Bold, len(models), theme.Important, endpoint, theme.Reset)
 		for _, m := range models {
-			fmt.Fprintf(stdout, "  - %s%s%s\n", ansiCyan, m.Name, ansiReset)
+			fmt.Fprintf(stdout, "  - %s%s%s\n", theme.Info, m.Name, theme.Reset)
 		}
-		fmt.Fprintf(stdout, "\nBenchmark will test each model with standard query: %s%s'ls -javi && yups -hV'%s\n", ansiBold, ansiOrange, ansiReset)
+		fmt.Fprintf(stdout, "\nBenchmark will test each model with standard query: %s%s'ls -javi && yups -hV'%s\n", theme.Bold, theme.Prompt, theme.Reset)
 		fmt.Fprintf(stdout, "Estimated duration: ~%d seconds (%d models * ~30s).\n", estSeconds, len(models))
 	} else {
 		fmt.Fprintf(stdout, "Discovered %d installed model(s) on Ollama at %s:\n", len(models), endpoint)
@@ -112,8 +105,8 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 	var results []ModelBenchmarkResult
 
 	if color {
-		fmt.Fprintf(stdout, "\n%sStarting model benchmark...%s\n", ansiBold, ansiReset)
-		fmt.Fprintln(stdout, ansiGray+"--------------------------------------------------"+ansiReset)
+		fmt.Fprintf(stdout, "\n%sStarting model benchmark...%s\n", theme.Bold, theme.Reset)
+		fmt.Fprintln(stdout, theme.Muted+"--------------------------------------------------"+theme.Reset)
 	} else {
 		fmt.Fprintln(stdout, "\nStarting model benchmark...")
 		fmt.Fprintln(stdout, "--------------------------------------------------")
@@ -121,8 +114,8 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 
 	for i, m := range models {
 		if color {
-			fmt.Fprintf(stdout, "\n[%d/%d] Testing model: %s%s%s\n", i+1, len(models), ansiBold+ansiCyan, m.Name, ansiReset)
-			fmt.Fprintf(stdout, "  %sTest Query:%s %s%s%s\n", ansiBold, ansiReset, ansiOrange, testCmdLine, ansiReset)
+			fmt.Fprintf(stdout, "\n[%d/%d] Testing model: %s%s%s\n", i+1, len(models), theme.Bold+theme.Info, m.Name, theme.Reset)
+			fmt.Fprintf(stdout, "  %sTest Query:%s %s%s%s\n", theme.Bold, theme.Reset, theme.Prompt, testCmdLine, theme.Reset)
 		} else {
 			fmt.Fprintf(stdout, "\n[%d/%d] Testing model '%s'...\n", i+1, len(models), m.Name)
 			fmt.Fprintf(stdout, "  Test Query: %s\n", testCmdLine)
@@ -135,6 +128,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		modelDocEnv := docEnv
 		modelDocEnv.OverrideModel = m.Name
 		modelDocEnv.Logger = logger
+		modelDocEnv.AskConfirmation = nil // Stop immediately on timeout without prompting user
 		resolver := explain.NewResolver(modelDocEnv)
 
 		exp := &explain.PipelineExplanation{
@@ -152,12 +146,18 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 			Duration: elapsed,
 		}
 
-		if err != nil {
-			res.Error = err.Error()
+		if err != nil || exp.LLMError != "" || (exp.LLMExplanation == "" && exp.SuggestedCommand == "") {
+			errMsg := "empty response from model"
+			if exp.LLMError != "" {
+				errMsg = exp.LLMError
+			} else if err != nil {
+				errMsg = err.Error()
+			}
+			res.Error = errMsg
 			if color {
-				fmt.Fprintf(stdout, "  Test Result: %s[FAILED]%s (%v) [%.2fs]\n", ansiBold+ansiRed, ansiReset, err, elapsed.Seconds())
+				fmt.Fprintf(stdout, "  Test Result: %s[FAILED]%s (%s) [%.2fs]\n", theme.Bold+theme.Error, theme.Reset, errMsg, elapsed.Seconds())
 			} else {
-				fmt.Fprintf(stdout, "  Status: Failed (%v) [%.2fs]\n", err, elapsed.Seconds())
+				fmt.Fprintf(stdout, "  Status: Failed (%s) [%.2fs]\n", errMsg, elapsed.Seconds())
 			}
 		} else {
 			responseText := exp.LLMExplanation
@@ -172,9 +172,9 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 
 			if color {
 				fmt.Fprintf(stdout, "  Test Result: %s[PASSED]%s (duration: %s%.2fs%s)\n",
-					ansiBold+ansiGreen, ansiReset, ansiYellow, elapsed.Seconds(), ansiReset)
+					theme.Bold+theme.Success, theme.Reset, theme.Warning, elapsed.Seconds(), theme.Reset)
 				if res.Response != "" {
-					fmt.Fprintf(stdout, "  %sResponse to verify acceptability:%s\n", ansiBold+ansiYellow, ansiReset)
+					fmt.Fprintf(stdout, "  %sResponse to verify acceptability:%s\n", theme.Bold+theme.Warning, theme.Reset)
 					lines := strings.Split(res.Response, "\n")
 					sampleLines := lines
 					if len(sampleLines) > 6 {
@@ -182,13 +182,13 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 					}
 					for _, sl := range sampleLines {
 						if strings.HasPrefix(sl, "Suggested command:") {
-							fmt.Fprintf(stdout, "    %s%s%s\n", ansiBold+ansiGreen, sl, ansiReset)
+							fmt.Fprintf(stdout, "    %s%s%s\n", theme.Bold+theme.Success, sl, theme.Reset)
 						} else {
-							fmt.Fprintf(stdout, "    %s%s%s\n", ansiGray, sl, ansiReset)
+							fmt.Fprintf(stdout, "    %s%s%s\n", theme.Muted, sl, theme.Reset)
 						}
 					}
 					if len(lines) > 6 {
-						fmt.Fprintf(stdout, "    %s...%s\n", ansiGray, ansiReset)
+						fmt.Fprintf(stdout, "    %s...%s\n", theme.Muted, theme.Reset)
 					}
 				}
 			} else {
@@ -212,7 +212,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		results = append(results, res)
 	}
 
-	// Sort results by duration (fastest to slowest)
+	// Sort results by duration (fastest to slowest; passed before failed)
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Error != "" && results[j].Error == "" {
 			return false
@@ -223,23 +223,86 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		return results[i].Duration < results[j].Duration
 	})
 
-	if color {
-		fmt.Fprintln(stdout, "\n"+ansiBold+ansiOrange+"================================================================="+ansiReset)
-		fmt.Fprintln(stdout, ansiBold+"                    MODEL BENCHMARK SUMMARY                    "+ansiReset)
-		fmt.Fprintf(stdout, "                 %sQuery: '%s'%s\n", ansiOrange, testCmdLine, ansiReset)
-		fmt.Fprintln(stdout, ansiBold+ansiOrange+"================================================================="+ansiReset)
-		fmt.Fprintf(stdout, "%s%-35s %-12s %s%s\n", ansiBold, "Model", "Duration", "Test Result", ansiReset)
-		fmt.Fprintln(stdout, ansiGray+"-----------------------------------------------------------------"+ansiReset)
-		for _, r := range results {
-			statusStr := ansiBold + ansiGreen + "[PASSED]" + ansiReset
-			if r.Error != "" {
-				statusStr = ansiBold + ansiRed + "[FAILED]" + ansiReset
+	defModelName := docEnv.DefaultModel
+	if defModelName == "" {
+		defModelName = config.DefaultModel
+	}
+	advModelName := docEnv.AdvancedModel
+	if advModelName == "" {
+		advModelName = config.DefaultAdvancedModel
+	}
+
+	var defDuration time.Duration
+	var advDuration time.Duration
+	var defPassed bool
+	var advPassed bool
+
+	for _, r := range results {
+		if r.Error == "" {
+			if r.Model == defModelName {
+				defDuration = r.Duration
+				defPassed = true
 			}
-			modelStr := ansiCyan + fmt.Sprintf("%-35s", r.Model) + ansiReset
-			durStr := fmt.Sprintf("%.2fs", r.Duration.Seconds())
+			if r.Model == advModelName {
+				advDuration = r.Duration
+				advPassed = true
+			}
+		}
+	}
+
+	if color {
+		fmt.Fprintln(stdout, "\n"+theme.Bold+theme.Prompt+"================================================================="+theme.Reset)
+		fmt.Fprintln(stdout, theme.Bold+"                    MODEL BENCHMARK SUMMARY                    "+theme.Reset)
+		fmt.Fprintf(stdout, "                 %sQuery: '%s'%s\n", theme.Prompt, testCmdLine, theme.Reset)
+		fmt.Fprintln(stdout, theme.Bold+theme.Prompt+"================================================================="+theme.Reset)
+		fmt.Fprintf(stdout, "%s%-35s %-12s %s%s\n", theme.Bold, "Model", "Duration", "Test Result", theme.Reset)
+		fmt.Fprintln(stdout, theme.Muted+"-----------------------------------------------------------------"+theme.Reset)
+		for _, r := range results {
+			statusStr := theme.Bold + theme.Success + "[PASSED]" + theme.Reset
+			modelLabel := r.Model
+			if r.Model == defModelName {
+				modelLabel += " *"
+			} else if r.Model == advModelName {
+				modelLabel += " **"
+			}
+
+			durRaw := fmt.Sprintf("%.2fs", r.Duration.Seconds())
+			var durStr string
+			if r.Error != "" {
+				statusStr = theme.Bold + theme.Error + "[FAILED]" + theme.Reset
+				durStr = theme.Muted + durRaw + theme.Reset
+			} else {
+				// 3-color duration coding
+				if defPassed && advPassed && defDuration > advDuration {
+					// Special case: default model is slower than advanced model
+					// No green times; <= advDuration is yellow, > advDuration is red
+					if r.Duration <= advDuration {
+						durStr = theme.Warning + durRaw + theme.Reset
+					} else {
+						durStr = theme.Error + durRaw + theme.Reset
+					}
+				} else {
+					if defPassed && r.Duration <= defDuration {
+						durStr = theme.Success + durRaw + theme.Reset
+					} else if (defPassed && advPassed && r.Duration > defDuration && r.Duration <= advDuration) ||
+						(defPassed && !advPassed && r.Duration > defDuration) ||
+						(!defPassed && advPassed && r.Duration <= advDuration) {
+						durStr = theme.Warning + durRaw + theme.Reset
+					} else if advPassed && r.Duration > advDuration {
+						durStr = theme.Error + durRaw + theme.Reset
+					} else {
+						durStr = theme.Success + durRaw + theme.Reset
+					}
+				}
+			}
+
+			modelStr := theme.Info + fmt.Sprintf("%-35s", modelLabel) + theme.Reset
 			fmt.Fprintf(stdout, "%s %-12s %s\n", modelStr, durStr, statusStr)
 		}
-		fmt.Fprintln(stdout, ansiBold+ansiOrange+"================================================================="+ansiReset)
+		fmt.Fprintln(stdout, theme.Bold+theme.Prompt+"================================================================="+theme.Reset)
+		fmt.Fprintf(stdout, "%sLegend:%s * default model (%s) | ** advanced model (%s)\n", theme.Bold, theme.Reset, defModelName, advModelName)
+		fmt.Fprintf(stdout, "Duration colors: %s<= default (fast)%s | %s<= advanced (medium)%s | %s> advanced (slow)%s\n",
+			theme.Success, theme.Reset, theme.Warning, theme.Reset, theme.Error, theme.Reset)
 	} else {
 		fmt.Fprintln(stdout, "\n=================================================================")
 		fmt.Fprintln(stdout, "                    MODEL BENCHMARK SUMMARY                    ")
@@ -249,13 +312,20 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		fmt.Fprintln(stdout, "-----------------------------------------------------------------")
 		for _, r := range results {
 			status := "[PASSED]"
+			modelLabel := r.Model
+			if r.Model == defModelName {
+				modelLabel += " *"
+			} else if r.Model == advModelName {
+				modelLabel += " **"
+			}
 			if r.Error != "" {
 				status = "[FAILED]"
 			}
 			durStr := fmt.Sprintf("%.2fs", r.Duration.Seconds())
-			fmt.Fprintf(stdout, "%-35s %-12s %s\n", r.Model, durStr, status)
+			fmt.Fprintf(stdout, "%-35s %-12s %s\n", modelLabel, durStr, status)
 		}
 		fmt.Fprintln(stdout, "=================================================================")
+		fmt.Fprintf(stdout, "Legend: * default model (%s) | ** advanced model (%s)\n", defModelName, advModelName)
 	}
 
 	if logger != nil {

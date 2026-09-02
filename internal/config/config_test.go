@@ -11,8 +11,6 @@ import (
 func TestDefaultsFillEveryField(t *testing.T) {
 	c := Defaults()
 	switch {
-	case c.Version != FloorVersion:
-		t.Errorf("Version = %q, want floor %q", c.Version, FloorVersion)
 	case c.YUPSRepo != DefaultYUPSRepo:
 		t.Errorf("YUPSRepo = %q, want %q", c.YUPSRepo, DefaultYUPSRepo)
 	case c.YUPSRepoFallback != DefaultYUPSRepoFallback:
@@ -43,6 +41,9 @@ func TestPathsLiveUnderDotYups(t *testing.T) {
 	if got, want := Path("/home/u"), "/home/u/.yups/config.toml"; got != want {
 		t.Errorf("Path = %q, want %q", got, want)
 	}
+	if got, want := StatePath("/home/u"), "/home/u/.yups/state.toml"; got != want {
+		t.Errorf("StatePath = %q, want %q", got, want)
+	}
 	if got, want := LogsDir("/home/u"), "/home/u/.yups/logs"; got != want {
 		t.Errorf("LogsDir = %q, want %q", got, want)
 	}
@@ -60,8 +61,7 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 
 func TestLoadParsesSectionedFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	content := "version = \"v1.2.3\"\n" +
-		"yups-repo = \"https://example.com/a/b\"\n" +
+	content := "yups-repo = \"https://example.com/a/b\"\n" +
 		"yups-repo-fallback = \"https://example.org/c/d\"\n\n" +
 		"[inference]\n" +
 		"endpoint = \"http://remote:11434\"\n" +
@@ -82,8 +82,6 @@ func TestLoadParsesSectionedFile(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	switch {
-	case c.Version != "v1.2.3":
-		t.Errorf("Version = %q, want v1.2.3", c.Version)
 	case c.YUPSRepo != "https://example.com/a/b":
 		t.Errorf("YUPSRepo = %q, want https://example.com/a/b", c.YUPSRepo)
 	case c.YUPSRepoFallback != "https://example.org/c/d":
@@ -109,8 +107,7 @@ func TestLoadParsesSectionedFile(t *testing.T) {
 
 func TestLoadParsesLegacyFlatFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	content := "version = \"v1.2.3\"\n" +
-		"yups-repo = \"https://example.com/a/b\"\n" +
+	content := "yups-repo = \"https://example.com/a/b\"\n" +
 		"yups-repo-fallback = \"https://example.org/c/d\"\n" +
 		"inference-endpoint = \"http://legacy:11434\"\n" +
 		"default-model = \"legacy-coder:latest\"\n" +
@@ -129,8 +126,6 @@ func TestLoadParsesLegacyFlatFile(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	switch {
-	case c.Version != "v1.2.3":
-		t.Errorf("Version = %q, want v1.2.3", c.Version)
 	case c.YUPSRepo != "https://example.com/a/b":
 		t.Errorf("YUPSRepo = %q, want https://example.com/a/b", c.YUPSRepo)
 	case c.YUPSRepoFallback != "https://example.org/c/d":
@@ -175,7 +170,6 @@ func TestLoadCorruptFileReturnsExplicitError(t *testing.T) {
 func TestSaveThenLoadRoundtripCreatesParentDirs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".yups", "config.toml")
 	want := Config{
-		Version:          "v9.9.9",
 		YUPSRepo:         "https://r.example/x",
 		YUPSRepoFallback: "https://f.example/y",
 		Inference: InferenceConfig{
@@ -221,11 +215,9 @@ func TestLLMDisabledConfig(t *testing.T) {
 }
 
 func TestEnsureDefaultsKeepsUserValues(t *testing.T) {
-	c := Config{Version: "", YUPSRepo: "https://keep.example/a", YUPSRepoFallback: ""}
+	c := Config{YUPSRepo: "https://keep.example/a", YUPSRepoFallback: ""}
 	EnsureDefaults(&c)
 	switch {
-	case c.Version != FloorVersion:
-		t.Errorf("empty Version not filled: %q", c.Version)
 	case c.YUPSRepo != "https://keep.example/a":
 		t.Errorf("user YUPSRepo overwritten: %q", c.YUPSRepo)
 	case c.YUPSRepoFallback != DefaultYUPSRepoFallback:
@@ -233,52 +225,9 @@ func TestEnsureDefaultsKeepsUserValues(t *testing.T) {
 	}
 }
 
-func TestBumpVersionNeverMovesBackwards(t *testing.T) {
-	tests := []struct {
-		name      string
-		current   string
-		tag       string
-		wantBump  bool
-		wantFinal string
-	}{
-		{"newer tag bumps", "v1.0.0", "v1.2.0", true, "v1.2.0"},
-		{"equal tag keeps", "v1.2.0", "v1.2.0", false, "v1.2.0"},
-		{"older tag keeps", "v1.2.0", "v1.0.0", false, "v1.2.0"},
-		{"dev current keeps older tag", "dev", "v0.1.0", false, "dev"},
-		{"floor accepts first real tag", FloorVersion, "v1.0.0", true, "v1.0.0"},
-		{"multi version jump lands on newest", "v1.0.0", "v3.0.0", true, "v3.0.0"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c := Config{Version: tt.current}
-			got := BumpVersion(&c, tt.tag)
-			if got != tt.wantBump {
-				t.Errorf("BumpVersion(%q -> %q) = %v, want %v", tt.current, tt.tag, got, tt.wantBump)
-			}
-			if c.Version != tt.wantFinal {
-				t.Errorf("final Version = %q, want %q", c.Version, tt.wantFinal)
-			}
-		})
-	}
-}
-
-func TestSetVersion(t *testing.T) {
-	c := Config{Version: "v1.0.0"}
-	if !SetVersion(&c, "v0.5.0") {
-		t.Error("SetVersion to older version should return true")
-	}
-	if c.Version != "v0.5.0" {
-		t.Errorf("Version = %q, want v0.5.0", c.Version)
-	}
-	if SetVersion(&c, "v0.5.0") {
-		t.Error("SetVersion to same version should return false")
-	}
-}
-
-func TestAvailableModelsConfig(t *testing.T) {
+func TestAvailableModelsCleanedFromConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	content := "[inference]\navailable-models = [\"qwen2.5-coder:7b\", \"qwen3.8:latest\", \"gemma3:latest\"]\n"
+	content := "[inference]\navailable-models = [\"qwen2.5-coder:7b\", \"qwen3.8:latest\", \"gemma3:latest\"]\ndefault-model = \"qwen3.8:latest\"\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing fixture: %v", err)
 	}
@@ -286,8 +235,93 @@ func TestAvailableModelsConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	models := c.GetAvailableModels()
-	if len(models) != 3 || models[0] != "qwen2.5-coder:7b" || models[1] != "qwen3.8:latest" || models[2] != "gemma3:latest" {
-		t.Errorf("GetAvailableModels() = %v, want 3 models", models)
+	if c.GetDefaultModel() != "qwen3.8:latest" {
+		t.Errorf("GetDefaultModel() = %q, want qwen3.8:latest", c.GetDefaultModel())
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if strings.Contains(string(data), "available-models =") {
+		t.Errorf("available-models still present in config file:\n%s", string(data))
+	}
+}
+
+func TestCleanLegacyAvailableModels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "# Top comment\navailable-models = [\"m1\", \"m2\"]\nendpoint = \"http://localhost:11434\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	cleaned, err := CleanLegacyAvailableModels(path)
+	if err != nil {
+		t.Fatalf("CleanLegacyAvailableModels failed: %v", err)
+	}
+	if !cleaned {
+		t.Errorf("cleaned = false, want true")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading cleaned file: %v", err)
+	}
+	if strings.Contains(string(data), "available-models") {
+		t.Errorf("available-models still present in file:\n%s", string(data))
+	}
+	if !strings.Contains(string(data), "# Top comment") {
+		t.Errorf("comment was lost:\n%s", string(data))
+	}
+}
+
+func TestCleanLegacyVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "# Top comment\nversion = \"v0.6.5\"\n\nyups-repo = \"https://example.com/repo\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	ver, cleaned, err := CleanLegacyVersion(path)
+	if err != nil {
+		t.Fatalf("CleanLegacyVersion failed: %v", err)
+	}
+	if !cleaned || ver != "v0.6.5" {
+		t.Errorf("cleaned = %v, ver = %q, want true, v0.6.5", cleaned, ver)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading cleaned file: %v", err)
+	}
+	if strings.Contains(string(data), "version =") {
+		t.Errorf("version still present in file:\n%s", string(data))
+	}
+	if !strings.Contains(string(data), "# Top comment") {
+		t.Errorf("comment was lost:\n%s", string(data))
+	}
+}
+
+func TestLoadCleansLegacyVersionAutomatically(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "version = \"v0.9.0\"\nyups-repo = \"https://example.com/a/b\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.YUPSRepo != "https://example.com/a/b" {
+		t.Errorf("YUPSRepo = %q, want https://example.com/a/b", c.YUPSRepo)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file after load: %v", err)
+	}
+	if strings.Contains(string(data), "version =") {
+		t.Errorf("Load did not clean version from file:\n%s", string(data))
 	}
 }

@@ -17,13 +17,13 @@ verificar si has puesto las banderas adecuadas; quizá tienes tantas fuentes de
 información (`apropos`, `whatis`, `help`, `tldr`...) que no sabes por donde
 empezar; o simplemente no tienes claro lo que tienes que hacer pero te da una
 pereza terrible el cambio de contexto que supone ir a buscar información por
-Internet en un buscador, foro o LLM. _Para todos esos momentos está YUPS_.
+Internet en un buscador, foro o LLM. *Para todos esos momentos está YUPS*.
 
 YUPS, en una *fracción de segundo*, **recopila toda la información** de contexto
 relevante, unifica la respuesta de múltiples fuentes y extrae quirúrgicamente
 los datos que pueden serte de más ayuda.
 
-_Si es necesario_, YUPS puede hacer uso de tu **LLM local** de confianza (en tu
+*Si es necesario*, YUPS puede hacer uso de tu **LLM local** de confianza (en tu
 equipo o en tu red) para hacer un análisis más profundo de la situación y
 determinar el mejor camino a seguir.
 
@@ -56,7 +56,7 @@ necesitas, simplemente te la sugiere.
 - Sólo sirve para ofrecer **ayuda interactiva**, en ningún caso está previsto
   para ejecutarse de manera automatizada.
 - El uso de **modelos externos** (Hugging Face por ej.) está por **valorar**,
-  especialmente en términos de _seguridad y velocidad_.
+  especialmente en términos de *seguridad y velocidad*.
 
 ## Sistemas
 
@@ -66,7 +66,7 @@ Los componentes y modo de interaccionar de YUPS son:
 
 - `yups` es el punto central. Se puede ver como un ayudante. Un cliente o gestor
   de inferencia.
-- Se engancha a `bash` [^1] mediante _hooks_ para enterarse cuando surgen
+- Se engancha a `bash` [^1] mediante *hooks* para enterarse cuando surgen
   problemas.
 - Usa variables de entorno y otros comandos (`history`, `pwd`, `ls`...) para
   recopilar información.
@@ -79,7 +79,7 @@ Los componentes y modo de interaccionar de YUPS son:
 - Si tiene que preguntar a un **LLM** puede decidir qué modelo necesita en
   función de lo complejo que le parezca el problema o de si ya se le ha
   preguntado antes.
-- Un **middleware** en la máquina en la que esté el _ollama_ pre-procesa la
+- Un **middleware** en la máquina en la que esté el *ollama* pre-procesa la
   petición para determinar qué modelo usar en base a la lista proporcionada por
   YUPS y de si está alguno de esos modelos cargado en memoria. También puede
   priorizar peticiones interactivas y de procesamiento en segundo plano.
@@ -165,9 +165,9 @@ Los componentes y modo de interaccionar de YUPS son:
 ### Políticas de seguridad
 
 Al trabajar exclusivamente en local o red de confianza, la seguridad se tiene
-que centrar en impedir la elaboración de _prompt injections_ a partir de la
+que centrar en impedir la elaboración de *prompt injections* a partir de la
 información recopilada de manera automática y en el control de las solicitudes
-de información que haga el modelo.
+información que haga el modelo.
 
 > [!CAUTION]
 > Las medidas que se van a implementar contra la introducción de prompt
@@ -253,8 +253,8 @@ que escribir asíncronamente para no relentizar la ejecución del comando.
   `Ctrl+g`) o por invocación directa del comando `yups`.
 - Lo que hay en este momento escrito en la **línea de comandos**.
 - La **configuración** que haya establecido el usuario.
-- Los **flags** que haya indicado el usuario _si es una invocación directa_.
-- El **prompt** que haya indicado el usuario _si es una invocación directa_.
+- Los **flags** que haya indicado el usuario *si es una invocación directa*.
+- El **prompt** que haya indicado el usuario *si es una invocación directa*.
 - Los **comandos** que se han lanzado anteriormente en la sesión actual.
 - El último **error** que se ha producido.
 - La **distribución** y la **versión**.
@@ -392,13 +392,13 @@ convierten a YUPS en un verdadero ayudante.
 
 #### Del sistema
 
-- `--cnf-handle command_name`: flag del sistema, se usa cuándo se ha producido
+- `--cnf-handle <command-name>`: flag del sistema, se usa cuándo se ha producido
   un error 127 (command not found)
-- `--ce-handle error_code command_name`: flag del sistema, se usa cuándo se ha
+- `--ce-handle <error-code> <command-name>`: flag del sistema, se usa cuándo se ha
   producido un error indeterminado en la ejecución de un comando.
 - `--repetitive-process`: flag del sistema, se lanza cuando se detecta que se
   podría estar realizando una tarea repetitiva.
-- `--ask-run script.sh|command_line`: flag del sistema, para permitir a yups
+- `--ask-run <script.sh|command-line>`: flag del sistema, para permitir a yups
   preguntar al usuario en diferido si quiere ejecutar algo. Las posibles
   respuestas son Yes/no/edit/modifications. Hay que subrayar la abreviatura
   (<u>y/n/e/m</u>). `Edit` en caso de command lines activa la edición en línea
@@ -422,7 +422,7 @@ convierten a YUPS en un verdadero ayudante.
   - **navi cheatsheets**: https://github.com/denisidoro/cheats (Denis Isidoro)
   - **cheat.sh**: https://github.com/chubin/cheat.sheets (Igor Chubin)
   - **cheat**: https://github.com/cheat/cheatsheets (Chris Allen Lane)
-  Para mantener los tiempos de respuesta instantáneos en casos básicos, yups envía una
+  - Para mantener los tiempos de respuesta instantáneos en casos básicos, yups envía una
   solicitud ligera inicial al LLM y le proporciona las herramientas:
   - `fetch-command-documentation`: reúne `--help`, página `man` y cheatsheets de cualquier comando.
   - `command-run`: permite al LLM ejecutar de forma segura comandos de inspección del sistema
@@ -435,7 +435,7 @@ convierten a YUPS en un verdadero ayudante.
 - `--install-yups`: cuando se quiere lanzar el proceso de instalación.
 - `--uninstall-yups`: para lanzar el proceso de desinstalación.
   corregir.
-- `--continue [request_code]`: flag para continuar una solicitud anterior. Si no
+- `--continue [request-code]`: flag para continuar una solicitud anterior. Si no
   se establece un ID, se continuará con la última solicitud. Es la opción
   predeterminada cuando se llama a `yups` sin argumentos y el último comando
   también es un comando `yups` (si no lo es, se procesará la última línea
@@ -443,6 +443,7 @@ convierten a YUPS en un verdadero ayudante.
 - `--update-yups`: lanza la auto actualización.
 - `--model <tag>`: fuerza el uso de un modelo específico de Ollama para toda la ejecución (anula el escalado a modelo avanzado).
 - `--advanced`: se usa el modelo avanzado configurado desde el principio (avisando al usuario del mayor tiempo de respuesta estimado).
+- `--no-limits`: desactiva todos los timeouts y límites de ronda y tamaño de salida especificados en la sección `[limits]` de la configuración.
 - `--test-models`: ejecuta una prueba de latencia y benchmark en todos los modelos instalados en Ollama (`ls -javi && yups -hV`), mostrando los resultados en vivo y una tabla resumen ordenada de menor a mayor tiempo.
 - `--config param1=value..paramN=value`: permite cambiar el valor de algún campo
   existente en el archivo de configuración como `default-model`, o forzar
@@ -451,14 +452,14 @@ convierten a YUPS en un verdadero ayudante.
   sin intentar valorar si es un comando o no.
 - `--logs file1..fileN`: pregunta a la IA el significado de los logs. Si no se
   pasa ningún log, explica la salida del último comando ejecutado.
-- `--test command_line`: se le pide al motor de inferencia que intente deducir
+- `--test <command-line>`: se le pide al motor de inferencia que intente deducir
   cual sería la salida de ese comando para hacer una especie de --dry-run
   virtual por inferencia. Simula la salida, no la explica.
 - `--transaction script.sh`: pide al motor de inferencia que identifique los
   archivos que puedan verse afectados por el script, hace una copia de todos
   esos archivos a /tmp/yups.timestamp y ejecuta el script. Si falla pregunta al
   usuario si quiere recuperar los archivos. Si no, pregunta si quiere borrarlos.
-- `--update command_name`: intenta identificar el modo en el que se instaló el
+- `--update <command-name>`: intenta identificar el modo en el que se instaló el
   commando y verificar si hay una nueva versión, y en su caso lo actualiza.
 - `--upgrade`: update de todos los comandos del sistema.
 - `--title-compose`: guía al usuario por un cuestionario de sí/no sobre sus
@@ -1076,9 +1077,8 @@ usará inglés.
 
 Para las nomenclaturas se seguirán los estándares:
 
-- En las partes de shell scripting se usará el guión bajo '\_' como separador
-  dentro de nombres de funciones y variables (snake_case). Además, las funciones
-  se precederán de un guión bajo '\_' para ocultarlas al usuario.
+- En las partes de shell scripting y comandos se usarán guiones medios '-' (kebab-case)
+  o camelCase. El guión bajo '_' queda terminantemente prohibido como separador.
 - En las partes de Go se usará nomenclatura del camello para los nombres de
   funciones y variables.
 - Para los nombres de archivos y cualquier otro identificador que no tenga un
@@ -1289,7 +1289,7 @@ acabar cualquier proceso.
 - [x] Asistencia con LLM (Ollama):
   - [x] Fallback inteligente al modelo cuando faltan flags o se formulan preguntas directas.
   - [x] Tool calling multi-turno: herramienta `fetch-command-documentation` para lectura profunda de manuales y cheatsheets.
-  - [x] Tool calling con lista blanca de comandos: herramienta `run_command` para inspección segura del sistema (validación con AST de combinadores bash).
+  - [x] Tool calling con lista blanca de comandos: herramienta `command-run` para inspección segura del sistema (validación con AST de combinadores bash).
   - [x] Escalado automático al modelo avanzado (`advanced-model`) al invocar tools o en preguntas en lenguaje natural.
 - [x] Experiencia de usuario (UX / Look & Feel):
   - [x] Colores corporativos y decoración ANSI (preguntas e interacciones en color naranja YUPS).
@@ -1310,12 +1310,12 @@ acabar cualquier proceso.
 ### v1.1.0 (Command Not Found)
 
 - [ ] Búsqueda y reacción ante Command Not Found:
-  - [ ] Flag `--cnf-handle <command_name>` (captura de código de salida 127).
+  - [ ] Flag `--cnf-handle <command-name>` (captura de código de salida 127).
   - [ ] Integración mediante hooks en Bash para sugerir paquetes o comandos alternativos.
 
 ### v1.2.0 (Command Error)
 - [ ] Diagnóstico de errores de ejecución de comandos:
-  - [ ] Flag `--ce-handle <error_code> <command_line>` (captura de códigos de retorno distintos de cero).
+  - [ ] Flag `--ce-handle <error-code> <command-line>` (captura de códigos de retorno distintos de cero).
   - [ ] Análisis contextual con IA del motivo del fallo y propuesta de corrección.
 
 ### v1.3.0 (Dry Run)
@@ -1338,7 +1338,7 @@ acabar cualquier proceso.
 
 ### v2.0.0 (Scripts & Monitoreo Avanzado con eBPF)
 
-- [ ] Soporte completo para scripts (`--script <script_file>`):
+- [ ] Soporte completo para scripts (`--script <script-file>`):
   - [ ] Análisis sintáctico y AST de scripts en Bash usando la librería `mvdan/sh`.
   - [ ] Validación de seguridad y propuesta de correcciones en scripts multilínea.
   - [ ] Ejecución de scripts con interacción y confirmación paso a paso.
@@ -1358,7 +1358,7 @@ acabar cualquier proceso.
 
 ## Glosario
 
-- **Hook**: Un _hook_ representa un modo de engancharse a la funcionalidad de
+- **Hook**: Un *hook* representa un modo de engancharse a la funcionalidad de
   otro sistema, generalmente a través de la suscripción a eventos,
   implementación de manejadores de eventos, o manejo de endpoints http.
 - **Whitelist**: Es una lista de comandos autorizados que no pueden realizar un
@@ -1366,9 +1366,9 @@ acabar cualquier proceso.
 - **Prompt injection**: Es la introducción no prevista de órdenes a un motor de
   inferencia mediante la manipulación de archivos o cualquier otra información
   que vaya a leer el sistema de Inteligencia Artificial.
-- **Middleware**: Es un sistema _software_ que se implementa entre otras dos
-  piezas de _software_ para modificar o controlar sus interacciones.
-- **Fuzzy matching**: La _búsqueda difusa_ es un tipo de búsqueda que en lugar
+- **Middleware**: Es un sistema *software* que se implementa entre otras dos
+  piezas de *software* para modificar o controlar sus interacciones.
+- **Fuzzy matching**: La *búsqueda difusa* es un tipo de búsqueda que en lugar
   de buscar cadenas precisas, busca cadenas similares atendiendo a un grado de
   diferencia, de tal modo que la cadena 'cat' puede ser igual a 'cata' con
   diferencia 1, o a 'cal' con diferencia 2.

@@ -6,12 +6,18 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"yups/assets"
 	"yups/internal/config"
 	"yups/internal/explain"
+	"yups/internal/llm"
 	"yups/internal/sessionlog"
+	"yups/internal/ui"
 )
 
 // Version is the version of the binary. It is overridden at build time with
@@ -36,23 +42,7 @@ const (
 // ColoredLogo is Logo wrapped in ANSI 256-colour 214 (orange).
 const ColoredLogo = "\x1b[38;5;214m" + Logo + "\x1b[0m"
 
-const helpText = `yups - prints the ` + Logo + ` logo and manages its own installation
-
-Usage:
-  yups                  Print the logo (` + Logo + `) in ANSI colour 214
-  yups -- <command...>  Explain the given command line, flags, and operators
-  yups <command...>     Explain the given command line
-  yups --model <tag>    Use a specific Ollama model for inference
-  yups --advanced       Use the advanced reasoning model directly
-  yups --test-models    Run latency benchmark test on all installed models
-  yups --help           Show this help text
-  yups --version        Show the yups version
-  yups --install-yups   Install the yups executable into the first directory
-                        of the PATH where the current user can write
-  yups --uninstall-yups Remove every yups executable found in the PATH
-  yups --update-yups    Download the latest released version and replace
-                        every installed copy with it
-`
+var helpText = assets.GetHelpText()
 
 func isSystemInstalled(env *Env) bool {
 	if env == nil {
@@ -87,12 +77,61 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 		homeDir, _ = env.UserHomeDir()
 	}
 	logger := sessionlog.New(homeDir, args)
+	color := env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout)
+
+	code := dispatchInternal(env, args, stdout, stderr, logger, color)
+
+	if logger != nil && logger.HasWritten() {
+		if color {
+			theme := ui.GetTheme()
+			fmt.Fprintf(stdout, "\n%sSession:%s %s\n", theme.Important, theme.Reset, logger.Slug())
+		} else {
+			fmt.Fprintf(stdout, "\nSession: %s\n", logger.Slug())
+		}
+	}
+
+	return code
+}
+
+func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger *sessionlog.SessionLogger, color bool) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+
+	go func() {
+		select {
+		case sig, ok := <-sigCh:
+			if !ok || sig == nil {
+				return
+			}
+			if logger != nil {
+				logger.LogIncident("SIGNAL_RECEIVED", "Received signal %s (PID: %d)", sig.String(), os.Getpid())
+				logger.LogConclusion("", "", "", fmt.Sprintf("INTERRUPTED (%s)", sig.String()), 130)
+			}
+			cancel()
+			signal.Stop(sigCh)
+		case <-ctx.Done():
+			return
+		}
+	}()
 
 	isInstalled := isSystemInstalled(env)
+	if isInstalled && env.UserHomeDir != nil {
+		if home, err := env.UserHomeDir(); err == nil {
+			_ = EnsureAssetsUpdated(env, home)
+		}
+	}
 
-	if len(args) == 0 {
-		fmt.Fprintln(stdout, ColoredLogo)
+	isEmptyTrigger := len(args) == 0 ||
+		(len(args) == 1 && strings.TrimSpace(args[0]) == "") ||
+		(len(args) > 0 && args[0] == "--" && (len(args) == 1 || (len(args) == 2 && strings.TrimSpace(args[1]) == "")))
+
+	if isEmptyTrigger {
 		if !isInstalled {
+			fmt.Fprintln(stdout, ColoredLogo)
 			fmt.Fprintln(stdout, "Note: yups is not installed or configured yet.")
 			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the automatic installation process now? (estimated time ~1-3 minutes)", true) {
 				if logger != nil {
@@ -101,14 +140,113 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 				return Install(env, stdout, stderr)
 			}
 			fmt.Fprintln(stdout, "Run 'yups --install-yups' at any time to install.")
+			if logger != nil {
+				logger.LogConclusion("", "", "", "LOGO", ExitOK)
+			}
+			return ExitOK
 		}
+
+		// Installed system: check shell history
+		var history []llm.HistoryEntry
+		if env.UserHomeDir != nil {
+			if home, err := env.UserHomeDir(); err == nil {
+				if env.ReadHistory != nil {
+					history = env.ReadHistory(home, 5)
+				} else {
+					history = env.LLMEnv().ReadHistory(home, 5)
+				}
+			}
+		}
+
+		if len(history) > 0 {
+			lastEntry := history[len(history)-1]
+			lastCmd := strings.TrimSpace(lastEntry.Command)
+			if lastCmd != "" {
+				isYupsCmd := strings.HasPrefix(lastCmd, "yups") || strings.HasPrefix(lastCmd, "./yups")
+
+				if isYupsCmd {
+					// II - Si el último comando es de yups, continuo esa sesión
+					if env.UserHomeDir != nil {
+						if home, err := env.UserHomeDir(); err == nil {
+							lastSess, err := sessionlog.LoadLastSession(home)
+							if err == nil && lastSess != nil {
+								theme := ui.GetTheme()
+								if color {
+									fmt.Fprintf(stdout, "\n%s--- Previous Session (%s) ---%s\n", theme.Bold+theme.Prompt, lastSess.Slug, theme.Reset)
+									if lastSess.CommandLine != "" {
+										fmt.Fprintf(stdout, "%sCommand:%s %s\n", theme.Bold, theme.Reset, lastSess.CommandLine)
+									}
+									if lastSess.Explanation != "" {
+										fmt.Fprintf(stdout, "%sExplanation:%s %s\n", theme.Bold, theme.Reset, lastSess.Explanation)
+									}
+									if lastSess.SuggestedCommand != "" {
+										fmt.Fprintf(stdout, "%sSuggested Command:%s %s\n", theme.Bold, theme.Reset, lastSess.SuggestedCommand)
+									}
+								} else {
+									fmt.Fprintf(stdout, "\n--- Previous Session (%s) ---\n", lastSess.Slug)
+									if lastSess.CommandLine != "" {
+										fmt.Fprintf(stdout, "Command: %s\n", lastSess.CommandLine)
+									}
+									if lastSess.Explanation != "" {
+										fmt.Fprintf(stdout, "Explanation: %s\n", lastSess.Explanation)
+									}
+									if lastSess.SuggestedCommand != "" {
+										fmt.Fprintf(stdout, "Suggested Command: %s\n", lastSess.SuggestedCommand)
+									}
+								}
+
+								if env.AskPrompt != nil {
+									userFollowup := strings.TrimSpace(env.AskPrompt("Enter follow-up question or goal", ""))
+									if userFollowup != "" {
+										docEnv := env.DocEnv()
+										docEnv.UseAdvanced = true // natural language continuation routes to advanced model
+										docEnv.Logger = logger
+
+										pipeline := explain.Parse([]string{lastSess.CommandLine})
+										exp := &explain.PipelineExplanation{
+											RawCommandLine: lastSess.CommandLine,
+											Conversation:   lastSess.Conversation,
+										}
+
+										explain.FormatInvocationHeader(stdout, fmt.Sprintf("%s (continue)", lastSess.CommandLine), "", color)
+										resolver := explain.NewResolver(docEnv)
+										_ = resolver.QueryLLMPipeline(context.Background(), pipeline, exp, userFollowup, stdout)
+										explain.FormatLLMPipelineResult(stdout, exp, explain.FormatOptions{Color: color})
+										if logger != nil {
+											logger.LogConclusion(exp.LLMExplanation, exp.SuggestedCommand, exp.SuggestedScript, "CONTINUE_SUCCESS", ExitOK)
+										}
+										return ExitOK
+									}
+								}
+							}
+						}
+					}
+					fmt.Fprintln(stdout, ColoredLogo)
+					if logger != nil {
+						logger.LogConclusion("", "", "", "LOGO", ExitOK)
+					}
+					return ExitOK
+				}
+
+				// III - Si el último comando no es vacío y no es de yups, uso ese ultimo comando como si se hubiera llamado a yups ultimo-comando
+				if logger != nil {
+					logger.SetCommandLine(lastCmd)
+					logger.LogInfo("Explaining last command from history: %s", lastCmd)
+				}
+				docEnv := env.DocEnv()
+				docEnv.Logger = logger
+				explain.FormatInvocationHeader(stdout, lastCmd, "", color)
+				return explain.Explain(context.Background(), docEnv, []string{lastCmd}, stdout, stderr, color)
+			}
+		}
+
+		// I - Si no hay último comando no hago nada
+		fmt.Fprintln(stdout, ColoredLogo)
 		if logger != nil {
 			logger.LogConclusion("", "", "", "LOGO", ExitOK)
 		}
 		return ExitOK
 	}
-
-	color := env.IsTerminalOutput != nil && env.IsTerminalOutput(stdout)
 
 	// Handle flagUpdateApply
 	if args[0] == flagUpdateApply {
@@ -125,6 +263,7 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	// Parse flags
 	var overrideModel string
 	var useAdvanced bool
+	var noLimits bool
 	i := 0
 	for i < len(args) {
 		arg := args[i]
@@ -133,24 +272,43 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			break
 		}
 		if arg == "--test-models" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			_, code := RunModelBenchmark(env, stdout, stderr, logger)
 			return code
 		}
-		if arg == "-h" || arg == "--help" || arg == "help" {
+		if arg == "--help" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogConclusion("", "", "", "HELP", ExitOK)
 			}
-			fmt.Fprint(stdout, helpText)
+			fmt.Fprint(stdout, assets.GetHelpText())
+			if env.UserHomeDir != nil && env.LoadUpdateState != nil {
+				if home, err := env.UserHomeDir(); err == nil {
+					st, err := env.LoadUpdateState(config.StatePath(home))
+					if err == nil && st.Keybinding != "" {
+						theme := ui.GetTheme()
+						if color {
+							fmt.Fprintf(stdout, "\n%sNote:%s Key binding [%s%s%s] is configured. You can run yups directly by pressing [%s%s%s] on your command line.\n",
+								theme.Bold, theme.Reset, theme.Prompt, st.Keybinding, theme.Reset, theme.Prompt, st.Keybinding, theme.Reset)
+						} else {
+							fmt.Fprintf(stdout, "\nNote: Key binding [%s] is configured. You can run yups directly by pressing [%s] on your command line.\n",
+								st.Keybinding, st.Keybinding)
+						}
+					}
+				}
+			}
 			return ExitOK
 		}
-		if arg == "-V" || arg == "--version" || arg == "version" {
+		if arg == "--version" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogConclusion("", "", "", "VERSION", ExitOK)
 			}
 			fmt.Fprintf(stdout, "%s %s\n", ProgramName, Version)
 			return ExitOK
 		}
-		if arg == "-i" || arg == "--install-yups" {
+		if arg == "--install-yups" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogSection("INSTALL")
 			}
@@ -160,17 +318,19 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			}
 			return code
 		}
-		if arg == "-u" || arg == "--uninstall-yups" {
+		if arg == "--uninstall-yups" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogSection("UNINSTALL")
 			}
 			code := Uninstall(env, stdout, stderr)
-			if _, err := env.UserHomeDir(); err == nil {
+			if logger != nil {
 				logger.LogConclusion("", "", "", "UNINSTALL", code)
 			}
 			return code
 		}
 		if arg == "--update-yups" {
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			if logger != nil {
 				logger.LogSection("UPDATE")
 			}
@@ -185,6 +345,11 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			i++
 			continue
 		}
+		if arg == "--no-limits" {
+			noLimits = true
+			i++
+			continue
+		}
 		if strings.HasPrefix(arg, "--model=") {
 			overrideModel = strings.TrimPrefix(arg, "--model=")
 			i++
@@ -196,8 +361,10 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 				i += 2
 				continue
 			}
+			explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 			fmt.Fprintln(stderr, "yups: --model requires a model name argument")
 			if logger != nil {
+				logger.LogIncident("CLI_USAGE_ERROR", "--model requires a model name argument")
 				logger.LogConclusion("", "", "", "MISSING_MODEL_ARG", ExitUsage)
 			}
 			return ExitUsage
@@ -208,8 +375,10 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			queryArgs := args[i+1:]
 			queryText := strings.TrimSpace(strings.Join(queryArgs, " "))
 			if queryText == "" {
+				explain.FormatInvocationHeader(stdout, strings.Join(args, " "), "", color)
 				fmt.Fprintln(stderr, "yups: --query requires a question or prompt argument")
 				if logger != nil {
+					logger.LogIncident("CLI_USAGE_ERROR", "--query requires a question or prompt argument")
 					logger.LogConclusion("", "", "", "MISSING_QUERY_ARG", ExitUsage)
 				}
 				return ExitUsage
@@ -218,18 +387,14 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 			docEnv.InvocationFlags = invocationFlags
 			docEnv.Logger = logger
 			docEnv.UseAdvanced = true
+			docEnv.NoLimits = noLimits
 			if overrideModel != "" {
 				docEnv.OverrideModel = overrideModel
 			}
-			return explain.Explain(context.Background(), docEnv, []string{"# " + queryText}, stdout, stderr, color)
+			return explain.Explain(ctx, docEnv, []string{"# " + queryText}, stdout, stderr, color)
 		}
 		if strings.HasPrefix(arg, "-") {
-			fmt.Fprintf(stderr, "yups: unknown option %q\n\n", arg)
-			fmt.Fprint(stderr, helpText)
-			if logger != nil {
-				logger.LogConclusion("", "", "", "UNKNOWN_OPTION", ExitUsage)
-			}
-			return ExitUsage
+			return HandleUnknownFlag(env, args, i, stdout, stderr, color, logger)
 		}
 		break
 	}
@@ -242,7 +407,11 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 
 	cmdArgs := args[i:]
 	if len(cmdArgs) == 0 {
-		fmt.Fprintln(stdout, ColoredLogo)
+		if invocationFlags != "" && invocationFlags != "--" {
+			explain.FormatInvocationHeader(stdout, invocationFlags, "", color)
+		} else {
+			fmt.Fprintln(stdout, ColoredLogo)
+		}
 		if !isInstalled {
 			fmt.Fprintln(stdout, "Note: yups is not installed or configured yet.")
 			if env.AskConfirmation != nil && env.AskConfirmation("Do you want to start the automatic installation process now? (estimated time ~1-3 minutes)", true) {
@@ -264,8 +433,9 @@ func Dispatch(env *Env, args []string, stdout, stderr io.Writer) int {
 	docEnv.Logger = logger
 	docEnv.OverrideModel = overrideModel
 	docEnv.UseAdvanced = useAdvanced
+	docEnv.NoLimits = noLimits
 
-	return explain.Explain(context.Background(), docEnv, cmdArgs, stdout, stderr, color)
+	return explain.Explain(ctx, docEnv, cmdArgs, stdout, stderr, color)
 }
 
 // findInDirs returns the directories from dirs that contain an executable

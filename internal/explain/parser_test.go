@@ -110,7 +110,7 @@ func TestParseSubcommand(t *testing.T) {
 }
 
 func TestFormatRawPipelineCommentNoDuplication(t *testing.T) {
-	t.Run("pure_comment", func(t *testing.T) {
+	t.Run("pure-comment", func(t *testing.T) {
 		p := Parse([]string{"#helo"})
 		raw := formatRawPipeline(p)
 		want := "# helo"
@@ -119,7 +119,7 @@ func TestFormatRawPipelineCommentNoDuplication(t *testing.T) {
 		}
 	})
 
-	t.Run("command_with_comment", func(t *testing.T) {
+	t.Run("command-with-comment", func(t *testing.T) {
 		p := Parse([]string{"ls", ".yups", "#I", "want", "to", "ls", "recursively"})
 		raw := formatRawPipeline(p)
 		want := "ls .yups # I want to ls recursively"
@@ -127,4 +127,108 @@ func TestFormatRawPipelineCommentNoDuplication(t *testing.T) {
 			t.Errorf("formatRawPipeline(ls .yups #...) = %q, want %q", raw, want)
 		}
 	})
+}
+
+func TestParseComplexPipelineAndRedirects(t *testing.T) {
+	pipeline := Parse([]string{"cat file.txt | grep foo > out.txt 2>&1"})
+	if len(pipeline.Stages) != 2 {
+		t.Fatalf("stages count = %d, want 2", len(pipeline.Stages))
+	}
+	if pipeline.Stages[0].Command.Name != "cat" || pipeline.Stages[0].Operator != OpPipe {
+		t.Errorf("stage 0: cmd=%q, op=%q, want 'cat', '|'", pipeline.Stages[0].Command.Name, pipeline.Stages[0].Operator)
+	}
+	if pipeline.Stages[1].Command.Name != "grep" {
+		t.Errorf("stage 1: cmd=%q, want 'grep'", pipeline.Stages[1].Command.Name)
+	}
+	if len(pipeline.Stages[1].Command.Redirects) != 2 {
+		t.Fatalf("redirects count = %d, want 2", len(pipeline.Stages[1].Command.Redirects))
+	}
+	if pipeline.Stages[1].Command.Redirects[0].Op != ">" || pipeline.Stages[1].Command.Redirects[0].Target != "out.txt" {
+		t.Errorf("redir 0 = %+v", pipeline.Stages[1].Command.Redirects[0])
+	}
+	if pipeline.Stages[1].Command.Redirects[1].Op != "2>&1" {
+		t.Errorf("redir 1 = %+v", pipeline.Stages[1].Command.Redirects[1])
+	}
+}
+
+func TestParseSemicolonAndBackground(t *testing.T) {
+	pipeline := Parse([]string{"mkdir -p /tmp/test && cd /tmp/test ; ls"})
+	if len(pipeline.Stages) != 3 {
+		t.Fatalf("stages count = %d, want 3", len(pipeline.Stages))
+	}
+	if pipeline.Stages[0].Command.Name != "mkdir" || pipeline.Stages[0].Operator != OpAnd {
+		t.Errorf("stage 0: cmd=%q, op=%q, want 'mkdir', '&&'", pipeline.Stages[0].Command.Name, pipeline.Stages[0].Operator)
+	}
+	if pipeline.Stages[1].Command.Name != "cd" || pipeline.Stages[1].Operator != OpSemicolon {
+		t.Errorf("stage 1: cmd=%q, op=%q, want 'cd', ';'", pipeline.Stages[1].Command.Name, pipeline.Stages[1].Operator)
+	}
+	if pipeline.Stages[2].Command.Name != "ls" || pipeline.Stages[2].Operator != OpNone {
+		t.Errorf("stage 2: cmd=%q, op=%q, want 'ls', ''", pipeline.Stages[2].Command.Name, pipeline.Stages[2].Operator)
+	}
+}
+
+func TestParseNaturalLanguageQueries(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "spanish question inverted question mark",
+			args: []string{"¿cómo puedo ver los puertos abiertos?"},
+			want: "¿cómo puedo ver los puertos abiertos?",
+		},
+		{
+			name: "spanish question split words",
+			args: []string{"como", "ver", "la", "memoria", "libre"},
+			want: "como ver la memoria libre",
+		},
+		{
+			name: "english question how to",
+			args: []string{"how to find large files in /home"},
+			want: "how to find large files in /home",
+		},
+		{
+			name: "english question ending in question mark",
+			args: []string{"How can I list subfolders?"},
+			want: "How can I list subfolders?",
+		},
+		{
+			name: "capitalized sentence prompt",
+			args: []string{"Buscar archivos modificados hoy"},
+			want: "Buscar archivos modificados hoy",
+		},
+		{
+			name: "spanish interrogative cual",
+			args: []string{"cuál es el proceso que más cpu usa"},
+			want: "cuál es el proceso que más cpu usa",
+		},
+		{
+			name: "spanish interrogative donde",
+			args: []string{"dónde están los logs del sistema"},
+			want: "dónde están los logs del sistema",
+		},
+		{
+			name: "capitalized sentence with symbols numbers and uppercase in rest",
+			args: []string{"Revisar script include all en /home/javi/utils con BASH_SOURCE[0] & 123"},
+			want: "Revisar script include all en /home/javi/utils con BASH_SOURCE[0] & 123",
+		},
+		{
+			name: "full question prompt with parenthesis and punctuation",
+			args: []string{"¿Puedes revisar el script include all para ver si es correcto? La idea es que al ejecutarse incluya todos los archivos del directorio en el que se encuentra (no en el que se ejecuta), no sé si esta distinción la he cubierto."},
+			want: "¿Puedes revisar el script include all para ver si es correcto? La idea es que al ejecutarse incluya todos los archivos del directorio en el que se encuentra (no en el que se ejecuta), no sé si esta distinción la he cubierto.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := Parse(tt.args)
+			if p.Comment != tt.want {
+				t.Errorf("Parse(%v).Comment = %q, want %q", tt.args, p.Comment, tt.want)
+			}
+			if len(p.Stages) != 0 {
+				t.Errorf("Parse(%v).Stages = %d, want 0", tt.args, len(p.Stages))
+			}
+		})
+	}
 }

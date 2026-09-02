@@ -34,16 +34,16 @@ case "$REPAINT" in
 esac
 colour=$repaint  # colour only when we own the terminal (or forced)
 
-declare -A run_seen result_seen
-run_order=()
-result_order=()
+declare -A runSeen resultSeen
+runOrder=()
+resultOrder=()
 declare -A results
 misc=()
 
-# split_camel inserts a space before capitals that follow a letter or digit,
+# split-camel inserts a space before capitals that follow a letter or digit,
 # and before a capital followed by capital+lowercase (so PATH and OS survive
 # but PATHDir becomes PATH Dir).
-split_camel() {
+split-camel() {
   printf '%s' "$1" | sed -e 's/\([a-z0-9]\)\([A-Z]\)/\1 \2/g' \
                         -e 's/\([A-Z]\)\([A-Z][a-z]\)/\1 \2/g'
 }
@@ -52,20 +52,20 @@ trim() { # strip leading whitespace
   printf '%s' "${1#"${1%%[![:space:]]*}"}"
 }
 
-leaf_name() { # subtests are rendered below their already-printed parent,
+leaf-name() { # subtests are rendered below their already-printed parent,
               # so only the last segment of the name is worth repeating
   local name
   name=$(trim "$1")
   printf '%s' "${name##*/}"
 }
 
-indent_for() { # one indent level (4 spaces) per "/" in the test name
+indent-for() { # one indent level (4 spaces) per "/" in the test name
   local slashes
   slashes=$(printf '%s' "$1" | tr -cd '/')
   printf '%*s' $(( ${#slashes} * 4 )) ''
 }
 
-colour_status() { # $1 = PASS|FAIL|SKIP
+colour-status() { # $1 = PASS|FAIL|SKIP
   case "$1" in
     PASS) [ "$colour" -eq 1 ] && printf '%s' "$GREEN$1$RESET" || printf '%s' "$1" ;;
     FAIL) [ "$colour" -eq 1 ] && printf '%s' "$RED$1$RESET" || printf '%s' "$1" ;;
@@ -74,28 +74,27 @@ colour_status() { # $1 = PASS|FAIL|SKIP
   esac
 }
 
-render_run() { # $1 = full test name
+render-run() { # $1 = full test name
   local full name
   full=$(trim "$1")
-  name=$(split_camel "$(leaf_name "$full")")
-  printf '%s=== RUN %s\n' "$(indent_for "$(trim "$1")")" "$name"
+  name=$(split-camel "$(leaf-name "$full")")
+  printf '%s=== RUN %s\n' "$(indent-for "$(trim "$1")")" "$name"
 }
 
-render_result() { # $1 = status, $2 = full test name, $3 = is summary
+render-result() { # $1 = status, $2 = full test name, $3 = is summary
   local status name
-  status=$(colour_status "$1")
-  name=$(split_camel "$(leaf_name "$2")")
-  printf '%s--- %s: %s\n' "$(indent_for "$(trim "$2")")" "$status" "$name"
+  status=$(colour-status "$1")
+  name=$(split-camel "$(leaf-name "$2")")
+  printf '%s--- %s: %s\n' "$(indent-for "$(trim "$2")")" "$status" "$name"
 }
 
-print_summary() {
-  printf '\033[H\033[2J'
+print-summary() {
   local name status shown=0
   echo '================ SUMMARY ==================='
-  for name in "${result_order[@]}"; do
+  for name in "${resultOrder[@]}"; do
     status=${results[$name]}
     [ "$status" = PASS ] && continue   # the summary only lists trouble
-    render_result "$status" "$name" 1
+    render-result "$status" "$name" 1
     shown=1
   done
   if [ "$shown" -eq 0 ]; then
@@ -107,17 +106,17 @@ print_summary() {
   fi
 }
 
-stream_line() { # non-repainting mode: decorate and print as they arrive
+stream-line() { # non-repainting mode: decorate and print as they arrive
   local line=$1
   case "$line" in
     '=== RUN '*)
-      render_run "${line#'=== RUN '}" ;;
+      render-run "${line#'=== RUN '}" ;;
     '--- PASS: '*)
-      render_result PASS "${line#'--- PASS: '}" ;;
+      render-result PASS "${line#'--- PASS: '}" ;;
     '--- FAIL: '*)
-      render_result FAIL "${line#'--- FAIL: '}" ;;
+      render-result FAIL "${line#'--- FAIL: '}" ;;
     '--- SKIP: '*)
-      render_result SKIP "${line#'--- SKIP: '}" ;;
+      render-result SKIP "${line#'--- SKIP: '}" ;;
     '=== PAUSE '*|'=== CONT '*)
       : ;;
     *)
@@ -132,9 +131,9 @@ while IFS= read -r raw; do
   case "$line" in
     '=== RUN '*)
       name=${line#'=== RUN '}
-      if [[ -z ${run_seen[$name]+x} ]]; then
-        run_seen[$name]=1
-        run_order+=("$name")
+      if [[ -z ${runSeen[$name]+x} ]]; then
+        runSeen[$name]=1
+        runOrder+=("$name")
       fi
       ;;
     '--- PASS: '*|'--- FAIL: '*|'--- SKIP: '*)
@@ -143,9 +142,9 @@ while IFS= read -r raw; do
       name=${rest#*: }
       name=${name%% (*}
       name=${name% }        # trailing space when there is no duration
-      if [[ -z ${result_seen[$name]+x} ]]; then
-        result_seen[$name]=1
-        result_order+=("$name")
+      if [[ -z ${resultSeen[$name]+x} ]]; then
+        resultSeen[$name]=1
+        resultOrder+=("$name")
       fi
       results[$name]=$status
       ;;
@@ -158,9 +157,9 @@ while IFS= read -r raw; do
       ;;
   esac
 
-  stream_line "$line"
+  stream-line "$line"
 done
 
 if [ "$repaint" -eq 1 ]; then
-  print_summary
+  print-summary
 fi

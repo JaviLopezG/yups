@@ -15,10 +15,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/BurntSushi/toml"
-
-	"yups/internal/semver"
 )
 
 // Default repository URLs written when the configuration file does not
@@ -28,8 +27,8 @@ const (
 	DefaultYUPSRepo                    = "https://code.javilopezg.com/javilopezg/yups"
 	DefaultYUPSRepoFallback            = "https://github.com/JaviLopezG/yups"
 	DefaultInferenceEndpoint           = "http://localhost:11434"
-	DefaultModel                       = "qwen2.5-coder:latest"
-	DefaultAdvancedModel               = "qwen3.8:latest"
+	DefaultModel                       = "qwen3-coder:latest"
+	DefaultAdvancedModel               = "gemma4:latest"
 	DefaultLLMEnabled                  = true
 	DefaultLLMTimeoutSeconds           = 60
 	DefaultToolExecutionTimeoutSeconds = 5
@@ -44,7 +43,6 @@ const (
 
 // Config mirrors the on-disk config.toml organized into sections.
 type Config struct {
-	Version          string          `toml:"version"`
 	YUPSRepo         string          `toml:"yups-repo"`
 	YUPSRepoFallback string          `toml:"yups-repo-fallback"`
 	Inference        InferenceConfig `toml:"inference"`
@@ -53,11 +51,10 @@ type Config struct {
 
 // InferenceConfig holds AI model and endpoint parameters.
 type InferenceConfig struct {
-	Endpoint        string   `toml:"endpoint"`
-	DefaultModel    string   `toml:"default-model"`
-	AdvancedModel   string   `toml:"advanced-model"`
-	AvailableModels []string `toml:"available-models,omitempty"`
-	Disabled        bool     `toml:"disabled,omitempty"`
+	Endpoint      string `toml:"endpoint"`
+	DefaultModel  string `toml:"default-model"`
+	AdvancedModel string `toml:"advanced-model"`
+	Disabled      bool   `toml:"disabled,omitempty"`
 }
 
 // LimitsConfig holds execution limits, timeouts, and multipliers.
@@ -138,18 +135,9 @@ func (c Config) GetAdvancedMultiplier() int {
 	return c.Limits.AdvancedMultiplier
 }
 
-// GetAvailableModels returns the configured models list or default fallbacks.
+// GetAvailableModels returns the configured default and advanced models.
 func (c Config) GetAvailableModels() []string {
-	if len(c.Inference.AvailableModels) > 0 {
-		return c.Inference.AvailableModels
-	}
-	models := []string{DefaultModel, DefaultAdvancedModel}
-	if c.Inference.DefaultModel != "" && c.Inference.DefaultModel != DefaultModel {
-		models = append(models, c.Inference.DefaultModel)
-	}
-	if c.Inference.AdvancedModel != "" && c.Inference.AdvancedModel != DefaultAdvancedModel {
-		models = append(models, c.Inference.AdvancedModel)
-	}
+	models := []string{c.GetDefaultModel(), c.GetAdvancedModel()}
 	return dedupeStrings(models)
 }
 
@@ -185,22 +173,59 @@ func LogsDir(home string) string {
 	return filepath.Join(Dir(home), "logs")
 }
 
+// IncidentsLogPath returns the path to the aggregated incidents log file.
+func IncidentsLogPath(home string) string {
+	return filepath.Join(LogsDir(home), "incidents.log")
+}
+
+// ScriptsDir returns the directory where yups utility scripts live.
+func ScriptsDir(home string) string {
+	return filepath.Join(Dir(home), "scripts")
+}
+
+// DataDir returns the directory where static data assets live under ~/.yups.
+func DataDir(home string) string {
+	return filepath.Join(Dir(home), "data")
+}
+
+// PromptsDir returns the directory where prompt templates live under ~/.yups.
+func PromptsDir(home string) string {
+	return filepath.Join(Dir(home), "prompts")
+}
+
 // ShellDir returns the directory where shell integration scripts live.
 func ShellDir(home string) string {
 	return filepath.Join(Dir(home), "shell")
 }
 
-// ShellScriptPath returns the path to the bash integration script.
+// ShellScriptPath returns the path to the main bash integration entrypoint script.
 func ShellScriptPath(home string) string {
 	return filepath.Join(ShellDir(home), "yups.bash")
 }
 
-// Defaults returns the configuration used when nothing has been stored
-// yet. Version starts at the floor: it records the highest version ever
-// run, and no version has run until something writes the file.
+// KeybindingScriptPath returns the path to the readline keybinding integration script.
+func KeybindingScriptPath(home string) string {
+	return filepath.Join(ShellDir(home), "keybinding.bash")
+}
+
+// CompletionScriptPath returns the path to the bash tab-completion script.
+func CompletionScriptPath(home string) string {
+	return filepath.Join(ShellDir(home), "completion.bash")
+}
+
+// EnvScriptPath returns the path to the yups shell wrapper script.
+func EnvScriptPath(home string) string {
+	return filepath.Join(ShellDir(home), "env.bash")
+}
+
+// StatePath returns the path to the internal state.toml file.
+func StatePath(home string) string {
+	return filepath.Join(Dir(home), "state.toml")
+}
+
+// Defaults returns the configuration used when nothing has been stored yet.
 func Defaults() Config {
 	return Config{
-		Version:          FloorVersion,
 		YUPSRepo:         DefaultYUPSRepo,
 		YUPSRepoFallback: DefaultYUPSRepoFallback,
 		Inference: InferenceConfig{
@@ -222,9 +247,6 @@ func Defaults() Config {
 // EnsureDefaults fills every empty field with its default value. Fields
 // already set by the user are kept untouched.
 func EnsureDefaults(c *Config) {
-	if c.Version == "" {
-		c.Version = FloorVersion
-	}
 	if c.YUPSRepo == "" {
 		c.YUPSRepo = DefaultYUPSRepo
 	}
@@ -259,7 +281,6 @@ func EnsureDefaults(c *Config) {
 
 // rawLegacyConfig handles parsing both older flat TOML configs and sectioned TOML configs.
 type rawLegacyConfig struct {
-	Version          string `toml:"version"`
 	YUPSRepo         string `toml:"yups-repo"`
 	YUPSRepoFallback string `toml:"yups-repo-fallback"`
 
@@ -315,8 +336,14 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("corrupt configuration file %q: %w", path, err)
 	}
 
+	if versionLineRegex.Match(data) {
+		_, _, _ = CleanLegacyVersion(path)
+	}
+	if availableModelsLineRegex.Match(data) {
+		_, _ = CleanLegacyAvailableModels(path)
+	}
+
 	c := Config{
-		Version:          raw.Version,
 		YUPSRepo:         raw.YUPSRepo,
 		YUPSRepoFallback: raw.YUPSRepoFallback,
 	}
@@ -342,12 +369,6 @@ func Load(path string) (Config, error) {
 		advancedModel = raw.AdvancedModel
 	}
 	c.Inference.AdvancedModel = advancedModel
-
-	if len(raw.Inference.AvailableModels) > 0 {
-		c.Inference.AvailableModels = raw.Inference.AvailableModels
-	} else if len(raw.AvailableModels) > 0 {
-		c.Inference.AvailableModels = raw.AvailableModels
-	}
 
 	if raw.Inference.Disabled != nil {
 		c.Inference.Disabled = *raw.Inference.Disabled
@@ -400,6 +421,7 @@ func Save(path string, c Config) error {
 	}
 
 	var buf bytes.Buffer
+	buf.WriteString("# Configuration file for yups.\n# THIS FILE IS PRESERVED ON REINSTALLATION OR UPDATE (user settings are kept; missing options are added).\n\n")
 	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
 		return fmt.Errorf("encoding configuration for %q: %w", path, err)
 	}
@@ -409,23 +431,51 @@ func Save(path string, c Config) error {
 	return nil
 }
 
-// BumpVersion moves c.Version forward to tag when tag is strictly newer,
-// reporting whether the stored version changed. It never moves backwards:
-// the field records the highest version ever seen so multi-version jumps
-// apply every intermediate migration.
-func BumpVersion(c *Config, tag string) bool {
-	if !semver.IsNewer(c.Version, tag) {
-		return false
+var versionLineRegex = regexp.MustCompile(`(?m)^version\s*=\s*["']?([^"'\r\n]*)["']?\r?\n?`)
+
+// CleanLegacyVersion removes any legacy `version = "..."` entry from the config
+// file at path, preserving comments and formatting. Returns the legacy version found
+// (if any) and whether the file was updated.
+func CleanLegacyVersion(path string) (string, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
 	}
-	c.Version = tag
-	return true
+	content := string(data)
+	match := versionLineRegex.FindStringSubmatch(content)
+	if match == nil {
+		return "", false, nil
+	}
+	legacyVer := match[1]
+	cleaned := versionLineRegex.ReplaceAllString(content, "")
+	if err := os.WriteFile(path, []byte(cleaned), 0o644); err != nil {
+		return legacyVer, false, fmt.Errorf("writing cleaned configuration %q: %w", path, err)
+	}
+	return legacyVer, true, nil
 }
 
-// SetVersion updates c.Version to tag, returning whether the stored version changed.
-func SetVersion(c *Config, tag string) bool {
-	if c.Version == tag {
-		return false
+var availableModelsLineRegex = regexp.MustCompile(`(?m)^available-models\s*=\s*\[[^\]]*\]\r?\n?`)
+
+// CleanLegacyAvailableModels removes any legacy `available-models = [...]` entry from the config
+// file at path, preserving comments and formatting. Returns whether the file was updated.
+func CleanLegacyAvailableModels(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
 	}
-	c.Version = tag
-	return true
+	content := string(data)
+	if !availableModelsLineRegex.MatchString(content) {
+		return false, nil
+	}
+	cleaned := availableModelsLineRegex.ReplaceAllString(content, "")
+	if err := os.WriteFile(path, []byte(cleaned), 0o644); err != nil {
+		return false, fmt.Errorf("writing cleaned configuration %q: %w", path, err)
+	}
+	return true, nil
 }

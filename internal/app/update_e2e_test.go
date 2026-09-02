@@ -67,7 +67,7 @@ func TestUpdateEndToEndReplacesInstalledBinary(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/repos/owner/repo/releases/latest":
 			fmt.Fprintf(w, `{"tag_name": "v0.1.0", "assets": [
-				{"name": "yups_v0.1.0_linux_%s.tar.gz", "browser_download_url": "%s/archive.tar.gz"},
+				{"name": "yups-v0.1.0-linux-%s.tar.gz", "browser_download_url": "%s/archive.tar.gz"},
 				{"name": %q, "browser_download_url": "%s/checksums.txt"}]}`,
 				runtime.GOARCH, server.URL, update.ChecksumsFileName, server.URL)
 		case "/archive.tar.gz":
@@ -75,7 +75,7 @@ func TestUpdateEndToEndReplacesInstalledBinary(t *testing.T) {
 			_, _ = w.Write(buildTestArchive(t, newPayload))
 		case "/checksums.txt":
 			sum := sha256.Sum256(buildTestArchive(t, newPayload))
-			fmt.Fprintf(w, "%s  yups_v0.1.0_linux_%s.tar.gz\n", hex.EncodeToString(sum[:]), runtime.GOARCH)
+			fmt.Fprintf(w, "%s  yups-v0.1.0-linux-%s.tar.gz\n", hex.EncodeToString(sum[:]), runtime.GOARCH)
 		default:
 			http.NotFound(w, r)
 		}
@@ -89,13 +89,17 @@ func TestUpdateEndToEndReplacesInstalledBinary(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("creating fake home: %v", err)
 	}
-	configBody := fmt.Sprintf("version = \"v0.0.9\"\nyups-repo = %q\nyups-repo-fallback = %q\n",
+	configBody := fmt.Sprintf("yups-repo = %q\nyups-repo-fallback = %q\n",
 		server.URL+"/owner/repo", server.URL+"/fallback/repo")
 	if err := os.MkdirAll(config.Dir(home), 0o755); err != nil {
 		t.Fatalf("creating the fake .yups directory: %v", err)
 	}
 	if err := os.WriteFile(config.Path(home), []byte(configBody), 0o644); err != nil {
 		t.Fatalf("writing the fake config: %v", err)
+	}
+	stateBody := "version = \"v0.0.9\"\nlast-applied = \"v0.0.9\"\n"
+	if err := os.WriteFile(config.StatePath(home), []byte(stateBody), 0o644); err != nil {
+		t.Fatalf("writing the fake state: %v", err)
 	}
 	installedBinary := filepath.Join(binDir, ProgramName)
 	payload, err := os.ReadFile(oldBinary)
@@ -123,16 +127,16 @@ func TestUpdateEndToEndReplacesInstalledBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("running the updated binary: %v: %s", err, versionOut)
 	}
-	if got := strings.TrimSpace(string(versionOut)); got != ProgramName+" v0.1.0" {
-		t.Errorf("installed binary reports %q, want %q", got, ProgramName+" v0.1.0")
+	if got := strings.TrimSpace(string(versionOut)); !strings.Contains(got, ProgramName+" v0.1.0") {
+		t.Errorf("installed binary reports %q, want it to contain %q", got, ProgramName+" v0.1.0")
 	}
 
-	updatedConfig, err := os.ReadFile(config.Path(home))
+	updatedState, err := os.ReadFile(config.StatePath(home))
 	if err != nil {
-		t.Fatalf("reading the config after the update: %v", err)
+		t.Fatalf("reading the state after the update: %v", err)
 	}
-	if !strings.Contains(string(updatedConfig), `version = "v0.1.0"`) {
-		t.Errorf("config.version did not advance: %s", updatedConfig)
+	if !strings.Contains(string(updatedState), `version = "v0.1.0"`) {
+		t.Errorf("state.version did not advance: %s", updatedState)
 	}
 }
 

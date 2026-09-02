@@ -184,14 +184,14 @@ func TestSelectBestModels(t *testing.T) {
 			wantAdvanced: "gemma4:latest",
 		},
 		{
-			name: "qwen3.8 prioritized for advanced",
+			name: "gemma4 prioritized for advanced",
 			models: []ModelInfo{
 				{Name: "qwen2.5-coder:7b", Size: 4500000000},
 				{Name: "qwen3.8:latest", Size: 12000000000},
 				{Name: "gemma4:latest", Size: 10000000000},
 			},
 			wantDefault:  "qwen2.5-coder:7b",
-			wantAdvanced: "qwen3.8:latest",
+			wantAdvanced: "gemma4:latest",
 		},
 	}
 
@@ -250,15 +250,15 @@ type fakeLLMEnv struct {
 	home      string
 	cwd       string
 	osRelease string
-	history   []string
+	history   []HistoryEntry
 	snippets  map[string]string
 	dirItems  map[string][]string
 }
 
-func (f *fakeLLMEnv) UserHomeDir() (string, error)                   { return f.home, nil }
-func (f *fakeLLMEnv) Getwd() (string, error)                         { return f.cwd, nil }
-func (f *fakeLLMEnv) ReadOSRelease() string                          { return f.osRelease }
-func (f *fakeLLMEnv) ReadHistory(home string, maxLines int) []string { return f.history }
+func (f *fakeLLMEnv) UserHomeDir() (string, error)                         { return f.home, nil }
+func (f *fakeLLMEnv) Getwd() (string, error)                               { return f.cwd, nil }
+func (f *fakeLLMEnv) ReadOSRelease() string                                { return f.osRelease }
+func (f *fakeLLMEnv) ReadHistory(home string, maxLines int) []HistoryEntry { return f.history }
 func (f *fakeLLMEnv) ReadFileSnippet(path string, max int) (string, error) {
 	return f.snippets[path], nil
 }
@@ -271,7 +271,7 @@ func TestGatherContext(t *testing.T) {
 		home:      "/home/alice",
 		cwd:       "/home/alice/project",
 		osRelease: "Ubuntu 24.04 LTS",
-		history:   []string{"git status", "make test"},
+		history:   []HistoryEntry{{Timestamp: "2026-08-31 12:00:00", Command: "git status"}, {Command: "make test"}},
 		dirItems: map[string][]string{
 			".":  {"main.go", "go.mod", "script.sh"},
 			"..": {"project", "other"},
@@ -296,6 +296,96 @@ func TestGatherContext(t *testing.T) {
 	}
 	if snippet, ok := ctx.FileSnippets["script.sh"]; !ok || !strings.Contains(snippet, "#!/bin/bash") {
 		t.Errorf("FileSnippets[script.sh] = %q", snippet)
+	}
+}
+
+func TestParseLLMResponseJSON(t *testing.T) {
+	tests := []struct {
+		name        string
+		raw         string
+		wantCmd     string
+		wantScript  string
+		wantExplain string
+	}{
+		{
+			name: "strict json with kebab-case",
+			raw: `{
+				"explanation": "The -Z option is used for SELinux context.",
+				"suggested-command": "ls -laZ /var/log",
+				"suggested-script": ""
+			}`,
+			wantCmd:     "ls -laZ /var/log",
+			wantExplain: "The -Z option is used for SELinux context.",
+		},
+		{
+			name: "json with snake_case",
+			raw: `{
+				"explanation": "Typo in command.",
+				"suggested_command": "ls -av"
+			}`,
+			wantCmd:     "ls -av",
+			wantExplain: "Typo in command.",
+		},
+		{
+			name: "json with camelCase",
+			raw: `{
+				"explanation": "Use find instead.",
+				"suggestedCommand": "find . -name '*.txt'"
+			}`,
+			wantCmd:     "find . -name '*.txt'",
+			wantExplain: "Use find instead.",
+		},
+		{
+			name: "json with multiline script",
+			raw: `{
+				"explanation": "Iterate through text files.",
+				"suggested-script": "for f in *.txt; do\n  echo \"$f\"\ndone"
+			}`,
+			wantScript:  "for f in *.txt; do\n  echo \"$f\"\ndone",
+			wantExplain: "Iterate through text files.",
+		},
+		{
+			name: "json with single-line script normalized to command",
+			raw: `{
+				"explanation": "Single line script.",
+				"suggested-script": "tar -czf archive.tar.gz /path/to/dir"
+			}`,
+			wantCmd:     "tar -czf archive.tar.gz /path/to/dir",
+			wantExplain: "Single line script.",
+		},
+		{
+			name:        "markdown fenced json",
+			raw:         "```json\n{\n  \"explanation\": \"Fenced JSON response.\",\n  \"suggested-command\": \"grep -rn 'pattern' .\"\n}\n```",
+			wantCmd:     "grep -rn 'pattern' .",
+			wantExplain: "Fenced JSON response.",
+		},
+		{
+			name:        "markdown fenced json without language tag",
+			raw:         "```\n{\n  \"explanation\": \"Fenced without tag.\",\n  \"suggested-command\": \"ps aux | grep node\"\n}\n```",
+			wantCmd:     "ps aux | grep node",
+			wantExplain: "Fenced without tag.",
+		},
+		{
+			name:        "json with surrounding prose text",
+			raw:         "Here is the result:\n{\n  \"explanation\": \"Answer with prose wrapper.\",\n  \"suggested-command\": \"uptime\"\n}\nHope this helps!",
+			wantCmd:     "uptime",
+			wantExplain: "Answer with prose wrapper.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := ParseLLMResponse(tc.raw)
+			if res.SuggestedCommand != tc.wantCmd {
+				t.Errorf("SuggestedCommand = %q, want %q", res.SuggestedCommand, tc.wantCmd)
+			}
+			if res.SuggestedScript != tc.wantScript {
+				t.Errorf("SuggestedScript = %q, want %q", res.SuggestedScript, tc.wantScript)
+			}
+			if res.Explanation != tc.wantExplain {
+				t.Errorf("Explanation = %q, want %q", res.Explanation, tc.wantExplain)
+			}
+		})
 	}
 }
 
@@ -341,6 +431,9 @@ func TestBuildChatRequestIncludesTools(t *testing.T) {
 	if req.Tools[1].Function.Name != "command-run" {
 		t.Errorf("tool 1 name = %q, want 'command-run'", req.Tools[1].Function.Name)
 	}
+	if !strings.Contains(req.Messages[0].Content, "$YUPS_SCRIPT") {
+		t.Errorf("expected $YUPS_SCRIPT instruction in system prompt:\n%s", req.Messages[0].Content)
+	}
 }
 
 func TestFormatToolResponse(t *testing.T) {
@@ -362,8 +455,9 @@ func TestFormatToolResponse(t *testing.T) {
 		},
 	}
 
-	formatted := FormatToolResponse(cmdDoc)
+	formatted := FormatToolResponse(cmdDoc, "abc12345")
 	for _, want := range []string{
+		`<tool-output-abc12345 name="fetch-command-documentation" command="tar">`,
 		"--- [tar] --help output ---",
 		"-c, --create",
 		"--- [tar] man page ---",
@@ -372,10 +466,27 @@ func TestFormatToolResponse(t *testing.T) {
 		"tar -czvf target.tar.gz",
 		"--- [tar] cheat-sh cheatsheet (tar) ---",
 		"tar -xvf file.tar",
+		"</tool-output-abc12345>",
 	} {
 		if !strings.Contains(formatted, want) {
 			t.Errorf("formatted tool response missing expected chunk %q\nFull output:\n%s", want, formatted)
 		}
+	}
+}
+
+func TestExtractNonce(t *testing.T) {
+	msgs := []Message{
+		{Role: "system", Content: "System prompt"},
+		{Role: "user", Content: "<user-input-fedcba98>\nls -la\n</user-input-fedcba98>"},
+	}
+	nonce := ExtractNonce(msgs)
+	if nonce != "fedcba98" {
+		t.Fatalf("ExtractNonce() = %q, want %q", nonce, "fedcba98")
+	}
+
+	emptyNonce := ExtractNonce([]Message{{Role: "user", Content: "plain text"}})
+	if emptyNonce != "" {
+		t.Fatalf("ExtractNonce() on plain message = %q, want empty", emptyNonce)
 	}
 }
 
@@ -397,10 +508,10 @@ func TestExtractToolCalls(t *testing.T) {
 		t.Errorf("calls1 = %+v, want 1 fetch-command-documentation call", calls1)
 	}
 
-	// 2. XML tag fallback: <tool_call>...</tool_call>
+	// 2. XML tag fallback: <tool-call>...</tool-call>
 	msg2 := Message{
 		Role:    "assistant",
-		Content: `<tool_call>{"name": "fetch-command-documentation", "arguments": {"command": "tar", "subcommand": "create"}}</tool_call>`,
+		Content: `<tool-call>{"name": "fetch-command-documentation", "arguments": {"command": "tar", "subcommand": "create"}}</tool-call>`,
 	}
 	calls2 := ExtractToolCalls(msg2)
 	if len(calls2) != 1 || calls2[0].Function.Name != "fetch-command-documentation" {
@@ -439,11 +550,17 @@ func TestExtractToolCalls(t *testing.T) {
 
 func TestBuildChatRequestDynamicNonceXMLBoundaries(t *testing.T) {
 	sysCtx := SystemContext{
-		OSRelease: "Fedora 43",
-		CWD:       "/home/javi",
-		RecentHistory: []string{
-			"ls -javi # quiero diferenciar entre binarios y archivos de texto",
-			"yups --test-models",
+		CurrentTime: "2026-08-31 12:30:00",
+		OSRelease:   "Fedora 43",
+		CWD:         "/home/javi",
+		RecentHistory: []HistoryEntry{
+			{
+				Timestamp: "2026-08-31 12:28:15",
+				Command:   "ls -javi # quiero diferenciar entre binarios y archivos de texto",
+			},
+			{
+				Command: "yups --test-models",
+			},
 		},
 		FileSnippets: map[string]string{
 			"script.sh": "#!/bin/bash\necho test\n",
@@ -458,25 +575,40 @@ func TestBuildChatRequestDynamicNonceXMLBoundaries(t *testing.T) {
 	sysMsg := req.Messages[0].Content
 	userMsg := req.Messages[1].Content
 
-	// Check that system message contains security instructions and XML tags
+	// Check that system message contains security instructions, XML tags, and strict JSON format rules
 	if !strings.Contains(sysMsg, "CRITICAL DATA INTEGRITY") {
 		t.Errorf("sysMsg missing CRITICAL DATA INTEGRITY instruction:\n%s", sysMsg)
 	}
-	if !strings.Contains(sysMsg, "<system_context_") {
-		t.Errorf("sysMsg missing <system_context_ tag:\n%s", sysMsg)
+	if !strings.Contains(sysMsg, "Final Response Format (STRICT JSON)") {
+		t.Errorf("sysMsg missing Final Response Format (STRICT JSON) instruction:\n%s", sysMsg)
 	}
-	if !strings.Contains(sysMsg, "<recent_shell_history_") {
-		t.Errorf("sysMsg missing <recent_shell_history_ tag:\n%s", sysMsg)
+	if !strings.Contains(sysMsg, `"suggested-command"`) {
+		t.Errorf("sysMsg missing suggested-command schema in instructions:\n%s", sysMsg)
 	}
-	if !strings.Contains(sysMsg, "<history_entry>ls -javi # quiero diferenciar entre binarios y archivos de texto</history_entry>") {
-		t.Errorf("sysMsg missing history entry:\n%s", sysMsg)
+	if !strings.Contains(sysMsg, "<system-context-") {
+		t.Errorf("sysMsg missing <system-context- tag:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, "<current-time>2026-08-31 12:30:00</current-time>") {
+		t.Errorf("sysMsg missing <current-time> tag:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, "<recent-shell-history-") {
+		t.Errorf("sysMsg missing <recent-shell-history- tag:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, `<history-entry time="2026-08-31 12:28:15">ls -javi # quiero diferenciar entre binarios y archivos de texto</history-entry>`) {
+		t.Errorf("sysMsg missing history entry with timestamp:\n%s", sysMsg)
+	}
+	if !strings.Contains(sysMsg, `<history-entry>yups --test-models</history-entry>`) {
+		t.Errorf("sysMsg missing history entry without timestamp:\n%s", sysMsg)
 	}
 
-	// Check that user message contains XML tags
-	if !strings.Contains(userMsg, "<user_command_line_") || !strings.Contains(userMsg, "grep -r pattern .") {
-		t.Errorf("userMsg missing <user_command_line_ tag:\n%s", userMsg)
+	// Check that user message contains XML tags and strict JSON task instruction
+	if !strings.Contains(userMsg, "<user-input-") || !strings.Contains(userMsg, "grep -r pattern .") {
+		t.Errorf("userMsg missing <user-input- tag:\n%s", userMsg)
 	}
-	if !strings.Contains(userMsg, "<unknown_items_") || !strings.Contains(userMsg, "- -r") {
-		t.Errorf("userMsg missing <unknown_items_ tag:\n%s", userMsg)
+	if !strings.Contains(userMsg, "<unknown-items-") || !strings.Contains(userMsg, "- -r") {
+		t.Errorf("userMsg missing <unknown-items- tag:\n%s", userMsg)
+	}
+	if !strings.Contains(userMsg, "strict JSON object") {
+		t.Errorf("userMsg missing strict JSON task requirement:\n%s", userMsg)
 	}
 }

@@ -630,7 +630,7 @@ func startReleaseServer(t *testing.T, tag string, payload []byte) string {
 
 	archive := tarGzOf(t, payload)
 	sum := sha256.Sum256(archive)
-	archiveName := fmt.Sprintf("yups_%s_linux_%s.tar.gz", tag, runtime.GOARCH)
+	archiveName := fmt.Sprintf("yups-%s-linux-%s.tar.gz", tag, runtime.GOARCH)
 
 	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
@@ -700,7 +700,7 @@ func installCopy(t *testing.T, id, source, path, owner string) {
 	}
 }
 
-// writeUserConfig creates ~/.yups/config.toml for the given user pointing
+// writeUserConfig creates ~/.yups/config.toml and state.toml for the given user pointing
 // at the fake release repository.
 func writeUserConfig(t *testing.T, id, user, repoURL, version string) {
 	t.Helper()
@@ -709,8 +709,8 @@ func writeUserConfig(t *testing.T, id, user, repoURL, version string) {
 		home = "/home/" + user
 	}
 	script := fmt.Sprintf(
-		"mkdir -p %[1]s/.yups && printf 'version = \"%[2]s\"\\nyups-repo = \"%[3]s\"\\nyups-repo-fallback = \"http://fallback.invalid/a/b\"\\n' > %[1]s/.yups/config.toml",
-		home, version, repoURL)
+		"mkdir -p %[1]s/.yups && printf 'yups-repo = \"%[2]s\"\\nyups-repo-fallback = \"http://fallback.invalid/a/b\"\\n' > %[1]s/.yups/config.toml && printf 'version = \"%[3]s\"\\nlast-applied = \"%[3]s\"\\n' > %[1]s/.yups/state.toml",
+		home, repoURL, version)
 	asUser := ""
 	if user != "" && user != "root" {
 		asUser = user
@@ -744,8 +744,8 @@ func TestUpdateInsideContainerAsRoot(t *testing.T) {
 		if code != 0 || !strings.Contains(versionOut, "v0.1.0") {
 			t.Errorf("the installed binary does not report v0.1.0 (%d): %s", code, versionOut)
 		}
-		configOut, _ := sh(t, id, "root", "", "cat /root/.yups/config.toml")
-		requireOutputContains(t, configOut, `version = "v0.1.0"`)
+		stateOut, _ := sh(t, id, "root", "", "cat /root/.yups/state.toml")
+		requireOutputContains(t, stateOut, `version = "v0.1.0"`)
 	})
 }
 
@@ -800,10 +800,10 @@ func TestUpdateAsRootDoesNotTouchOtherUsersConfig(t *testing.T) {
 			t.Fatalf("exit code = %d, want 0\n%s", code, out)
 		}
 
-		rootConfig, _ := sh(t, id, "root", "", "cat /root/.yups/config.toml")
-		requireOutputContains(t, rootConfig, `version = "v0.1.0"`)
-		plainConfig, _ := sh(t, id, "root", "", "cat /home/plain/.yups/config.toml")
-		requireOutputContains(t, plainConfig, `version = "v0.0.5"`)
+		rootState, _ := sh(t, id, "root", "", "cat /root/.yups/state.toml")
+		requireOutputContains(t, rootState, `version = "v0.1.0"`)
+		plainState, _ := sh(t, id, "root", "", "cat /home/plain/.yups/state.toml")
+		requireOutputContains(t, plainState, `version = "v0.0.5"`)
 	})
 }
 

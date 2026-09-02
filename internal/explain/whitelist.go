@@ -3,73 +3,19 @@ package explain
 import (
 	"fmt"
 	"strings"
+
+	"yups/assets"
 )
 
 // WhitelistedCommands defines the set of unconditionally safe, read-only inspection commands
 // that the LLM is permitted to invoke via the 'command-run' tool.
-var WhitelistedCommands = map[string]bool{
-	"ls":         true,
-	"pwd":        true,
-	"stat":       true,
-	"file":       true,
-	"du":         true,
-	"df":         true,
-	"find":       true,
-	"locate":     true,
-	"tree":       true,
-	"cat":        true,
-	"less":       true,
-	"more":       true,
-	"grep":       true,
-	"egrep":      true,
-	"fgrep":      true,
-	"head":       true,
-	"tail":       true,
-	"diff":       true,
-	"cmp":        true,
-	"wc":         true,
-	"md5sum":     true,
-	"sha256sum":  true,
-	"ps":         true,
-	"top":        true,
-	"htop":       true,
-	"free":       true,
-	"uptime":     true,
-	"lscpu":      true,
-	"lspci":      true,
-	"lsusb":      true,
-	"lshw":       true,
-	"dmidecode":  true,
-	"ip":         true,
-	"ss":         true,
-	"ping":       true,
-	"traceroute": true,
-	"mtr":        true,
-	"dig":        true,
-	"nslookup":   true,
-	"host":       true,
-	"uname":      true,
-	"which":      true,
-	"whereis":    true,
-	"compgen":    true,
-	"type":       true,
-	"alias":      true,
-	"echo":       true,
-	"cd":         true,
-}
+var WhitelistedCommands = assets.GetWhitelistedCommands()
 
 // WhitelistedWrappers defines safe wrappers that can prefix an inspection command.
-var WhitelistedWrappers = map[string]bool{
-	"sudo":  true,
-	"env":   true,
-	"time":  true,
-	"nohup": true,
-	"nice":  true,
-}
+var WhitelistedWrappers = assets.GetWhitelistedWrappers()
 
-// ConditionalCommandValidators maps commands that are allowed only when invoked
-// with read-only subcommands or dry-run/simulation flags.
-var ConditionalCommandValidators = map[string]func(cmd *Command) (bool, string){
+// validatorRegistry holds the validation functions for commands requiring conditional checking.
+var validatorRegistry = map[string]func(cmd *Command) (bool, string){
 	"rsync":   validateRsync,
 	"make":    validateMake,
 	"bash":    validateBashOrSh,
@@ -86,6 +32,20 @@ var ConditionalCommandValidators = map[string]func(cmd *Command) (bool, string){
 	"npm":     validateNpmOrYarn,
 	"pnpm":    validateNpmOrYarn,
 	"yarn":    validateNpmOrYarn,
+}
+
+// ConditionalCommandValidators maps commands that are allowed only when invoked
+// with read-only subcommands or dry-run/simulation flags.
+var ConditionalCommandValidators = buildConditionalValidators()
+
+func buildConditionalValidators() map[string]func(cmd *Command) (bool, string) {
+	m := make(map[string]func(cmd *Command) (bool, string))
+	for _, name := range assets.GetWhitelistedConditionalCommands() {
+		if fn, ok := validatorRegistry[name]; ok {
+			m[name] = fn
+		}
+	}
+	return m
 }
 
 // hasFlag checks whether the command contains any of the target flag names.
