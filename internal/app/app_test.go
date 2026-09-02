@@ -1215,7 +1215,7 @@ func TestOSReadHistory(t *testing.T) {
 		t.Errorf("second to last line = %+v, want 'ls #marca' with timestamp '2026-08-31 12:15:30'", lines[len(lines)-2])
 	}
 
-	// 2. Test that when YUPS_SESSION_HISTORY is unset, returns nil (no disk fallback)
+	// 2. Test that when YUPS_SESSION_HISTORY is unset, fallback to disk .bash_history
 	t.Setenv("YUPS_SESSION_HISTORY", "")
 	bashHistFile := filepath.Join(tempDir, ".bash_history")
 	bashHistContent := "#1629837264\ngit status\n#1629837270\ngit diff\n"
@@ -1224,8 +1224,8 @@ func TestOSReadHistory(t *testing.T) {
 	}
 
 	fallbackLines := osReadHistory(tempDir, 10)
-	if fallbackLines != nil {
-		t.Fatalf("fallbackLines = %v, want nil (no disk fallback)", fallbackLines)
+	if len(fallbackLines) != 2 || fallbackLines[0].Command != "git status" || fallbackLines[1].Command != "git diff" {
+		t.Fatalf("fallbackLines = %v, want [{git status} {git diff}]", fallbackLines)
 	}
 }
 
@@ -1405,7 +1405,7 @@ func TestRunModelBenchmarkOutputAndColorCoding(t *testing.T) {
 	}
 }
 
-func TestEmptyTriggerNonYupsHistoryAsksToExplain(t *testing.T) {
+func TestEmptyTriggerNonYupsHistoryExplainsDirectly(t *testing.T) {
 	fs := newFakeFS()
 	fs.addExecutable("/usr/local/bin/yups")
 	fs.existingPaths[config.Dir(fs.home)] = true
@@ -1416,11 +1416,6 @@ func TestEmptyTriggerNonYupsHistoryAsksToExplain(t *testing.T) {
 			{Command: "git push -f origin main"},
 		}
 	}
-	askedPrompt := ""
-	env.AskConfirmation = func(prompt string, defaultYes bool) bool {
-		askedPrompt = prompt
-		return true
-	}
 
 	var stdout, stderr bytes.Buffer
 	code := Dispatch(env, []string{}, &stdout, &stderr)
@@ -1428,12 +1423,20 @@ func TestEmptyTriggerNonYupsHistoryAsksToExplain(t *testing.T) {
 		t.Fatalf("exit code = %d, want ExitOK (%d)", code, ExitOK)
 	}
 
-	if !strings.Contains(askedPrompt, "git push -f origin main") {
-		t.Errorf("expected confirmation prompt for 'git push -f origin main', got %q", askedPrompt)
-	}
 	out := stdout.String()
 	if !strings.Contains(out, "git push -f origin main") {
 		t.Errorf("expected explanation output to contain command name, got:\n%s", out)
+	}
+
+	// Also verify with empty readline keybinding arg shape ["--", ""]
+	var stdout2, stderr2 bytes.Buffer
+	code2 := Dispatch(env, []string{"--", ""}, &stdout2, &stderr2)
+	if code2 != ExitOK {
+		t.Fatalf("exit code = %d, want ExitOK (%d)", code2, ExitOK)
+	}
+	out2 := stdout2.String()
+	if !strings.Contains(out2, "git push -f origin main") {
+		t.Errorf("expected explanation output for ['--', ''] to contain command name, got:\n%s", out2)
 	}
 }
 
@@ -1521,5 +1524,80 @@ RESPONSE PAYLOAD:
 	}
 	if !strings.Contains(out, "git status -sb") {
 		t.Errorf("expected advanced model response with 'git status -sb' in output:\n%s", out)
+	}
+}
+
+func TestRunModelBenchmarkInvertedDurations(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{"name": "slow-default:7b"},
+					{"name": "fast-advanced:latest"},
+					{"name": "fastest-model:3b"},
+				},
+			})
+		case "/api/chat":
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			m, _ := req["model"].(string)
+			// Delay response based on model name
+			if m == "slow-default:7b" {
+				time.Sleep(50 * time.Millisecond)
+			} else if m == "fast-advanced:latest" {
+				time.Sleep(20 * time.Millisecond)
+			} else {
+				time.Sleep(10 * time.Millisecond)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"model": m,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": `{"explanation":"Listing files in directory","suggested-command":"ls -la"}`,
+				},
+				"done": true,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	cfg := config.Defaults()
+	cfg.Inference.Endpoint = ts.URL
+	cfg.Inference.DefaultModel = "slow-default:7b"
+	cfg.Inference.AdvancedModel = "fast-advanced:latest"
+	fs.configs[config.Path(fs.home)] = cfg
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
+	env.IsTerminalOutput = func(w io.Writer) bool { return true }
+
+	var stdout, stderr bytes.Buffer
+	results, code := RunModelBenchmark(env, &stdout, &stderr, nil)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want ExitOK (%d)", code, ExitOK)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "slow-default:7b *") {
+		t.Errorf("expected default model marker '*' on slow-default:7b in:\n%s", out)
+	}
+	if !strings.Contains(out, "fast-advanced:latest **") {
+		t.Errorf("expected advanced model marker '**' on fast-advanced:latest in:\n%s", out)
+	}
+	// Inverted case: no green times, <= adv is yellow, > adv is red
+	// ANSI code for yellow is \x1b[33m (theme.Warning) and red is \x1b[31m (theme.Error)
+	// Green is \x1b[32m (theme.Success)
+	if strings.Contains(out, "\x1b[32m") {
+		t.Errorf("expected NO green duration colors when default is slower than advanced, got green in:\n%s", out)
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 }

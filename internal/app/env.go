@@ -800,12 +800,27 @@ func osReadHistory(home string, maxLines int) []llm.HistoryEntry {
 		maxLines = 10
 	}
 
-	sessionHist := os.Getenv("YUPS_SESSION_HISTORY")
-	if sessionHist == "" {
+	histPath := os.Getenv("YUPS_SESSION_HISTORY")
+	if histPath == "" {
+		if hf := os.Getenv("HISTFILE"); hf != "" {
+			histPath = hf
+		} else if home != "" {
+			bashHist := filepath.Join(home, ".bash_history")
+			if _, err := os.Stat(bashHist); err == nil {
+				histPath = bashHist
+			} else {
+				zshHist := filepath.Join(home, ".zsh_history")
+				if _, err := os.Stat(zshHist); err == nil {
+					histPath = zshHist
+				}
+			}
+		}
+	}
+	if histPath == "" {
 		return nil
 	}
 
-	data, err := os.ReadFile(sessionHist)
+	data, err := os.ReadFile(histPath)
 	if err != nil || len(data) == 0 {
 		return nil
 	}

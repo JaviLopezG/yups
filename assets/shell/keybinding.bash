@@ -19,7 +19,11 @@ _yups-readline-binding() {
     HISTTIMEFORMAT="%%Y-%%m-%%d %%H:%%M:%%S  " history 25 > "$yupsHist" 2>/dev/null
     HISTTIMEFORMAT="$oldHistTimeFormat"
 
-    YUPS_READLINE_MARKER="$yupsMarker" YUPS_SESSION_HISTORY="$yupsHist" command yups -- "$READLINE_LINE" < /dev/tty
+    if [ -z "$READLINE_LINE" ]; then
+        YUPS_READLINE_MARKER="$yupsMarker" YUPS_SESSION_HISTORY="$yupsHist" command yups < /dev/tty
+    else
+        YUPS_READLINE_MARKER="$yupsMarker" YUPS_SESSION_HISTORY="$yupsHist" command yups -- "$READLINE_LINE" < /dev/tty
+    fi
 
     # Restore previous terminal settings for Readline
     if [ -n "$oldTtySettings" ]; then
@@ -27,8 +31,18 @@ _yups-readline-binding() {
     fi
 
     if [ -s "$yupsMarker" ]; then
-        READLINE_LINE=""
-        READLINE_POINT=0
+        local markerContent
+        markerContent=$(cat "$yupsMarker" 2>/dev/null)
+        if [ "$markerContent" = "executed" ]; then
+            READLINE_LINE=""
+            READLINE_POINT=0
+        elif [ -n "$markerContent" ]; then
+            READLINE_LINE="$markerContent"
+            READLINE_POINT=${#READLINE_LINE}
+        else
+            READLINE_LINE=""
+            READLINE_POINT=0
+        fi
     else
         READLINE_LINE="$origLine"
         READLINE_POINT="$origPoint"

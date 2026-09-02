@@ -152,6 +152,9 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 					return 1
 				}
 				_ = os.Setenv("YUPS_SCRIPT", scriptPath)
+				if marker := os.Getenv("YUPS_READLINE_MARKER"); marker != "" {
+					_ = os.WriteFile(marker, []byte(scriptPath), 0o600)
+				}
 				if env.OpenEditor != nil {
 					_ = env.OpenEditor(scriptPath, nil, stdout, stderr)
 				}
@@ -166,6 +169,23 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 				return 0
 
 			case "n", "no":
+				scriptsDir := env.ScriptsDir
+				if scriptsDir == "" {
+					if home, err := os.UserHomeDir(); err == nil {
+						scriptsDir = filepath.Join(home, ".yups", "scripts")
+					} else {
+						scriptsDir = filepath.Join(os.TempDir(), "yups-scripts")
+					}
+				}
+				_ = os.MkdirAll(scriptsDir, 0o755)
+				timestamp := time.Now().Format("2006-01-02-15-04-05")
+				scriptPath := filepath.Join(scriptsDir, timestamp+".sh")
+				_ = os.WriteFile(scriptPath, []byte(currentScript), 0o755)
+				_ = os.Setenv("YUPS_SCRIPT", scriptPath)
+				if marker := os.Getenv("YUPS_READLINE_MARKER"); marker != "" {
+					_ = os.WriteFile(marker, []byte(scriptPath), 0o600)
+				}
+				fmt.Fprintf(stdout, "\nScript saved to %s (available as $YUPS_SCRIPT)\n\n", scriptPath)
 				scriptProcessed = true
 				if currentCmd != "" {
 					continue

@@ -23,7 +23,7 @@ type AssetFile struct {
 // AllAssetFiles returns the collection of static assets deployed to ~/.yups/.
 func AllAssetFiles() []AssetFile {
 	return []AssetFile{
-		{RelPath: filepath.Join("data", "cities.txt"), Content: assets.CitiesData},
+		{RelPath: filepath.Join("data", "session-names.txt"), Content: assets.SessionNamesData},
 		{RelPath: filepath.Join("data", "whitelist_commands.txt"), Content: assets.WhitelistCommandsData},
 		{RelPath: filepath.Join("data", "whitelist_wrappers.txt"), Content: assets.WhitelistWrappersData},
 		{RelPath: filepath.Join("data", "whitelist_conditional_commands.txt"), Content: assets.WhitelistConditionalCommandsData},

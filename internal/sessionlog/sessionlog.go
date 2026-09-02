@@ -20,14 +20,14 @@ import (
 
 // GenerateSessionSlug generates a random human-readable slug (e.g. "sevilla37", "barcelona23").
 func GenerateSessionSlug() string {
-	cities := assets.GetSessionCities()
-	city := "yups"
-	if len(cities) > 0 {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(cities))))
+	names := assets.GetSessionNames()
+	name := "yups"
+	if len(names) > 0 {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(names))))
 		if err == nil {
-			city = cities[n.Int64()]
+			name = names[n.Int64()]
 		} else {
-			city = cities[0]
+			name = names[0]
 		}
 	}
 	digitBig, err := rand.Int(rand.Reader, big.NewInt(100))
@@ -35,7 +35,7 @@ func GenerateSessionSlug() string {
 	if err == nil {
 		digit = int(digitBig.Int64())
 	}
-	return fmt.Sprintf("%s%02d", city, digit)
+	return fmt.Sprintf("%s%02d", name, digit)
 }
 
 // SessionLogger captures step-by-step decisions and Ollama interactions for a yups run.

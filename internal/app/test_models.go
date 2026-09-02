@@ -273,16 +273,26 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 				durStr = theme.Muted + durRaw + theme.Reset
 			} else {
 				// 3-color duration coding
-				if defPassed && r.Duration <= defDuration {
-					durStr = theme.Success + durRaw + theme.Reset
-				} else if (defPassed && advPassed && r.Duration > defDuration && r.Duration <= advDuration) ||
-					(defPassed && !advPassed && r.Duration > defDuration) ||
-					(!defPassed && advPassed && r.Duration <= advDuration) {
-					durStr = theme.Warning + durRaw + theme.Reset
-				} else if advPassed && r.Duration > advDuration {
-					durStr = theme.Error + durRaw + theme.Reset
+				if defPassed && advPassed && defDuration > advDuration {
+					// Special case: default model is slower than advanced model
+					// No green times; <= advDuration is yellow, > advDuration is red
+					if r.Duration <= advDuration {
+						durStr = theme.Warning + durRaw + theme.Reset
+					} else {
+						durStr = theme.Error + durRaw + theme.Reset
+					}
 				} else {
-					durStr = theme.Success + durRaw + theme.Reset
+					if defPassed && r.Duration <= defDuration {
+						durStr = theme.Success + durRaw + theme.Reset
+					} else if (defPassed && advPassed && r.Duration > defDuration && r.Duration <= advDuration) ||
+						(defPassed && !advPassed && r.Duration > defDuration) ||
+						(!defPassed && advPassed && r.Duration <= advDuration) {
+						durStr = theme.Warning + durRaw + theme.Reset
+					} else if advPassed && r.Duration > advDuration {
+						durStr = theme.Error + durRaw + theme.Reset
+					} else {
+						durStr = theme.Success + durRaw + theme.Reset
+					}
 				}
 			}
 

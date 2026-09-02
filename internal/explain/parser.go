@@ -488,13 +488,19 @@ func isNaturalLanguageQuery(s string) bool {
 		}
 	}
 
-	// III - Capitalized sentence (starts with an uppercase letter and contains spaces with lowercase words)
-	runes := []rune(trimmed)
-	if len(runes) > 0 && unicode.IsUpper(runes[0]) {
-		words := strings.Fields(trimmed)
-		if len(words) >= 2 {
-			firstWordRunes := []rune(words[0])
-			if len(firstWordRunes) > 1 && unicode.IsUpper(firstWordRunes[0]) && unicode.IsLower(firstWordRunes[1]) {
+	// III - Capitalized sentence: first token starts with uppercase and rest of first token is lowercase
+	words := strings.Fields(trimmed)
+	if len(words) >= 2 {
+		firstWordRunes := []rune(words[0])
+		if len(firstWordRunes) > 0 && unicode.IsUpper(firstWordRunes[0]) {
+			allRestLower := true
+			for _, r := range firstWordRunes[1:] {
+				if !unicode.IsLower(r) {
+					allRestLower = false
+					break
+				}
+			}
+			if allRestLower {
 				return true
 			}
 		}

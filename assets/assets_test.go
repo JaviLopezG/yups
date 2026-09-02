@@ -6,22 +6,29 @@ import (
 	"testing"
 )
 
-func TestGetSessionCities(t *testing.T) {
-	cities := GetSessionCities()
-	if len(cities) < 50 {
-		t.Fatalf("GetSessionCities() returned %d cities, want >= 50", len(cities))
+func TestGetSessionNames(t *testing.T) {
+	names := GetSessionNames()
+	if len(names) < 50 {
+		t.Fatalf("GetSessionNames() returned %d names, want >= 50", len(names))
 	}
 	for _, expected := range []string{"seville", "barcelona", "madrid", "valencia", "cadiz"} {
 		found := false
-		for _, c := range cities {
+		for _, c := range names {
 			if c == expected {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("GetSessionCities() missing expected city %q", expected)
+			t.Errorf("GetSessionNames() missing expected name %q", expected)
 		}
+	}
+}
+
+func TestGetSessionCities(t *testing.T) {
+	cities := GetSessionCities()
+	if len(cities) < 50 {
+		t.Fatalf("GetSessionCities() returned %d cities, want >= 50", len(cities))
 	}
 }
 
@@ -100,24 +107,22 @@ func TestCustomDiskAssetLoading(t *testing.T) {
 	defer ResetOverrideHome()
 
 	// 1. Without files on disk, fallback to embedded assets
-	if len(GetSessionCities()) < 50 {
-		t.Errorf("GetSessionCities() fallback returned < 50 cities")
+	if len(GetSessionNames()) < 50 {
+		t.Errorf("GetSessionNames() fallback returned < 50 names")
 	}
 
-	// 2. Create custom cities.txt on disk
+	// 2. Create custom session-names.txt on disk
 	dataDir := tempHome + "/.yups/data"
-	importOS := true
-	_ = importOS
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatalf("Failed creating data dir: %v", err)
 	}
-	customCities := "atlantis\neldorado\n"
-	if err := os.WriteFile(dataDir+"/cities.txt", []byte(customCities), 0o644); err != nil {
-		t.Fatalf("Failed writing custom cities: %v", err)
+	customNames := "atlantis\neldorado\n"
+	if err := os.WriteFile(dataDir+"/session-names.txt", []byte(customNames), 0o644); err != nil {
+		t.Fatalf("Failed writing custom session names: %v", err)
 	}
 
-	cities := GetSessionCities()
-	if len(cities) != 2 || cities[0] != "atlantis" || cities[1] != "eldorado" {
-		t.Errorf("GetSessionCities() with on-disk override = %v, want [atlantis eldorado]", cities)
+	names := GetSessionNames()
+	if len(names) != 2 || names[0] != "atlantis" || names[1] != "eldorado" {
+		t.Errorf("GetSessionNames() with on-disk override = %v, want [atlantis eldorado]", names)
 	}
 }

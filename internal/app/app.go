@@ -43,6 +43,7 @@ const (
 const ColoredLogo = "\x1b[38;5;214m" + Logo + "\x1b[0m"
 
 var helpText = assets.GetHelpText()
+
 func isSystemInstalled(env *Env) bool {
 	if env == nil {
 		return false
@@ -124,7 +125,11 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 		}
 	}
 
-	if len(args) == 0 {
+	isEmptyTrigger := len(args) == 0 ||
+		(len(args) == 1 && strings.TrimSpace(args[0]) == "") ||
+		(len(args) > 0 && args[0] == "--" && (len(args) == 1 || (len(args) == 2 && strings.TrimSpace(args[1]) == "")))
+
+	if isEmptyTrigger {
 		if !isInstalled {
 			fmt.Fprintln(stdout, ColoredLogo)
 			fmt.Fprintln(stdout, "Note: yups is not installed or configured yet.")
@@ -159,17 +164,62 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 			if lastCmd != "" {
 				isYupsCmd := strings.HasPrefix(lastCmd, "yups") || strings.HasPrefix(lastCmd, "./yups")
 
-				if !isYupsCmd {
-					// Ask if user wants to explain the last command from history
-					prompt := fmt.Sprintf("Do you want to explain the last command from history (%s)?", lastCmd)
-					if env.AskConfirmation != nil && env.AskConfirmation(prompt, true) {
-						if logger != nil {
-							logger.LogInfo("Explaining last command from history: %s", lastCmd)
+				if isYupsCmd {
+					// II - Si el último comando es de yups, continuo esa sesión
+					if env.UserHomeDir != nil {
+						if home, err := env.UserHomeDir(); err == nil {
+							lastSess, err := sessionlog.LoadLastSession(home)
+							if err == nil && lastSess != nil {
+								theme := ui.GetTheme()
+								if color {
+									fmt.Fprintf(stdout, "\n%s--- Previous Session (%s) ---%s\n", theme.Bold+theme.Prompt, lastSess.Slug, theme.Reset)
+									if lastSess.CommandLine != "" {
+										fmt.Fprintf(stdout, "%sCommand:%s %s\n", theme.Bold, theme.Reset, lastSess.CommandLine)
+									}
+									if lastSess.Explanation != "" {
+										fmt.Fprintf(stdout, "%sExplanation:%s %s\n", theme.Bold, theme.Reset, lastSess.Explanation)
+									}
+									if lastSess.SuggestedCommand != "" {
+										fmt.Fprintf(stdout, "%sSuggested Command:%s %s\n", theme.Bold, theme.Reset, lastSess.SuggestedCommand)
+									}
+								} else {
+									fmt.Fprintf(stdout, "\n--- Previous Session (%s) ---\n", lastSess.Slug)
+									if lastSess.CommandLine != "" {
+										fmt.Fprintf(stdout, "Command: %s\n", lastSess.CommandLine)
+									}
+									if lastSess.Explanation != "" {
+										fmt.Fprintf(stdout, "Explanation: %s\n", lastSess.Explanation)
+									}
+									if lastSess.SuggestedCommand != "" {
+										fmt.Fprintf(stdout, "Suggested Command: %s\n", lastSess.SuggestedCommand)
+									}
+								}
+
+								if env.AskPrompt != nil {
+									userFollowup := strings.TrimSpace(env.AskPrompt("Enter follow-up question or goal", ""))
+									if userFollowup != "" {
+										docEnv := env.DocEnv()
+										docEnv.UseAdvanced = true // natural language continuation routes to advanced model
+										docEnv.Logger = logger
+
+										pipeline := explain.Parse([]string{lastSess.CommandLine})
+										exp := &explain.PipelineExplanation{
+											RawCommandLine: lastSess.CommandLine,
+											Conversation:   lastSess.Conversation,
+										}
+
+										explain.FormatInvocationHeader(stdout, fmt.Sprintf("%s (continue)", lastSess.CommandLine), "", color)
+										resolver := explain.NewResolver(docEnv)
+										_ = resolver.QueryLLMPipeline(context.Background(), pipeline, exp, userFollowup, stdout)
+										explain.FormatLLMPipelineResult(stdout, exp, explain.FormatOptions{Color: color})
+										if logger != nil {
+											logger.LogConclusion(exp.LLMExplanation, exp.SuggestedCommand, exp.SuggestedScript, "CONTINUE_SUCCESS", ExitOK)
+										}
+										return ExitOK
+									}
+								}
+							}
 						}
-						docEnv := env.DocEnv()
-						docEnv.Logger = logger
-						explain.FormatInvocationHeader(stdout, lastCmd, "", color)
-						return explain.Explain(context.Background(), docEnv, []string{lastCmd}, stdout, stderr, color)
 					}
 					fmt.Fprintln(stdout, ColoredLogo)
 					if logger != nil {
@@ -178,65 +228,18 @@ func dispatchInternal(env *Env, args []string, stdout, stderr io.Writer, logger 
 					return ExitOK
 				}
 
-				// Last command was a yups command: resume previous session
-				if env.UserHomeDir != nil {
-					if home, err := env.UserHomeDir(); err == nil {
-						lastSess, err := sessionlog.LoadLastSession(home)
-						if err == nil && lastSess != nil {
-							theme := ui.GetTheme()
-							if color {
-								fmt.Fprintf(stdout, "\n%s--- Previous Session (%s) ---%s\n", theme.Bold+theme.Prompt, lastSess.Slug, theme.Reset)
-								if lastSess.CommandLine != "" {
-									fmt.Fprintf(stdout, "%sCommand:%s %s\n", theme.Bold, theme.Reset, lastSess.CommandLine)
-								}
-								if lastSess.Explanation != "" {
-									fmt.Fprintf(stdout, "%sExplanation:%s %s\n", theme.Bold, theme.Reset, lastSess.Explanation)
-								}
-								if lastSess.SuggestedCommand != "" {
-									fmt.Fprintf(stdout, "%sSuggested Command:%s %s\n", theme.Bold, theme.Reset, lastSess.SuggestedCommand)
-								}
-							} else {
-								fmt.Fprintf(stdout, "\n--- Previous Session (%s) ---\n", lastSess.Slug)
-								if lastSess.CommandLine != "" {
-									fmt.Fprintf(stdout, "Command: %s\n", lastSess.CommandLine)
-								}
-								if lastSess.Explanation != "" {
-									fmt.Fprintf(stdout, "Explanation: %s\n", lastSess.Explanation)
-								}
-								if lastSess.SuggestedCommand != "" {
-									fmt.Fprintf(stdout, "Suggested Command: %s\n", lastSess.SuggestedCommand)
-								}
-							}
-
-							if env.AskPrompt != nil {
-								userFollowup := strings.TrimSpace(env.AskPrompt("Enter follow-up question or goal", ""))
-								if userFollowup != "" {
-									docEnv := env.DocEnv()
-									docEnv.UseAdvanced = true // natural language continuation routes to advanced model
-									docEnv.Logger = logger
-
-									pipeline := explain.Parse([]string{lastSess.CommandLine})
-									exp := &explain.PipelineExplanation{
-										RawCommandLine: lastSess.CommandLine,
-										Conversation:   lastSess.Conversation,
-									}
-
-									explain.FormatInvocationHeader(stdout, fmt.Sprintf("%s (continue)", lastSess.CommandLine), "", color)
-									resolver := explain.NewResolver(docEnv)
-									_ = resolver.QueryLLMPipeline(context.Background(), pipeline, exp, userFollowup, stdout)
-									explain.FormatLLMPipelineResult(stdout, exp, explain.FormatOptions{Color: color})
-									if logger != nil {
-										logger.LogConclusion(exp.LLMExplanation, exp.SuggestedCommand, exp.SuggestedScript, "CONTINUE_SUCCESS", ExitOK)
-									}
-									return ExitOK
-								}
-							}
-						}
-					}
+				// III - Si el último comando no es vacío y no es de yups, uso ese ultimo comando como si se hubiera llamado a yups ultimo-comando
+				if logger != nil {
+					logger.LogInfo("Explaining last command from history: %s", lastCmd)
 				}
+				docEnv := env.DocEnv()
+				docEnv.Logger = logger
+				explain.FormatInvocationHeader(stdout, lastCmd, "", color)
+				return explain.Explain(context.Background(), docEnv, []string{lastCmd}, stdout, stderr, color)
 			}
 		}
 
+		// I - Si no hay último comando no hago nada
 		fmt.Fprintln(stdout, ColoredLogo)
 		if logger != nil {
 			logger.LogConclusion("", "", "", "LOGO", ExitOK)
