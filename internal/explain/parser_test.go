@@ -174,7 +174,7 @@ func TestParseNaturalLanguageQueries(t *testing.T) {
 		want string
 	}{
 		{
-			name: "spanish question",
+			name: "spanish question inverted question mark",
 			args: []string{"¿cómo puedo ver los puertos abiertos?"},
 			want: "¿cómo puedo ver los puertos abiertos?",
 		},
@@ -184,9 +184,29 @@ func TestParseNaturalLanguageQueries(t *testing.T) {
 			want: "como ver la memoria libre",
 		},
 		{
-			name: "english question",
+			name: "english question how to",
 			args: []string{"how to find large files in /home"},
 			want: "how to find large files in /home",
+		},
+		{
+			name: "english question ending in question mark",
+			args: []string{"How can I list subfolders?"},
+			want: "How can I list subfolders?",
+		},
+		{
+			name: "capitalized sentence prompt",
+			args: []string{"Buscar archivos modificados hoy"},
+			want: "Buscar archivos modificados hoy",
+		},
+		{
+			name: "spanish interrogative cual",
+			args: []string{"cuál es el proceso que más cpu usa"},
+			want: "cuál es el proceso que más cpu usa",
+		},
+		{
+			name: "spanish interrogative donde",
+			args: []string{"dónde están los logs del sistema"},
+			want: "dónde están los logs del sistema",
 		},
 	}
 

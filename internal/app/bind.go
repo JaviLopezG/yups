@@ -638,6 +638,12 @@ func ConfigureBashBindingInteractively(env *Env, home string, stdout, stderr io.
 		return
 	}
 
+	if env.LoadUpdateState != nil && env.SaveUpdateState != nil {
+		st, _ := env.LoadUpdateState(config.StatePath(home))
+		st.Keybinding = chosenDisplay
+		_ = env.SaveUpdateState(config.StatePath(home), st)
+	}
+
 	fmt.Fprintf(stdout, "\nConfigured key binding (%s) in %s.\nUpdated %s with YUPS shell integration.\nRun 'source %s' or restart your terminal to activate it.\n",
 		chosenDisplay, config.ShellScriptPath(home), rcPath, rcPath)
 }
@@ -731,6 +737,13 @@ func RemoveBashBinding(env *Env, home string) bool {
 				_ = env.WriteFile(rcPath, []byte(cleaned), 0o644)
 			}
 			removedAny = true
+		}
+	}
+	if removedAny && env.LoadUpdateState != nil && env.SaveUpdateState != nil {
+		st, _ := env.LoadUpdateState(config.StatePath(home))
+		if st.Keybinding != "" {
+			st.Keybinding = ""
+			_ = env.SaveUpdateState(config.StatePath(home), st)
 		}
 	}
 	return removedAny

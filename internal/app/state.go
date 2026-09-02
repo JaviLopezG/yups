@@ -12,6 +12,7 @@ type State struct {
 	LastApplied     string            `toml:"last-applied"`
 	AvailableModels []string          `toml:"available-models,omitempty"`
 	Cheatsheets     map[string]string `toml:"cheatsheets,omitempty"`
+	Keybinding      string            `toml:"keybinding,omitempty"`
 }
 
 // GetAvailableModels returns the list of available models stored in state or fallbacks.

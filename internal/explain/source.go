@@ -483,7 +483,7 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 						if r.env.Logger != nil {
 							r.env.Logger.LogIncident("USER_ABORT", "execution aborted by user after LLM timeout")
 						}
-						return nil
+						return errors.New("execution aborted after timeout")
 					}
 
 					// Check if result arrived while user was answering prompt
@@ -870,6 +870,9 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		r.env.Logger.LogConclusion(exp.LLMExplanation, exp.SuggestedCommand, exp.SuggestedScript, status, 0)
 	}
 
+	if exp.LLMError != "" {
+		return errors.New(exp.LLMError)
+	}
 	return nil
 }
 
