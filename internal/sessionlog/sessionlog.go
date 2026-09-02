@@ -20,14 +20,14 @@ import (
 
 // GenerateSessionSlug generates a random human-readable slug (e.g. "sevilla37", "barcelona23").
 func GenerateSessionSlug() string {
-	cities := assets.GetSessionCities()
-	city := "yups"
-	if len(cities) > 0 {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(cities))))
+	names := assets.GetSessionNames()
+	name := "yups"
+	if len(names) > 0 {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(names))))
 		if err == nil {
-			city = cities[n.Int64()]
+			name = names[n.Int64()]
 		} else {
-			city = cities[0]
+			name = names[0]
 		}
 	}
 	digitBig, err := rand.Int(rand.Reader, big.NewInt(100))
@@ -35,7 +35,7 @@ func GenerateSessionSlug() string {
 	if err == nil {
 		digit = int(digitBig.Int64())
 	}
-	return fmt.Sprintf("%s%02d", city, digit)
+	return fmt.Sprintf("%s%02d", name, digit)
 }
 
 // SessionLogger captures step-by-step decisions and Ollama interactions for a yups run.
@@ -463,12 +463,22 @@ func (l *SessionLogger) SessionID() string {
 	return l.sessionID
 }
 
-// Slug returns the human-readable city slug (e.g. "sevilla37").
+// Slug returns the human-readable slug (e.g. "sevilla37", "barcelona23").
 func (l *SessionLogger) Slug() string {
 	if l == nil {
 		return ""
 	}
 	return l.slug
+}
+
+// SetCommandLine updates the recorded command line for this session (e.g. when explaining from history).
+func (l *SessionLogger) SetCommandLine(cmd string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.commandLine = cmd
 }
 
 // HasWritten returns true if a session log was committed to disk.
@@ -534,4 +544,139 @@ func (l *SessionLogger) BufferString() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.String()
+}
+
+// LastSession stores summarized data and conversational state from the most recent run.
+type LastSession struct {
+	SessionID        string
+	Slug             string
+	CommandLine      string
+	ModelUsed        string
+	Explanation      string
+	SuggestedCommand string
+	SuggestedScript  string
+	Conversation     []llm.Message
+}
+
+// LoadLastSession loads the most recent recorded session from ~/.yups/logs/.
+func LoadLastSession(homeDir string) (*LastSession, error) {
+	if homeDir == "" {
+		return nil, fmt.Errorf("home directory is empty")
+	}
+	logsDir := filepath.Join(homeDir, ".yups", "logs")
+	summaryPath := filepath.Join(logsDir, "sessions.log")
+
+	data, err := os.ReadFile(summaryPath)
+	if err != nil || len(data) == 0 {
+		return nil, fmt.Errorf("no sessions found in %s: %w", summaryPath, err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("sessions.log is empty")
+	}
+
+	var lastLine string
+	for i := len(lines) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed != "" {
+			lastLine = trimmed
+			break
+		}
+	}
+	if lastLine == "" {
+		return nil, fmt.Errorf("no valid session entry found in sessions.log")
+	}
+
+	sess := &LastSession{}
+	if idx := strings.Index(lastLine, "id="); idx != -1 {
+		rest := lastLine[idx+3:]
+		if end := strings.Index(rest, " "); end != -1 {
+			sess.SessionID = rest[:end]
+		}
+	}
+	if idx := strings.Index(lastLine, "slug="); idx != -1 {
+		rest := lastLine[idx+5:]
+		if end := strings.Index(rest, " "); end != -1 {
+			sess.Slug = rest[:end]
+		}
+	}
+	if idx := strings.Index(lastLine, "cmd="); idx != -1 {
+		rest := lastLine[idx+4:]
+		if len(rest) > 0 && rest[0] == '"' {
+			if end := strings.Index(rest[1:], `"`); end != -1 {
+				sess.CommandLine = rest[1 : end+1]
+			}
+		}
+	}
+	if idx := strings.Index(lastLine, "model="); idx != -1 {
+		rest := lastLine[idx+6:]
+		if len(rest) > 0 && rest[0] == '"' {
+			if end := strings.Index(rest[1:], `"`); end != -1 {
+				sess.ModelUsed = rest[1 : end+1]
+			}
+		}
+	}
+
+	sessionLogFile := filepath.Join(logsDir, fmt.Sprintf("session-%s.log", sess.SessionID))
+	if logData, err := os.ReadFile(sessionLogFile); err == nil {
+		logStr := string(logData)
+		if explIdx := strings.Index(logStr, "Final Explanation: "); explIdx != -1 {
+			rest := logStr[explIdx+len("Final Explanation: "):]
+			if end := strings.Index(rest, "\n"); end != -1 {
+				sess.Explanation = strings.TrimSpace(rest[:end])
+			}
+		}
+		if cmdIdx := strings.Index(logStr, "Suggested Command: "); cmdIdx != -1 {
+			rest := logStr[cmdIdx+len("Suggested Command: "):]
+			if end := strings.Index(rest, "\n"); end != -1 {
+				sess.SuggestedCommand = strings.TrimSpace(rest[:end])
+			}
+		}
+		if scriptIdx := strings.Index(logStr, "Suggested Script:  "); scriptIdx != -1 {
+			rest := logStr[scriptIdx+len("Suggested Script:  "):]
+			if end := strings.Index(rest, "================================================================================"); end != -1 {
+				sess.SuggestedScript = strings.TrimSpace(rest[:end])
+			} else {
+				sess.SuggestedScript = strings.TrimSpace(rest)
+			}
+		}
+	}
+
+	requestsDir := filepath.Join(logsDir, "llm-requests", fmt.Sprintf("session-%s", sess.SessionID))
+	if reqEntries, err := os.ReadDir(requestsDir); err == nil && len(reqEntries) > 0 {
+		var lastReqFile string
+		for _, re := range reqEntries {
+			if !re.IsDir() && strings.HasPrefix(re.Name(), "request-") && strings.HasSuffix(re.Name(), ".log") {
+				lastReqFile = filepath.Join(requestsDir, re.Name())
+			}
+		}
+		if lastReqFile != "" {
+			if rfData, err := os.ReadFile(lastReqFile); err == nil {
+				rfStr := string(rfData)
+				if reqStart := strings.Index(rfStr, "REQUEST PAYLOAD:\n--------------------------------------------------------------------------------\n"); reqStart != -1 {
+					rest := rfStr[reqStart+len("REQUEST PAYLOAD:\n--------------------------------------------------------------------------------\n"):]
+					if reqEnd := strings.Index(rest, "\n\n--------------------------------------------------------------------------------\nRESPONSE PAYLOAD:"); reqEnd != -1 {
+						reqJSON := rest[:reqEnd]
+						var chatReq llm.ChatRequest
+						if err := json.Unmarshal([]byte(reqJSON), &chatReq); err == nil {
+							sess.Conversation = append(sess.Conversation, chatReq.Messages...)
+						}
+					}
+				}
+				if respStart := strings.Index(rfStr, "RESPONSE PAYLOAD:\n--------------------------------------------------------------------------------\n"); respStart != -1 {
+					rest := rfStr[respStart+len("RESPONSE PAYLOAD:\n--------------------------------------------------------------------------------\n"):]
+					if respEnd := strings.Index(rest, "\n================================================================================"); respEnd != -1 {
+						respJSON := rest[:respEnd]
+						var chatResp llm.ChatResponse
+						if err := json.Unmarshal([]byte(respJSON), &chatResp); err == nil && chatResp.Message.Content != "" {
+							sess.Conversation = append(sess.Conversation, chatResp.Message)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return sess, nil
 }

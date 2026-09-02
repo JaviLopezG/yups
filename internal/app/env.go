@@ -800,12 +800,27 @@ func osReadHistory(home string, maxLines int) []llm.HistoryEntry {
 		maxLines = 10
 	}
 
-	sessionHist := os.Getenv("YUPS_SESSION_HISTORY")
-	if sessionHist == "" {
+	histPath := os.Getenv("YUPS_SESSION_HISTORY")
+	if histPath == "" {
+		if hf := os.Getenv("HISTFILE"); hf != "" {
+			histPath = hf
+		} else if home != "" {
+			bashHist := filepath.Join(home, ".bash_history")
+			if _, err := os.Stat(bashHist); err == nil {
+				histPath = bashHist
+			} else {
+				zshHist := filepath.Join(home, ".zsh_history")
+				if _, err := os.Stat(zshHist); err == nil {
+					histPath = zshHist
+				}
+			}
+		}
+	}
+	if histPath == "" {
 		return nil
 	}
 
-	data, err := os.ReadFile(sessionHist)
+	data, err := os.ReadFile(histPath)
 	if err != nil || len(data) == 0 {
 		return nil
 	}
@@ -833,8 +848,8 @@ func osReadHistory(home string, maxLines int) []llm.HistoryEntry {
 			cmd = strings.TrimSpace(m[2])
 		}
 
-		// Skip history command noise
-		if strings.HasPrefix(cmd, "history") || strings.HasPrefix(cmd, "HISTTIMEFORMAT=") || cmd == "" {
+		// Skip history command noise and internal yups shell functions
+		if strings.HasPrefix(cmd, "_yups") || strings.HasPrefix(cmd, "history") || strings.HasPrefix(cmd, "HISTTIMEFORMAT=") || cmd == "" {
 			continue
 		}
 		valid = append(valid, llm.HistoryEntry{

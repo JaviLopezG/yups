@@ -1,3 +1,5 @@
+# Help text for yups CLI.
+# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 yups - fast, concise, contextual terminal assistant
 
 yups operates entirely within your trusted environment: no data is sent to the
@@ -21,3 +23,11 @@ Usage:
   yups --uninstall-yups Remove every yups executable found in the PATH
   yups --update-yups    Download the latest released version and replace
                         every installed copy with it
+
+Examples:
+  yups ls -javi
+      Explains the command ls and the flags -javi
+  yups "ls -javi # I want to list subfolders recursively"
+      Evaluates whether the command matches the requested goal
+  yups How can I list subfolders?
+      Asks a natural language question directly

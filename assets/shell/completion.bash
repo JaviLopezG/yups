@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # completion.bash - Programmable tab-completion for yups.
+# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 # Provides dynamic flag, argument, and model autocompletion.
 
 _yups-completion() {

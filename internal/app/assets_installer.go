@@ -23,7 +23,7 @@ type AssetFile struct {
 // AllAssetFiles returns the collection of static assets deployed to ~/.yups/.
 func AllAssetFiles() []AssetFile {
 	return []AssetFile{
-		{RelPath: filepath.Join("data", "cities.txt"), Content: assets.CitiesData},
+		{RelPath: filepath.Join("data", "session-names.txt"), Content: assets.SessionNamesData},
 		{RelPath: filepath.Join("data", "whitelist_commands.txt"), Content: assets.WhitelistCommandsData},
 		{RelPath: filepath.Join("data", "whitelist_wrappers.txt"), Content: assets.WhitelistWrappersData},
 		{RelPath: filepath.Join("data", "whitelist_conditional_commands.txt"), Content: assets.WhitelistConditionalCommandsData},
@@ -51,25 +51,45 @@ func InstallAssets(env *Env, home string) error {
 	return nil
 }
 
-// EnsureAssetsUpdated verifies all assets exist under ~/.yups/ and writes any missing assets.
+// EnsureAssetsUpdated updates all static data, prompt, and shell script assets under ~/.yups/.
 func EnsureAssetsUpdated(env *Env, home string) error {
 	for _, a := range AllAssetFiles() {
 		targetPath := filepath.Join(config.Dir(home), a.RelPath)
-		exists := false
-		if env != nil && env.PathExists != nil {
-			exists = env.PathExists(targetPath)
+		_ = os.MkdirAll(filepath.Dir(targetPath), 0o755)
+		if env != nil && env.WriteFile != nil {
+			_ = env.WriteFile(targetPath, []byte(a.Content), 0o644)
 		} else {
-			_, err := os.Stat(targetPath)
-			exists = err == nil
-		}
-		if !exists {
-			_ = os.MkdirAll(filepath.Dir(targetPath), 0o755)
-			if env != nil && env.WriteFile != nil {
-				_ = env.WriteFile(targetPath, []byte(a.Content), 0o644)
-			} else {
-				_ = os.WriteFile(targetPath, []byte(a.Content), 0o644)
-			}
+			_ = os.WriteFile(targetPath, []byte(a.Content), 0o644)
 		}
 	}
+
+	// Update shell scripts
+	shellDir := config.ShellDir(home)
+	_ = os.MkdirAll(shellDir, 0o755)
+	writeShell := func(rel, content string) {
+		p := filepath.Join(shellDir, rel)
+		if env != nil && env.WriteFile != nil {
+			_ = env.WriteFile(p, []byte(content), 0o644)
+		} else {
+			_ = os.WriteFile(p, []byte(content), 0o644)
+		}
+	}
+	writeShell("yups.bash", assets.ShellYupsBash)
+	writeShell("env.bash", assets.ShellEnvBash)
+	writeShell("completion.bash", assets.ShellCompletionBash)
+
+	// Update keybinding.bash preserving existing active binding if set in state
+	keySeq := ""
+	if env != nil && env.LoadUpdateState != nil {
+		if st, err := env.LoadUpdateState(config.StatePath(home)); err == nil && st.Keybinding != "" {
+			keySeq = KeyNameToSequence(st.Keybinding)
+		}
+	} else {
+		if st, err := osLoadUpdateState(config.StatePath(home)); err == nil && st.Keybinding != "" {
+			keySeq = KeyNameToSequence(st.Keybinding)
+		}
+	}
+	writeShell("keybinding.bash", GenerateKeybindingScriptContent(keySeq))
+
 	return nil
 }

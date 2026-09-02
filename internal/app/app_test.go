@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"yups/assets"
 	"yups/internal/config"
 	"yups/internal/llm"
 )
@@ -253,13 +254,19 @@ func TestNoArgumentsPrintsColoredMarker(t *testing.T) {
 }
 
 func TestHelpListsAvailableCommands(t *testing.T) {
-	out, code := runDispatch(t, newFakeFS().env(), "--help")
+	fs := newFakeFS()
+	st := State{Keybinding: "F1"}
+	fs.states[config.StatePath(fs.home)] = st
+	assets.SetOverrideHome(fs.home)
+	defer assets.ResetOverrideHome()
+
+	out, code := runDispatch(t, fs.env(), "--help")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, ExitOK)
 	}
-	for _, want := range []string{"--help", "--version", "--install-yups", "--uninstall-yups", "--update-yups", Logo} {
+	for _, want := range []string{"--help", "--version", "--install-yups", "--uninstall-yups", "--update-yups", Logo, "Examples:", "yups ls -javi", "Key binding [F1] is configured"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("help output %q does not contain %q", out, want)
+			t.Errorf("help output does not contain %q:\n%s", want, out)
 		}
 	}
 }
@@ -1208,7 +1215,7 @@ func TestOSReadHistory(t *testing.T) {
 		t.Errorf("second to last line = %+v, want 'ls #marca' with timestamp '2026-08-31 12:15:30'", lines[len(lines)-2])
 	}
 
-	// 2. Test that when YUPS_SESSION_HISTORY is unset, returns nil (no disk fallback)
+	// 2. Test that when YUPS_SESSION_HISTORY is unset, fallback to disk .bash_history
 	t.Setenv("YUPS_SESSION_HISTORY", "")
 	bashHistFile := filepath.Join(tempDir, ".bash_history")
 	bashHistContent := "#1629837264\ngit status\n#1629837270\ngit diff\n"
@@ -1217,8 +1224,8 @@ func TestOSReadHistory(t *testing.T) {
 	}
 
 	fallbackLines := osReadHistory(tempDir, 10)
-	if fallbackLines != nil {
-		t.Fatalf("fallbackLines = %v, want nil (no disk fallback)", fallbackLines)
+	if len(fallbackLines) != 2 || fallbackLines[0].Command != "git status" || fallbackLines[1].Command != "git diff" {
+		t.Fatalf("fallbackLines = %v, want [{git status} {git diff}]", fallbackLines)
 	}
 }
 
@@ -1313,5 +1320,284 @@ func TestInstallSavesAvailableModelsInState(t *testing.T) {
 	}
 	if cfg.Inference.DefaultModel == "" {
 		t.Errorf("config.Inference.DefaultModel is empty")
+	}
+}
+
+func TestRunModelBenchmarkOutputAndColorCoding(t *testing.T) {
+	fs := newFakeFS()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{"name": "qwen2.5-coder:7b"},
+					{"name": "qwen3.8:latest"},
+					{"name": "empty-model:latest"},
+				},
+			})
+			return
+		}
+		if r.URL.Path == "/api/chat" {
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			m, _ := req["model"].(string)
+			if m == "empty-model:latest" {
+				// Return empty content
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"model": m,
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "",
+					},
+					"done": true,
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"model": m,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": `{"explanation":"lists files with details","suggested-command":"ls -la"}`,
+				},
+				"done": true,
+			})
+			return
+		}
+	}))
+	defer ts.Close()
+
+	env := fs.env()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
+	cfg := config.Defaults()
+	cfg.Inference.Endpoint = ts.URL
+	cfg.Inference.DefaultModel = "qwen2.5-coder:7b"
+	cfg.Inference.AdvancedModel = "qwen3.8:latest"
+	fs.configs[config.Path(fs.home)] = cfg
+	env.IsTerminalOutput = func(w io.Writer) bool { return true }
+
+	var stdout, stderr bytes.Buffer
+	results, code := RunModelBenchmark(env, &stdout, &stderr, nil)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want ExitOK (%d)", code, ExitOK)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "MODEL BENCHMARK SUMMARY") {
+		t.Errorf("missing summary header in output:\n%s", out)
+	}
+	if !strings.Contains(out, "qwen2.5-coder:7b *") {
+		t.Errorf("expected default model marker '*' on qwen2.5-coder:7b in:\n%s", out)
+	}
+	if !strings.Contains(out, "qwen3.8:latest **") {
+		t.Errorf("expected advanced model marker '**' on qwen3.8:latest in:\n%s", out)
+	}
+	if !strings.Contains(out, "Legend:") {
+		t.Errorf("expected Legend section in summary:\n%s", out)
+	}
+	if !strings.Contains(out, "[FAILED]") {
+		t.Errorf("expected empty-model to be marked [FAILED] in:\n%s", out)
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+}
+
+func TestEmptyTriggerNonYupsHistoryExplainsDirectly(t *testing.T) {
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	env := fs.env()
+	env.ReadHistory = func(home string, maxLines int) []llm.HistoryEntry {
+		return []llm.HistoryEntry{
+			{Command: "ls -la"},
+			{Command: "git push -f origin main"},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want ExitOK (%d)", code, ExitOK)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "git push -f origin main") {
+		t.Errorf("expected explanation output to contain command name, got:\n%s", out)
+	}
+
+	// Also verify with empty readline keybinding arg shape ["--", ""]
+	var stdout2, stderr2 bytes.Buffer
+	code2 := Dispatch(env, []string{"--", ""}, &stdout2, &stderr2)
+	if code2 != ExitOK {
+		t.Fatalf("exit code = %d, want ExitOK (%d)", code2, ExitOK)
+	}
+	out2 := stdout2.String()
+	if !strings.Contains(out2, "git push -f origin main") {
+		t.Errorf("expected explanation output for ['--', ''] to contain command name, got:\n%s", out2)
+	}
+}
+
+func TestEmptyTriggerYupsHistoryResumesSession(t *testing.T) {
+	tempHome, err := os.MkdirTemp("", "yups-resume-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tempHome)
+
+	logsDir := filepath.Join(tempHome, ".yups", "logs")
+	_ = os.MkdirAll(logsDir, 0o755)
+	sessID := "20260902-100000-1234-madrid42"
+	summaryLine := fmt.Sprintf("[2026-09-02T10:00:00Z] id=%s slug=madrid42 pid=1234 cmd=\"yups git status\" model=\"qwen2.5-coder:7b\" turns=1 status=SUCCESS duration=1.2s file=session-%s.log\n", sessID, sessID)
+	_ = os.WriteFile(filepath.Join(logsDir, "sessions.log"), []byte(summaryLine), 0o644)
+
+	sessionContent := fmt.Sprintf(`YUPS SESSION LOG: %s
+Command: yups git status
+Final Explanation: Shows working tree status
+Suggested Command: git status -s
+`, sessID)
+	_ = os.WriteFile(filepath.Join(logsDir, fmt.Sprintf("session-%s.log", sessID)), []byte(sessionContent), 0o644)
+
+	reqDir := filepath.Join(logsDir, "llm-requests", fmt.Sprintf("session-%s", sessID))
+	_ = os.MkdirAll(reqDir, 0o755)
+	reqLog := `REQUEST PAYLOAD:
+--------------------------------------------------------------------------------
+{"model":"qwen2.5-coder:7b","messages":[{"role":"user","content":"git status"}]}
+
+--------------------------------------------------------------------------------
+RESPONSE PAYLOAD:
+--------------------------------------------------------------------------------
+{"model":"qwen2.5-coder:7b","message":{"role":"assistant","content":"{\"explanation\":\"Shows working tree status\",\"suggested-command\":\"git status -s\"}"}}
+================================================================================
+`
+	_ = os.WriteFile(filepath.Join(reqDir, "request-turn-0.log"), []byte(reqLog), 0o644)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"model": "qwen3.8:latest",
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": `{"explanation":"Shows status in short format with branch info","suggested-command":"git status -sb"}`,
+				},
+				"done": true,
+			})
+			return
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	fs.home = tempHome
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(tempHome)] = true
+	env := fs.env()
+	env.UserHomeDir = func() (string, error) { return tempHome, nil }
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	cfg := config.Defaults()
+	cfg.Inference.Endpoint = ts.URL
+	cfg.Inference.DefaultModel = "qwen2.5-coder:7b"
+	cfg.Inference.AdvancedModel = "qwen3.8:latest"
+	fs.configs[config.Path(tempHome)] = cfg
+	env.ReadHistory = func(home string, maxLines int) []llm.HistoryEntry {
+		return []llm.HistoryEntry{
+			{Command: "yups git status"},
+		}
+	}
+	env.AskPrompt = func(prompt, defaultVal string) string {
+		return "how to include branch info?"
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Dispatch(env, []string{}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want ExitOK (%d)", code, ExitOK)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Previous Session (madrid42)") {
+		t.Errorf("expected previous session summary in output:\n%s", out)
+	}
+	if !strings.Contains(out, "git status -sb") {
+		t.Errorf("expected advanced model response with 'git status -sb' in output:\n%s", out)
+	}
+}
+
+func TestRunModelBenchmarkInvertedDurations(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{"name": "slow-default:7b"},
+					{"name": "fast-advanced:latest"},
+					{"name": "fastest-model:3b"},
+				},
+			})
+		case "/api/chat":
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			m, _ := req["model"].(string)
+			// Delay response based on model name
+			if m == "slow-default:7b" {
+				time.Sleep(50 * time.Millisecond)
+			} else if m == "fast-advanced:latest" {
+				time.Sleep(20 * time.Millisecond)
+			} else {
+				time.Sleep(10 * time.Millisecond)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"model": m,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": `{"explanation":"Listing files in directory","suggested-command":"ls -la"}`,
+				},
+				"done": true,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	fs := newFakeFS()
+	fs.addExecutable("/usr/local/bin/yups")
+	fs.existingPaths[config.Dir(fs.home)] = true
+	cfg := config.Defaults()
+	cfg.Inference.Endpoint = ts.URL
+	cfg.Inference.DefaultModel = "slow-default:7b"
+	cfg.Inference.AdvancedModel = "fast-advanced:latest"
+	fs.configs[config.Path(fs.home)] = cfg
+	env := fs.env()
+	env.HTTPClient = func() *http.Client { return ts.Client() }
+	env.AskConfirmation = func(prompt string, defaultYes bool) bool { return true }
+	env.IsTerminalOutput = func(w io.Writer) bool { return true }
+
+	var stdout, stderr bytes.Buffer
+	results, code := RunModelBenchmark(env, &stdout, &stderr, nil)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want ExitOK (%d)", code, ExitOK)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "slow-default:7b *") {
+		t.Errorf("expected default model marker '*' on slow-default:7b in:\n%s", out)
+	}
+	if !strings.Contains(out, "fast-advanced:latest **") {
+		t.Errorf("expected advanced model marker '**' on fast-advanced:latest in:\n%s", out)
+	}
+	// Inverted case: no green times, <= adv is yellow, > adv is red
+	// ANSI code for yellow is \x1b[33m (theme.Warning) and red is \x1b[31m (theme.Error)
+	// Green is \x1b[32m (theme.Success)
+	if strings.Contains(out, "\x1b[32m") {
+		t.Errorf("expected NO green duration colors when default is slower than advanced, got green in:\n%s", out)
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 }

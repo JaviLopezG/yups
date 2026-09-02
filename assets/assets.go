@@ -35,10 +35,13 @@ var ShellCompletionBash string
 //go:embed shell/keybinding.bash
 var ShellKeybindingBash string
 
-// CitiesData contains the line-separated list of session cities.
+// SessionNamesData contains the line-separated list of session slug names.
 //
-//go:embed data/cities.txt
-var CitiesData string
+//go:embed data/session-names.txt
+var SessionNamesData string
+
+// CitiesData is an alias to SessionNamesData for backwards compatibility.
+var CitiesData = SessionNamesData
 
 // WhitelistCommandsData contains the line-separated list of whitelisted inspection commands.
 //
@@ -109,9 +112,9 @@ func readAsset(relPath, embedded string) string {
 	return embedded
 }
 
-// GetSessionCities returns the slice of city names for session slugs.
-func GetSessionCities() []string {
-	data := readAsset("data/cities.txt", CitiesData)
+// GetSessionNames returns the slice of names for session slugs.
+func GetSessionNames() []string {
+	data := readAsset("data/session-names.txt", SessionNamesData)
 	var list []string
 	for _, line := range strings.Split(data, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -120,6 +123,11 @@ func GetSessionCities() []string {
 		}
 	}
 	return list
+}
+
+// GetSessionCities is an alias to GetSessionNames for backwards compatibility.
+func GetSessionCities() []string {
+	return GetSessionNames()
 }
 
 // GetWhitelistedCommands returns the map of unconditionally safe read-only inspection commands.
@@ -171,7 +179,18 @@ func GetSystemPromptTemplate() string {
 	return readAsset("prompts/system_prompt.txt", SystemPromptTemplate)
 }
 
-// GetHelpText returns the CLI help text.
+// GetHelpText returns the CLI help text directly from the embedded binary resource.
 func GetHelpText() string {
-	return readAsset("prompts/help.txt", HelpText)
+	lines := strings.Split(HelpText, "\n")
+	var out []string
+	skippingHeaderComments := true
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if skippingHeaderComments && strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		skippingHeaderComments = false
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
 }

@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"yups/internal/llm"
 )
@@ -152,6 +154,10 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 					return 1
 				}
 				_ = os.Setenv("YUPS_SCRIPT", scriptPath)
+				if marker := os.Getenv("YUPS_READLINE_MARKER"); marker != "" {
+					_ = os.WriteFile(marker, []byte(scriptPath), 0o600)
+				}
+				injectTerminalInput(scriptPath)
 				if env.OpenEditor != nil {
 					_ = env.OpenEditor(scriptPath, nil, stdout, stderr)
 				}
@@ -166,6 +172,24 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 				return 0
 
 			case "n", "no":
+				scriptsDir := env.ScriptsDir
+				if scriptsDir == "" {
+					if home, err := os.UserHomeDir(); err == nil {
+						scriptsDir = filepath.Join(home, ".yups", "scripts")
+					} else {
+						scriptsDir = filepath.Join(os.TempDir(), "yups-scripts")
+					}
+				}
+				_ = os.MkdirAll(scriptsDir, 0o755)
+				timestamp := time.Now().Format("2006-01-02-15-04-05")
+				scriptPath := filepath.Join(scriptsDir, timestamp+".sh")
+				_ = os.WriteFile(scriptPath, []byte(currentScript), 0o755)
+				_ = os.Setenv("YUPS_SCRIPT", scriptPath)
+				if marker := os.Getenv("YUPS_READLINE_MARKER"); marker != "" {
+					_ = os.WriteFile(marker, []byte(scriptPath), 0o600)
+				}
+				injectTerminalInput(scriptPath)
+				fmt.Fprintf(stdout, "\nScript saved to %s (available as $YUPS_SCRIPT)\n\n", scriptPath)
 				scriptProcessed = true
 				if currentCmd != "" {
 					continue
@@ -288,5 +312,24 @@ func Explain(ctx context.Context, env DocEnv, args []string, stdout, stderr io.W
 		}
 
 		return 0
+	}
+}
+
+// injectTerminalInput pushes text into the terminal input buffer via TIOCSTI ioctl
+// so that it appears pre-filled in the user's interactive shell prompt.
+func injectTerminalInput(text string) {
+	if text == "" {
+		return
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		tty = os.Stdin
+	} else {
+		defer tty.Close()
+	}
+	fd := tty.Fd()
+	for i := 0; i < len(text); i++ {
+		b := text[i]
+		_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCSTI, uintptr(unsafe.Pointer(&b)))
 	}
 }

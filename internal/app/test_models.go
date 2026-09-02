@@ -128,6 +128,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		modelDocEnv := docEnv
 		modelDocEnv.OverrideModel = m.Name
 		modelDocEnv.Logger = logger
+		modelDocEnv.AskConfirmation = nil // Stop immediately on timeout without prompting user
 		resolver := explain.NewResolver(modelDocEnv)
 
 		exp := &explain.PipelineExplanation{
@@ -145,12 +146,18 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 			Duration: elapsed,
 		}
 
-		if err != nil {
-			res.Error = err.Error()
+		if err != nil || exp.LLMError != "" || (exp.LLMExplanation == "" && exp.SuggestedCommand == "") {
+			errMsg := "empty response from model"
+			if exp.LLMError != "" {
+				errMsg = exp.LLMError
+			} else if err != nil {
+				errMsg = err.Error()
+			}
+			res.Error = errMsg
 			if color {
-				fmt.Fprintf(stdout, "  Test Result: %s[FAILED]%s (%v) [%.2fs]\n", theme.Bold+theme.Error, theme.Reset, err, elapsed.Seconds())
+				fmt.Fprintf(stdout, "  Test Result: %s[FAILED]%s (%s) [%.2fs]\n", theme.Bold+theme.Error, theme.Reset, errMsg, elapsed.Seconds())
 			} else {
-				fmt.Fprintf(stdout, "  Status: Failed (%v) [%.2fs]\n", err, elapsed.Seconds())
+				fmt.Fprintf(stdout, "  Status: Failed (%s) [%.2fs]\n", errMsg, elapsed.Seconds())
 			}
 		} else {
 			responseText := exp.LLMExplanation
@@ -205,7 +212,7 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		results = append(results, res)
 	}
 
-	// Sort results by duration (fastest to slowest)
+	// Sort results by duration (fastest to slowest; passed before failed)
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Error != "" && results[j].Error == "" {
 			return false
@@ -216,6 +223,33 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		return results[i].Duration < results[j].Duration
 	})
 
+	defModelName := docEnv.DefaultModel
+	if defModelName == "" {
+		defModelName = config.DefaultModel
+	}
+	advModelName := docEnv.AdvancedModel
+	if advModelName == "" {
+		advModelName = config.DefaultAdvancedModel
+	}
+
+	var defDuration time.Duration
+	var advDuration time.Duration
+	var defPassed bool
+	var advPassed bool
+
+	for _, r := range results {
+		if r.Error == "" {
+			if r.Model == defModelName {
+				defDuration = r.Duration
+				defPassed = true
+			}
+			if r.Model == advModelName {
+				advDuration = r.Duration
+				advPassed = true
+			}
+		}
+	}
+
 	if color {
 		fmt.Fprintln(stdout, "\n"+theme.Bold+theme.Prompt+"================================================================="+theme.Reset)
 		fmt.Fprintln(stdout, theme.Bold+"                    MODEL BENCHMARK SUMMARY                    "+theme.Reset)
@@ -225,14 +259,50 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		fmt.Fprintln(stdout, theme.Muted+"-----------------------------------------------------------------"+theme.Reset)
 		for _, r := range results {
 			statusStr := theme.Bold + theme.Success + "[PASSED]" + theme.Reset
+			modelLabel := r.Model
+			if r.Model == defModelName {
+				modelLabel += " *"
+			} else if r.Model == advModelName {
+				modelLabel += " **"
+			}
+
+			durRaw := fmt.Sprintf("%.2fs", r.Duration.Seconds())
+			var durStr string
 			if r.Error != "" {
 				statusStr = theme.Bold + theme.Error + "[FAILED]" + theme.Reset
+				durStr = theme.Muted + durRaw + theme.Reset
+			} else {
+				// 3-color duration coding
+				if defPassed && advPassed && defDuration > advDuration {
+					// Special case: default model is slower than advanced model
+					// No green times; <= advDuration is yellow, > advDuration is red
+					if r.Duration <= advDuration {
+						durStr = theme.Warning + durRaw + theme.Reset
+					} else {
+						durStr = theme.Error + durRaw + theme.Reset
+					}
+				} else {
+					if defPassed && r.Duration <= defDuration {
+						durStr = theme.Success + durRaw + theme.Reset
+					} else if (defPassed && advPassed && r.Duration > defDuration && r.Duration <= advDuration) ||
+						(defPassed && !advPassed && r.Duration > defDuration) ||
+						(!defPassed && advPassed && r.Duration <= advDuration) {
+						durStr = theme.Warning + durRaw + theme.Reset
+					} else if advPassed && r.Duration > advDuration {
+						durStr = theme.Error + durRaw + theme.Reset
+					} else {
+						durStr = theme.Success + durRaw + theme.Reset
+					}
+				}
 			}
-			modelStr := theme.Info + fmt.Sprintf("%-35s", r.Model) + theme.Reset
-			durStr := fmt.Sprintf("%.2fs", r.Duration.Seconds())
+
+			modelStr := theme.Info + fmt.Sprintf("%-35s", modelLabel) + theme.Reset
 			fmt.Fprintf(stdout, "%s %-12s %s\n", modelStr, durStr, statusStr)
 		}
 		fmt.Fprintln(stdout, theme.Bold+theme.Prompt+"================================================================="+theme.Reset)
+		fmt.Fprintf(stdout, "%sLegend:%s * default model (%s) | ** advanced model (%s)\n", theme.Bold, theme.Reset, defModelName, advModelName)
+		fmt.Fprintf(stdout, "Duration colors: %s<= default (fast)%s | %s<= advanced (medium)%s | %s> advanced (slow)%s\n",
+			theme.Success, theme.Reset, theme.Warning, theme.Reset, theme.Error, theme.Reset)
 	} else {
 		fmt.Fprintln(stdout, "\n=================================================================")
 		fmt.Fprintln(stdout, "                    MODEL BENCHMARK SUMMARY                    ")
@@ -242,13 +312,20 @@ func RunModelBenchmark(env *Env, stdout, stderr io.Writer, logger *sessionlog.Se
 		fmt.Fprintln(stdout, "-----------------------------------------------------------------")
 		for _, r := range results {
 			status := "[PASSED]"
+			modelLabel := r.Model
+			if r.Model == defModelName {
+				modelLabel += " *"
+			} else if r.Model == advModelName {
+				modelLabel += " **"
+			}
 			if r.Error != "" {
 				status = "[FAILED]"
 			}
 			durStr := fmt.Sprintf("%.2fs", r.Duration.Seconds())
-			fmt.Fprintf(stdout, "%-35s %-12s %s\n", r.Model, durStr, status)
+			fmt.Fprintf(stdout, "%-35s %-12s %s\n", modelLabel, durStr, status)
 		}
 		fmt.Fprintln(stdout, "=================================================================")
+		fmt.Fprintf(stdout, "Legend: * default model (%s) | ** advanced model (%s)\n", defModelName, advModelName)
 	}
 
 	if logger != nil {

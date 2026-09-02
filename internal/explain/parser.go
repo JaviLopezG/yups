@@ -465,21 +465,47 @@ func isNaturalLanguageQuery(s string) bool {
 	if trimmed == "" {
 		return false
 	}
+	// I - Starts with ¿ or ?
 	if strings.HasPrefix(trimmed, "¿") || strings.HasPrefix(trimmed, "?") {
 		return true
 	}
-	lower := strings.ToLower(trimmed)
-	prefixes := []string{
-		"cómo ", "como ", "how ", "how to ", "what ", "what is ", "where ",
-		"why ", "quién ", "quien ", "cual ", "cuál ", "dónde ", "donde ",
-		"ayuda ", "help ", "explicar ", "explain ", "muéstrame ", "show me ",
-		"dime ", "tell me ",
+	// II - Ends with ?
+	if strings.HasSuffix(trimmed, "?") {
+		return true
 	}
-	for _, p := range prefixes {
+
+	// IV - Interrogative words / phrases
+	lower := strings.ToLower(trimmed)
+	interrogativePrefixes := []string{
+		"how ", "how to ", "what ", "what is ", "where ", "why ", "when ", "who ", "which ",
+		"cómo ", "como ", "cuál ", "cual ", "cuándo ", "cuando ", "dónde ", "donde ",
+		"qué ", "que ", "quién ", "quien ", "por qué ", "por que ", "para qué ", "para que ",
+		"ayuda ", "help ", "explicar ", "explain ", "muéstrame ", "show me ", "dime ", "tell me ",
+	}
+	for _, p := range interrogativePrefixes {
 		if strings.HasPrefix(lower, p) {
 			return true
 		}
 	}
+
+	// III - Capitalized sentence: first token starts with uppercase and rest of first token is lowercase
+	words := strings.Fields(trimmed)
+	if len(words) >= 2 {
+		firstWordRunes := []rune(words[0])
+		if len(firstWordRunes) > 0 && unicode.IsUpper(firstWordRunes[0]) {
+			allRestLower := true
+			for _, r := range firstWordRunes[1:] {
+				if !unicode.IsLower(r) {
+					allRestLower = false
+					break
+				}
+			}
+			if allRestLower {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 

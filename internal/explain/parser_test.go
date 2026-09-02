@@ -174,7 +174,7 @@ func TestParseNaturalLanguageQueries(t *testing.T) {
 		want string
 	}{
 		{
-			name: "spanish question",
+			name: "spanish question inverted question mark",
 			args: []string{"¿cómo puedo ver los puertos abiertos?"},
 			want: "¿cómo puedo ver los puertos abiertos?",
 		},
@@ -184,9 +184,39 @@ func TestParseNaturalLanguageQueries(t *testing.T) {
 			want: "como ver la memoria libre",
 		},
 		{
-			name: "english question",
+			name: "english question how to",
 			args: []string{"how to find large files in /home"},
 			want: "how to find large files in /home",
+		},
+		{
+			name: "english question ending in question mark",
+			args: []string{"How can I list subfolders?"},
+			want: "How can I list subfolders?",
+		},
+		{
+			name: "capitalized sentence prompt",
+			args: []string{"Buscar archivos modificados hoy"},
+			want: "Buscar archivos modificados hoy",
+		},
+		{
+			name: "spanish interrogative cual",
+			args: []string{"cuál es el proceso que más cpu usa"},
+			want: "cuál es el proceso que más cpu usa",
+		},
+		{
+			name: "spanish interrogative donde",
+			args: []string{"dónde están los logs del sistema"},
+			want: "dónde están los logs del sistema",
+		},
+		{
+			name: "capitalized sentence with symbols numbers and uppercase in rest",
+			args: []string{"Revisar script include all en /home/javi/utils con BASH_SOURCE[0] & 123"},
+			want: "Revisar script include all en /home/javi/utils con BASH_SOURCE[0] & 123",
+		},
+		{
+			name: "full question prompt with parenthesis and punctuation",
+			args: []string{"¿Puedes revisar el script include all para ver si es correcto? La idea es que al ejecutarse incluya todos los archivos del directorio en el que se encuentra (no en el que se ejecuta), no sé si esta distinción la he cubierto."},
+			want: "¿Puedes revisar el script include all para ver si es correcto? La idea es que al ejecutarse incluya todos los archivos del directorio en el que se encuentra (no en el que se ejecuta), no sé si esta distinción la he cubierto.",
 		},
 	}
 

@@ -23,7 +23,7 @@ func TestInstallAssets(t *testing.T) {
 	}
 
 	expectedFiles := []string{
-		filepath.Join(config.DataDir(tempHome), "cities.txt"),
+		filepath.Join(config.DataDir(tempHome), "session-names.txt"),
 		filepath.Join(config.DataDir(tempHome), "whitelist_commands.txt"),
 		filepath.Join(config.DataDir(tempHome), "whitelist_wrappers.txt"),
 		filepath.Join(config.DataDir(tempHome), "whitelist_conditional_commands.txt"),

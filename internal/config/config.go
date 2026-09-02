@@ -421,6 +421,7 @@ func Save(path string, c Config) error {
 	}
 
 	var buf bytes.Buffer
+	buf.WriteString("# Configuration file for yups.\n# THIS FILE IS PRESERVED ON REINSTALLATION OR UPDATE (user settings are kept; missing options are added).\n\n")
 	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
 		return fmt.Errorf("encoding configuration for %q: %w", path, err)
 	}
