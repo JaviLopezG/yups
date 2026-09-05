@@ -6,7 +6,6 @@
 package app
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -14,53 +13,52 @@ import (
 	"yups/internal/config"
 )
 
-// AssetFile represents a static asset to deploy into ~/.yups/.
-type AssetFile struct {
-	RelPath string // e.g. "data/cities.txt", "prompts/system_prompt.txt"
-	Content string
-}
-
-// AllAssetFiles returns the collection of static assets deployed to ~/.yups/.
-func AllAssetFiles() []AssetFile {
-	return []AssetFile{
-		{RelPath: filepath.Join("data", "session-names.txt"), Content: assets.SessionNamesData},
-		{RelPath: filepath.Join("data", "whitelist_commands.txt"), Content: assets.WhitelistCommandsData},
-		{RelPath: filepath.Join("data", "whitelist_wrappers.txt"), Content: assets.WhitelistWrappersData},
-		{RelPath: filepath.Join("data", "whitelist_conditional_commands.txt"), Content: assets.WhitelistConditionalCommandsData},
-		{RelPath: filepath.Join("data", "theme.toml"), Content: assets.ThemeData},
-		{RelPath: filepath.Join("prompts", "system_prompt.txt"), Content: assets.SystemPromptTemplate},
-		{RelPath: filepath.Join("prompts", "help.txt"), Content: assets.HelpText},
+// CleanLegacyAssets removes old auto-exported data and prompts directories from ~/.yups/.
+func CleanLegacyAssets(env *Env, home string) {
+	removePath := func(p string) {
+		if env != nil && env.Remove != nil {
+			_ = env.Remove(p)
+		} else {
+			_ = os.Remove(p)
+		}
 	}
+	legacyFiles := []string{
+		filepath.Join(config.Dir(home), "data", "session-names.txt"),
+		filepath.Join(config.Dir(home), "data", "whitelist_commands.txt"),
+		filepath.Join(config.Dir(home), "data", "whitelist_wrappers.txt"),
+		filepath.Join(config.Dir(home), "data", "whitelist_conditional_commands.txt"),
+		filepath.Join(config.Dir(home), "data", "theme.toml"),
+		filepath.Join(config.Dir(home), "prompts", "system_prompt.txt"),
+		filepath.Join(config.Dir(home), "prompts", "help.txt"),
+	}
+	for _, f := range legacyFiles {
+		removePath(f)
+	}
+	// Also attempt to remove data and prompts directories if empty
+	removePath(filepath.Join(config.Dir(home), "data"))
+	removePath(filepath.Join(config.Dir(home), "prompts"))
 }
 
-// InstallAssets copies all data and prompt assets to ~/.yups/data/ and ~/.yups/prompts/.
+// InstallAssets writes ~/.yups/README.md and cleans any legacy assets.
 func InstallAssets(env *Env, home string) error {
-	for _, a := range AllAssetFiles() {
-		targetPath := filepath.Join(config.Dir(home), a.RelPath)
-		_ = os.MkdirAll(filepath.Dir(targetPath), 0o755)
-		if env != nil && env.WriteFile != nil {
-			if err := env.WriteFile(targetPath, []byte(a.Content), 0o644); err != nil {
-				return fmt.Errorf("writing asset %s: %w", targetPath, err)
-			}
-		} else {
-			if err := os.WriteFile(targetPath, []byte(a.Content), 0o644); err != nil {
-				return fmt.Errorf("writing asset %s: %w", targetPath, err)
-			}
-		}
+	CleanLegacyAssets(env, home)
+	readmePath := filepath.Join(config.Dir(home), "README.md")
+	_ = os.MkdirAll(filepath.Dir(readmePath), 0o755)
+	if env != nil && env.WriteFile != nil {
+		return env.WriteFile(readmePath, []byte(assets.DotYupsReadme), 0o644)
 	}
-	return nil
+	return os.WriteFile(readmePath, []byte(assets.DotYupsReadme), 0o644)
 }
 
-// EnsureAssetsUpdated updates all static data, prompt, and shell script assets under ~/.yups/.
+// EnsureAssetsUpdated updates ~/.yups/README.md, shell scripts, and cleans legacy assets.
 func EnsureAssetsUpdated(env *Env, home string) error {
-	for _, a := range AllAssetFiles() {
-		targetPath := filepath.Join(config.Dir(home), a.RelPath)
-		_ = os.MkdirAll(filepath.Dir(targetPath), 0o755)
-		if env != nil && env.WriteFile != nil {
-			_ = env.WriteFile(targetPath, []byte(a.Content), 0o644)
-		} else {
-			_ = os.WriteFile(targetPath, []byte(a.Content), 0o644)
-		}
+	CleanLegacyAssets(env, home)
+	readmePath := filepath.Join(config.Dir(home), "README.md")
+	_ = os.MkdirAll(filepath.Dir(readmePath), 0o755)
+	if env != nil && env.WriteFile != nil {
+		_ = env.WriteFile(readmePath, []byte(assets.DotYupsReadme), 0o644)
+	} else {
+		_ = os.WriteFile(readmePath, []byte(assets.DotYupsReadme), 0o644)
 	}
 
 	// Update shell scripts

@@ -276,6 +276,13 @@ def format_decoded_json_payload(raw_json: str, is_request: bool = True) -> str:
             for line in decoded.splitlines():
                 out_lines.append(f"  {line}")
 
+        thinking = msg.get("thinking", "")
+        if thinking:
+            decoded_thinking = decode_escaped_string(thinking)
+            out_lines.append(f"\n  {dim(bold('Thinking (Internal Reasoning):'))}")
+            for line in decoded_thinking.splitlines():
+                out_lines.append(f"    {dim(line)}")
+
         tool_calls = msg.get("tool_calls", [])
         if tool_calls:
             out_lines.append(f"  {bold('Requested Tool Calls:')}")
@@ -284,6 +291,14 @@ def format_decoded_json_payload(raw_json: str, is_request: bool = True) -> str:
                 fn_name = fn.get("name", "")
                 fn_args = fn.get("arguments", {})
                 out_lines.append(f"    - {yellow(fn_name)}: {json.dumps(fn_args, ensure_ascii=False)}")
+
+        extra_info = []
+        if "done_reason" in data:
+            extra_info.append(f"done_reason={data['done_reason']}")
+        if "eval_count" in data:
+            extra_info.append(f"eval_count={data['eval_count']}")
+        if extra_info:
+            out_lines.append(f"\n  {dim('[' + ', '.join(extra_info) + ']')}")
 
     return "\n".join(out_lines)
 

@@ -35,6 +35,7 @@ const (
 	DefaultMaxToolTurns                = 10
 	DefaultMaxToolOutputBytes          = 4096
 	DefaultAdvancedMultiplier          = 3
+	DefaultContextLength               = 16384
 	// FloorVersion is the placeholder recorded when no version has ever
 	// been registered yet. Any real release tag compares strictly newer,
 	// so the first update bump starts from here.
@@ -55,6 +56,7 @@ type InferenceConfig struct {
 	DefaultModel  string `toml:"default-model"`
 	AdvancedModel string `toml:"advanced-model"`
 	Disabled      bool   `toml:"disabled,omitempty"`
+	ContextLength int    `toml:"context-length,omitempty"`
 }
 
 // LimitsConfig holds execution limits, timeouts, and multipliers.
@@ -93,6 +95,14 @@ func (c Config) GetAdvancedModel() string {
 		return DefaultAdvancedModel
 	}
 	return c.Inference.AdvancedModel
+}
+
+// GetContextLength returns the configured LLM context window token length.
+func (c Config) GetContextLength() int {
+	if c.Inference.ContextLength <= 0 {
+		return DefaultContextLength
+	}
+	return c.Inference.ContextLength
 }
 
 // GetLLMTimeoutSeconds returns the configured LLM timeout in seconds.
@@ -233,6 +243,7 @@ func Defaults() Config {
 			DefaultModel:  DefaultModel,
 			AdvancedModel: DefaultAdvancedModel,
 			Disabled:      false,
+			ContextLength: DefaultContextLength,
 		},
 		Limits: LimitsConfig{
 			LLMTimeoutSeconds:           DefaultLLMTimeoutSeconds,
@@ -261,6 +272,9 @@ func EnsureDefaults(c *Config) {
 	}
 	if c.Inference.AdvancedModel == "" {
 		c.Inference.AdvancedModel = DefaultAdvancedModel
+	}
+	if c.Inference.ContextLength <= 0 {
+		c.Inference.ContextLength = DefaultContextLength
 	}
 	if c.Limits.LLMTimeoutSeconds <= 0 {
 		c.Limits.LLMTimeoutSeconds = DefaultLLMTimeoutSeconds
@@ -295,6 +309,7 @@ type rawLegacyConfig struct {
 	MaxToolTurns                int      `toml:"max-tool-turns"`
 	MaxToolOutputBytes          int      `toml:"max-tool-output-bytes"`
 	AdvancedMultiplier          int      `toml:"advanced-multiplier"`
+	ContextLength               int      `toml:"context-length"`
 
 	// Sectioned keys
 	Inference rawInferenceConfig `toml:"inference"`
@@ -309,6 +324,7 @@ type rawInferenceConfig struct {
 	AvailableModels   []string `toml:"available-models"`
 	Disabled          *bool    `toml:"disabled"`
 	LLMDisabled       *bool    `toml:"llm-disabled"`
+	ContextLength     int      `toml:"context-length"`
 }
 
 type rawLimitsConfig struct {
@@ -369,6 +385,12 @@ func Load(path string) (Config, error) {
 		advancedModel = raw.AdvancedModel
 	}
 	c.Inference.AdvancedModel = advancedModel
+
+	contextLength := raw.Inference.ContextLength
+	if contextLength <= 0 {
+		contextLength = raw.ContextLength
+	}
+	c.Inference.ContextLength = contextLength
 
 	if raw.Inference.Disabled != nil {
 		c.Inference.Disabled = *raw.Inference.Disabled

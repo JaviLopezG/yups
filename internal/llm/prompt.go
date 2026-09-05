@@ -93,7 +93,7 @@ func BuildChatRequest(model string, sysCtx SystemContext, commandLine string, mi
 		},
 		Tools:   DefaultTools(),
 		Stream:  false,
-		Options: map[string]any{"temperature": 0.1},
+		Options: map[string]any{"temperature": 0.1, "num_ctx": 16384},
 	}
 }
 

@@ -144,58 +144,16 @@ func Install(env *Env, stdout, stderr io.Writer) int {
 					cancel()
 					if err == nil {
 						if len(models) > 0 {
-							def, adv := llm.SelectBestModels(models)
-
 							var modelNames []string
-							hasQwen := false
-							hasGemma := false
 							for _, m := range models {
 								modelNames = append(modelNames, m.Name)
-								lower := strings.ToLower(m.Name)
-								if strings.Contains(lower, "qwen") {
-									hasQwen = true
-								}
-								if strings.Contains(lower, "gemma") {
-									hasGemma = true
-								}
 							}
 							discoveredModels = modelNames
 
 							fmt.Fprintf(stdout, "Connected to Ollama at %s (%d models available).\n", endpoint, len(models))
 
-							if env.AskPrompt != nil && (!hasQwen || !hasGemma) {
-								fmt.Fprintf(stdout, "\nRecommended models (%s for default, %s for advanced) are not fully available:\n", config.DefaultModel, config.DefaultAdvancedModel)
-								fmt.Fprintf(stdout, "  [1] Pull recommended models (%s and %s)\n", config.DefaultModel, config.DefaultAdvancedModel)
-								fmt.Fprintln(stdout, "  [2] Choose models from your installed list")
-								fmt.Fprintln(stdout, "  [3] Run model benchmark test (--test-models) and choose")
-								fmt.Fprintf(stdout, "  [4] Use automatic selection (%s / %s)\n", def, adv)
-
-								choice := strings.TrimSpace(env.AskPrompt("Model setup choice [1/2/3/4]", "4"))
-								switch choice {
-								case "1":
-									fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultModel)
-									pullCtx, pullCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-									_ = llmClient.PullModel(pullCtx, config.DefaultModel, stdout)
-									pullCancel()
-									def = config.DefaultModel
-
-									fmt.Fprintf(stdout, "Pulling %s...\n", config.DefaultAdvancedModel)
-									pullCtx2, pullCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
-									_ = llmClient.PullModel(pullCtx2, config.DefaultAdvancedModel, stdout)
-									pullCancel2()
-									adv = config.DefaultAdvancedModel
-
-									discoveredModels = append(discoveredModels, config.DefaultModel, config.DefaultAdvancedModel)
-
-								case "2":
-									def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
-								case "3":
-									RunModelBenchmark(env, stdout, stderr, nil)
-									def, adv = SelectModelsInteractively(env, models, def, adv, stdout)
-								case "4", "":
-									// use automatic selection
-								}
-							}
+							def := resolveModelSlot(env, llmClient, "default", config.DefaultModel, "qwen3-coder", models, &discoveredModels, stdout)
+							adv := resolveModelSlot(env, llmClient, "advanced", config.DefaultAdvancedModel, "gemma4", models, &discoveredModels, stdout)
 
 							cfg.Inference.DefaultModel = def
 							cfg.Inference.AdvancedModel = adv
@@ -280,4 +238,104 @@ func reportInstallAnomaly(env *Env, found []string, stdout io.Writer) {
 	fmt.Fprintf(stdout,
 		"Warning: %s is installed in several places (%s); operating on %s.\n",
 		ProgramName, quotedJoin(others), filepath.Join(keeper, ProgramName))
+}
+
+// findInstalledModel returns the exact model name if target (or target without :latest) is installed.
+func findInstalledModel(models []llm.ModelInfo, target string) string {
+	targetBase := strings.TrimSuffix(target, ":latest")
+	for _, m := range models {
+		mBase := strings.TrimSuffix(m.Name, ":latest")
+		if m.Name == target || m.Name == targetBase || mBase == targetBase {
+			return m.Name
+		}
+	}
+	return ""
+}
+
+// findFirstFamilyModel returns the first installed model containing the given family string (case-insensitive).
+func findFirstFamilyModel(models []llm.ModelInfo, family string) string {
+	familyLower := strings.ToLower(family)
+	for _, m := range models {
+		lower := strings.ToLower(m.Name)
+		if strings.Contains(lower, familyLower) {
+			return m.Name
+		}
+	}
+	return ""
+}
+
+// resolveModelSlot resolves model selection for a given slot (default or advanced):
+// 1. If targetModel from config constant is installed, use it.
+// 2. If not, suggest pulling it.
+// 3. If user declines, prompt choice from installed models, suggesting the first family match (or none).
+func resolveModelSlot(
+	env *Env,
+	llmClient *llm.Client,
+	slotName string,
+	targetModel string,
+	familyPrefix string,
+	models []llm.ModelInfo,
+	discoveredModels *[]string,
+	stdout io.Writer,
+) string {
+	// 1. If model constant is installed, use that
+	if found := findInstalledModel(models, targetModel); found != "" {
+		fmt.Fprintf(stdout, "Using installed %s model: %s.\n", slotName, found)
+		return found
+	}
+
+	// 2. Target model is not installed. Suggest pulling it.
+	shouldPull := false
+	if env != nil && env.AskConfirmation != nil {
+		shouldPull = env.AskConfirmation(
+			fmt.Sprintf("Recommended %s model (%s) is not installed. Would you like to pull it now?", slotName, targetModel),
+			true,
+		)
+	}
+
+	if shouldPull && llmClient != nil {
+		fmt.Fprintf(stdout, "Pulling %s...\n", targetModel)
+		pullCtx, pullCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		err := llmClient.PullModel(pullCtx, targetModel, stdout)
+		pullCancel()
+		if err == nil {
+			if discoveredModels != nil {
+				*discoveredModels = append(*discoveredModels, targetModel)
+			}
+			return targetModel
+		}
+		fmt.Fprintf(stdout, "Could not pull %s: %v\n", targetModel, err)
+	}
+
+	// 3. If user declined or pull failed, let them choose from installed models.
+	suggested := findFirstFamilyModel(models, familyPrefix)
+
+	if env != nil && env.AskPrompt != nil && len(models) > 0 {
+		fmt.Fprintf(stdout, "\nInstalled Ollama models for %s model:\n", slotName)
+		for i, m := range models {
+			mark := ""
+			if m.Name == suggested {
+				mark = " (suggested)"
+			}
+			fmt.Fprintf(stdout, "  [%d] %s%s\n", i+1, m.Name, mark)
+		}
+
+		promptText := fmt.Sprintf("Select %s model (name or number)", slotName)
+		if suggested != "" {
+			promptText = fmt.Sprintf("Select %s model (name or number, default: %s)", slotName, suggested)
+		}
+
+		choice := strings.TrimSpace(env.AskPrompt(promptText, suggested))
+		if choice != "" {
+			return resolveModelName(choice, models, choice)
+		}
+	}
+
+	if suggested != "" {
+		return suggested
+	}
+	if len(models) > 0 {
+		return models[0].Name
+	}
+	return targetModel
 }
