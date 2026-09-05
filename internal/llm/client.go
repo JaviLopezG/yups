@@ -119,6 +119,7 @@ func DefaultTools() []Tool {
 type Message struct {
 	Role      string     `json:"role"`
 	Content   string     `json:"content"`
+	Thinking  string     `json:"thinking,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -133,10 +134,12 @@ type ChatRequest struct {
 
 // ChatResponse is the response received from Ollama's /api/chat.
 type ChatResponse struct {
-	Model     string  `json:"model"`
-	CreatedAt string  `json:"created_at"`
-	Message   Message `json:"message"`
-	Done      bool    `json:"done"`
+	Model       string  `json:"model"`
+	CreatedAt   string  `json:"created_at"`
+	Message     Message `json:"message"`
+	DoneReason  string  `json:"done_reason,omitempty"`
+	Done        bool    `json:"done"`
+	RawResponse []byte  `json:"-"`
 }
 
 // Client connects directly to Ollama's HTTP API.
@@ -303,14 +306,23 @@ func (c *Client) Chat(ctx context.Context, chatReq ChatRequest) (ChatResponse, e
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("reading response body from %s: %w", url, err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return ChatResponse{}, fmt.Errorf("Ollama chat returned status %d from %s: %s", resp.StatusCode, url, string(body))
+		limit := 512
+		if len(body) < limit {
+			limit = len(body)
+		}
+		return ChatResponse{RawResponse: body}, fmt.Errorf("Ollama chat returned status %d from %s: %s", resp.StatusCode, url, string(body[:limit]))
 	}
 
 	var chatResp ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
-		return ChatResponse{}, fmt.Errorf("decoding Ollama chat response: %w", err)
+	chatResp.RawResponse = body
+	if err := json.Unmarshal(body, &chatResp); err != nil {
+		return chatResp, fmt.Errorf("decoding Ollama chat response: %w", err)
 	}
 
 	return chatResp, nil

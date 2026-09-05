@@ -73,6 +73,11 @@ var SystemPromptTemplate string
 //go:embed prompts/help.txt
 var HelpText string
 
+// DotYupsReadme contains the README.md content placed in ~/.yups/.
+//
+//go:embed dotyups-readme.md
+var DotYupsReadme string
+
 var (
 	overrideHome string
 	overrideMu   sync.RWMutex
@@ -179,9 +184,10 @@ func GetSystemPromptTemplate() string {
 	return readAsset("prompts/system_prompt.txt", SystemPromptTemplate)
 }
 
-// GetHelpText returns the CLI help text directly from the embedded binary resource.
+// GetHelpText returns the CLI help text from ~/.yups/prompts/help.txt if present, or embedded fallback.
 func GetHelpText() string {
-	lines := strings.Split(HelpText, "\n")
+	raw := readAsset("prompts/help.txt", HelpText)
+	lines := strings.Split(raw, "\n")
 	var out []string
 	skippingHeaderComments := true
 	for _, l := range lines {

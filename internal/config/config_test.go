@@ -177,6 +177,7 @@ func TestSaveThenLoadRoundtripCreatesParentDirs(t *testing.T) {
 			DefaultModel:  "custom-coder:latest",
 			AdvancedModel: "custom-adv:latest",
 			Disabled:      false,
+			ContextLength: DefaultContextLength,
 		},
 		Limits: LimitsConfig{
 			LLMTimeoutSeconds:           DefaultLLMTimeoutSeconds,
@@ -211,6 +212,21 @@ func TestLLMDisabledConfig(t *testing.T) {
 	}
 	if c.IsLLMEnabled() {
 		t.Error("expected LLM to be disabled, got enabled")
+	}
+}
+
+func TestContextLengthConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "[inference]\ncontext-length = 32768\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := c.GetContextLength(); got != 32768 {
+		t.Errorf("GetContextLength() = %d, want 32768", got)
 	}
 }
 

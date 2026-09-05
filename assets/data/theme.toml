@@ -1,5 +1,4 @@
 # Semantic terminal theme and color palette for yups.
-# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 # Levels of information:
 #   error:     errors, command/manual entry not found, unrecognised flags
 #   warning:   warnings, in-use keys, flag headings

@@ -198,15 +198,32 @@ func (l *SessionLogger) LogInteraction(turn int, model, endpoint string, req llm
 		l.buf.WriteString("\n")
 	}
 
-	if err != nil {
-		l.buf.WriteString(fmt.Sprintf("<<< ERROR: %v <<<\n", err))
+	var respBytes []byte
+	if len(resp.RawResponse) > 0 {
+		var pretty bytes.Buffer
+		if indentErr := json.Indent(&pretty, resp.RawResponse, "", "  "); indentErr == nil {
+			respBytes = pretty.Bytes()
+		} else {
+			respBytes = resp.RawResponse
+		}
 	} else {
 		respJSON, jErr := json.MarshalIndent(resp, "", "  ")
 		if jErr == nil {
-			l.buf.WriteString("<<< Response Payload:\n")
-			l.buf.WriteString(string(respJSON))
-			l.buf.WriteString("\n<<< END INTERACTION <<<\n")
+			respBytes = respJSON
 		}
+	}
+
+	if err != nil {
+		l.buf.WriteString(fmt.Sprintf("<<< ERROR: %v <<<\n", err))
+		if len(respBytes) > 0 {
+			l.buf.WriteString("<<< Raw Response:\n")
+			l.buf.Write(respBytes)
+			l.buf.WriteString("\n")
+		}
+	} else if len(respBytes) > 0 {
+		l.buf.WriteString("<<< Response Payload:\n")
+		l.buf.Write(respBytes)
+		l.buf.WriteString("\n<<< END INTERACTION <<<\n")
 	}
 
 	// Write dedicated per-interaction request/response file under ~/.yups/logs/llm-requests/session-.../
@@ -243,11 +260,13 @@ func (l *SessionLogger) LogInteraction(turn int, model, endpoint string, req llm
 				reqBuf.WriteString("--------------------------------------------------------------------------------\n")
 				if err != nil {
 					reqBuf.WriteString(fmt.Sprintf("ERROR: %v\n", err))
-				} else {
-					respJSON, jErr := json.MarshalIndent(resp, "", "  ")
-					if jErr == nil {
-						reqBuf.Write(respJSON)
+					if len(respBytes) > 0 {
+						reqBuf.WriteString("\nRAW RESPONSE:\n")
+						reqBuf.Write(respBytes)
+						reqBuf.WriteString("\n")
 					}
+				} else if len(respBytes) > 0 {
+					reqBuf.Write(respBytes)
 					reqBuf.WriteString("\n")
 				}
 				reqBuf.WriteString("================================================================================\n")

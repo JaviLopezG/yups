@@ -233,6 +233,7 @@ func (e *Env) DocEnv() explain.DocEnv {
 		MaxToolTurns:         cfg.GetMaxToolTurns(),
 		MaxToolOutputBytes:   cfg.GetMaxToolOutputBytes(),
 		AdvancedMultiplier:   cfg.GetAdvancedMultiplier(),
+		ContextLength:        cfg.GetContextLength(),
 		IsTerminalOutput:     e.IsTerminalOutput,
 		AskConfirmation:      e.AskConfirmation,
 		AskPrompt:            e.AskPrompt,
