@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"yups/internal/cheats"
+	"yups/internal/config"
 	"yups/internal/llm"
 	"yups/internal/sessionlog"
 	"yups/internal/ui"
@@ -45,6 +46,7 @@ type DocEnv struct {
 	MaxToolOutputBytes   int
 	AdvancedMultiplier   int
 	NoLimits             bool
+	ContextLength        int
 	IsTerminalOutput     func(w io.Writer) bool
 	AskConfirmation      func(prompt string, defaultYes bool) bool
 	AskPrompt            func(prompt, defaultValue string) string
@@ -413,10 +415,21 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 			err  error
 		}
 		resCh := make(chan chatResult, 1)
+		numCtx := r.env.ContextLength
+		if numCtx <= 0 {
+			numCtx = config.DefaultContextLength
+		}
+		if r.env.NoLimits && numCtx < 32768 {
+			numCtx = 32768
+		}
 		reqPayload := llm.ChatRequest{
 			Model:    model,
 			Messages: exp.Conversation,
 			Tools:    llm.DefaultTools(),
+			Options: map[string]any{
+				"temperature": 0.1,
+				"num_ctx":     numCtx,
+			},
 		}
 		go func() {
 			r, e := r.env.LLMClient.Chat(reqCtx, reqPayload)
@@ -533,22 +546,38 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		if len(toolCalls) == 0 && contentTrimmed == "" {
 			emptyRetryCount++
 			if emptyRetryCount < 2 {
+				isLengthCutoff := chatResp.DoneReason == "length" || chatResp.Message.Thinking != ""
+				extra := ""
+				if chatResp.Message.Thinking != "" {
+					extra = fmt.Sprintf(" (contained %d bytes of thinking)", len(chatResp.Message.Thinking))
+				}
+				if chatResp.DoneReason != "" {
+					extra += fmt.Sprintf(" [done_reason=%s]", chatResp.DoneReason)
+				}
 				if r.env.Logger != nil {
-					r.env.Logger.LogIncident("EMPTY_RESPONSE_RETRY", "Turn %d: model %s returned empty response, retrying with error/restriction reminder...", turn, model)
+					r.env.Logger.LogIncident("EMPTY_RESPONSE_RETRY", "Turn %d: model %s returned empty response%s, retrying...", turn, model, extra)
 				}
-				var originalUserInput string
-				if len(exp.Conversation) > 1 && exp.Conversation[1].Role == "user" {
-					originalUserInput = exp.Conversation[1].Content
+
+				var retryPrompt string
+				if isLengthCutoff {
+					retryPrompt = "Your previous generation was interrupted because the context length limit was reached. Continue from where you left off and finish what you were doing. When finished, output your response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\")."
+				} else {
+					var originalUserInput string
+					if len(exp.Conversation) > 1 && exp.Conversation[1].Role == "user" {
+						originalUserInput = exp.Conversation[1].Content
+					}
+					retryPrompt = "Your previous response was completely empty. If you encountered an error, constraint, difficulty, or security restriction that prevents you from completing the task, DO NOT return a blank response. Explain the error, restriction, or problem in the \"explanation\" field (with \"suggested-command\" and \"suggested-script\" left empty)."
+					if originalUserInput != "" {
+						retryPrompt = fmt.Sprintf("Your previous response was completely empty.\n\nPlease address the user request:\n%s\n\nIf you encountered an error, constraint, difficulty, or security restriction that prevents you from completing the task, DO NOT return a blank response. Explain the error, restriction, or problem in the \"explanation\" field (with \"suggested-command\" and \"suggested-script\" left empty).", originalUserInput)
+					}
 				}
-				retryPrompt := "Your previous response was completely empty. If you encountered an error, constraint, difficulty, or security restriction that prevents you from completing the task, DO NOT return a blank response. Explain the error, restriction, or problem in the \"explanation\" field (with \"suggested-command\" and \"suggested-script\" left empty)."
-				if originalUserInput != "" {
-					retryPrompt = fmt.Sprintf("Your previous response was completely empty.\n\nPlease address the user request:\n%s\n\nIf you encountered an error, constraint, difficulty, or security restriction that prevents you from completing the task, DO NOT return a blank response. Explain the error, restriction, or problem in the \"explanation\" field (with \"suggested-command\" and \"suggested-script\" left empty).", originalUserInput)
+
+				assistantTurn := chatResp.Message
+				if assistantTurn.Role == "" {
+					assistantTurn.Role = "assistant"
 				}
 				exp.Conversation = append(exp.Conversation,
-					llm.Message{
-						Role:    "assistant",
-						Content: "",
-					},
+					assistantTurn,
 					llm.Message{
 						Role:    "user",
 						Content: retryPrompt,
@@ -559,7 +588,14 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 			}
 			// Second consecutive empty response
 			if r.env.Logger != nil {
-				r.env.Logger.LogIncident("EMPTY_RESPONSE_ABORT", "Turn %d: model %s returned empty response twice consecutively", turn, model)
+				extra := ""
+				if chatResp.Message.Thinking != "" {
+					extra = fmt.Sprintf(" (contained %d bytes of thinking)", len(chatResp.Message.Thinking))
+				}
+				if chatResp.DoneReason != "" {
+					extra += fmt.Sprintf(" [done_reason=%s]", chatResp.DoneReason)
+				}
+				r.env.Logger.LogIncident("EMPTY_RESPONSE_ABORT", "Turn %d: model %s returned empty response twice consecutively%s", turn, model, extra)
 			}
 			if statusWriter != nil {
 				if color {
@@ -771,15 +807,15 @@ func (r *Resolver) QueryLLMPipeline(ctx context.Context, pipeline *Pipeline, exp
 		var followupContent string
 		if originalUserInput != "" {
 			if nonce != "" {
-				followupContent = fmt.Sprintf("The documentation and tool outputs have been gathered in <tool-output-%s> above. Do NOT call any more tools.\n\nNow fulfill the original user request:\n%s\n\nTask: Output your final response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\").", nonce, originalUserInput)
+				followupContent = fmt.Sprintf("Here are the tool outputs in <tool-output-%s> above. Continue with your task.\n\nRemember that you can call tools again ('fetch-command-documentation' or 'command-run') if you need more information or inspection.\nWhen you have sufficient information and are ready to provide your final answer, do not call any more tools and output your response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\") addressing:\n%s", nonce, originalUserInput)
 			} else {
-				followupContent = fmt.Sprintf("The documentation and tool outputs have been gathered above. Do NOT call any more tools.\n\nNow fulfill the original user request:\n%s\n\nTask: Output your final response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\").", originalUserInput)
+				followupContent = fmt.Sprintf("Here are the tool outputs above. Continue with your task.\n\nRemember that you can call tools again ('fetch-command-documentation' or 'command-run') if you need more information or inspection.\nWhen you have sufficient information and are ready to provide your final answer, do not call any more tools and output your response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\") addressing:\n%s", originalUserInput)
 			}
 		} else {
 			if nonce != "" {
-				followupContent = fmt.Sprintf("Now, using the documentation and outputs provided in <tool-output-%s>, fulfill the user request in <user-input-%s>. Do NOT call any more tools. Output your final response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\").", nonce, nonce)
+				followupContent = fmt.Sprintf("Here are the tool outputs in <tool-output-%s> above. Continue with your task addressing <user-input-%s>.\n\nRemember that you can call tools again if needed. When you have sufficient information and are ready to provide your final answer, do not call any more tools and output your response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\").", nonce, nonce)
 			} else {
-				followupContent = "Now, using the gathered tool outputs above, fulfill the user request in the initial user-input message. Do NOT call any more tools. Output your final response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\")."
+				followupContent = "Here are the tool outputs above. Continue with your task. Remember that you can call tools again if needed. When you have sufficient information and are ready to provide your final answer, do not call any more tools and output your response in the required JSON format (with \"explanation\", \"suggested-command\", and \"suggested-script\")."
 			}
 		}
 		exp.Conversation = append(exp.Conversation, llm.Message{

@@ -2384,3 +2384,129 @@ func TestExplainFlushesStdinBeforeInteractivePrompt(t *testing.T) {
 		t.Errorf("expected FlushStdin to be called before interactive prompt")
 	}
 }
+
+func TestContextLengthPassedInOptions(t *testing.T) {
+	var capturedOptions map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			var chatReq llm.ChatRequest
+			_ = json.NewDecoder(r.Body).Decode(&chatReq)
+			capturedOptions = chatReq.Options
+
+			resp := llm.ChatResponse{
+				Model: "test-model",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "{\"explanation\": \"test\", \"suggested-command\": \"ls\"}",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:     llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel:  "test-model",
+		ContextLength: 32768,
+		AskPrompt: func(prompt, defaultValue string) string {
+			return "n"
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"my-unknown-cmd"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if capturedOptions == nil {
+		t.Fatal("expected options to be sent in chat request")
+	}
+	numCtx, ok := capturedOptions["num_ctx"]
+	if !ok {
+		t.Fatal("expected num_ctx in options")
+	}
+	if numCtxVal, ok := numCtx.(float64); !ok || int(numCtxVal) != 32768 {
+		t.Errorf("num_ctx = %v, want 32768", numCtx)
+	}
+}
+
+func TestEmptyResponseRetryLengthContinuation(t *testing.T) {
+	reqCount := 0
+	var secondReqMessages []llm.Message
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			reqCount++
+			var chatReq llm.ChatRequest
+			_ = json.NewDecoder(r.Body).Decode(&chatReq)
+
+			if reqCount == 1 {
+				// Simulate model hitting context limit while thinking
+				resp := llm.ChatResponse{
+					Model: "test-model",
+					Message: llm.Message{
+						Role:     "assistant",
+						Content:  "",
+						Thinking: "I am analyzing this command...",
+					},
+					DoneReason: "length",
+					Done:       true,
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Second request: capture messages and return valid answer
+			secondReqMessages = chatReq.Messages
+			resp := llm.ChatResponse{
+				Model: "test-model",
+				Message: llm.Message{
+					Role:    "assistant",
+					Content: "{\"explanation\": \"continued success\", \"suggested-command\": \"ls -la\"}",
+				},
+				Done: true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer ts.Close()
+
+	docEnv := DocEnv{
+		LLMClient:    llm.NewClient(ts.Client(), ts.URL),
+		DefaultModel: "test-model",
+		AskPrompt: func(prompt, defaultValue string) string {
+			return "n"
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Explain(context.Background(), docEnv, []string{"my-unknown-cmd"}, &stdout, &stderr, false)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	if reqCount != 2 {
+		t.Fatalf("expected 2 requests (1 initial + 1 continuation), got %d", reqCount)
+	}
+
+	// Verify the second request preserved the assistant message with thinking
+	foundAssistantThinking := false
+	foundContinuationPrompt := false
+	for _, msg := range secondReqMessages {
+		if msg.Role == "assistant" && strings.Contains(msg.Thinking, "I am analyzing this command") {
+			foundAssistantThinking = true
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, "context length limit was reached") {
+			foundContinuationPrompt = true
+		}
+	}
+
+	if !foundAssistantThinking {
+		t.Errorf("expected second request to preserve assistant thinking")
+	}
+	if !foundContinuationPrompt {
+		t.Errorf("expected second request to include continuation prompt")
+	}
+}

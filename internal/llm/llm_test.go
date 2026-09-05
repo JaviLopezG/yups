@@ -139,6 +139,41 @@ func TestClientChat(t *testing.T) {
 	if !strings.Contains(chatResp.Message.Content, "SELinux") {
 		t.Errorf("chat response = %q, want containing 'SELinux'", chatResp.Message.Content)
 	}
+	if len(chatResp.RawResponse) == 0 {
+		t.Errorf("expected RawResponse to be populated")
+	}
+	if !strings.Contains(string(chatResp.RawResponse), "SELinux") {
+		t.Errorf("RawResponse does not contain expected text")
+	}
+}
+
+func TestClientChatPreservesRawResponseAndThinking(t *testing.T) {
+	rawJSON := `{"model":"gemma4:12b","message":{"role":"assistant","content":"","thinking":"internal reasoning steps here"},"done_reason":"stop","done":true,"eval_count":123}`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(rawJSON))
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.Client(), ts.URL)
+	chatResp, err := client.Chat(context.Background(), ChatRequest{
+		Model: "gemma4:12b",
+		Messages: []Message{
+			{Role: "user", Content: "Hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	if chatResp.Message.Thinking != "internal reasoning steps here" {
+		t.Errorf("thinking = %q, want 'internal reasoning steps here'", chatResp.Message.Thinking)
+	}
+	if chatResp.DoneReason != "stop" {
+		t.Errorf("done_reason = %q, want 'stop'", chatResp.DoneReason)
+	}
+	if string(chatResp.RawResponse) != rawJSON {
+		t.Errorf("raw response = %s, want %s", string(chatResp.RawResponse), rawJSON)
+	}
 }
 
 func TestSelectBestModels(t *testing.T) {

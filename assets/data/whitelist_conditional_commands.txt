@@ -1,5 +1,4 @@
 # Commands requiring conditional flag inspection.
-# THIS FILE IS AUTOMATICALLY UPDATED ON REINSTALLATION OR UPDATE.
 rsync
 make
 bash

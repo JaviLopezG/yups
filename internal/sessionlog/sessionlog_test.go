@@ -332,3 +332,43 @@ func TestGenerateSessionSlugAndSlugLogging(t *testing.T) {
 		t.Errorf("sessions.log missing slug=%s entry:\n%s", logger.Slug(), string(summaryData))
 	}
 }
+
+func TestSessionLoggerLogsRawResponse(t *testing.T) {
+	tempHome := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tempHome, ".yups"), 0o755)
+
+	logger := New(tempHome, []string{"--query", "test"})
+	rawPayload := []byte(`{"model":"gemma4:12b","message":{"role":"assistant","content":"","thinking":"deep reasoning"},"done_reason":"stop","eval_count":42}`)
+	chatReq := llm.ChatRequest{Model: "gemma4:12b"}
+	chatResp := llm.ChatResponse{
+		Model:       "gemma4:12b",
+		Message:     llm.Message{Role: "assistant", Content: "", Thinking: "deep reasoning"},
+		DoneReason:  "stop",
+		Done:        true,
+		RawResponse: rawPayload,
+	}
+
+	logger.LogInteraction(0, "gemma4:12b", "http://localhost:11434", chatReq, chatResp, 100*time.Millisecond, nil)
+
+	bufStr := logger.BufferString()
+	if !strings.Contains(bufStr, "deep reasoning") {
+		t.Errorf("buffer missing thinking from raw response: %s", bufStr)
+	}
+	if !strings.Contains(bufStr, `"eval_count": 42`) {
+		t.Errorf("buffer missing eval_count from raw response: %s", bufStr)
+	}
+
+	reqDir := logger.RequestsDir()
+	files, err := os.ReadDir(reqDir)
+	if err != nil || len(files) == 0 {
+		t.Fatalf("reading request dir: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(reqDir, files[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileStr := string(data)
+	if !strings.Contains(fileStr, "deep reasoning") || !strings.Contains(fileStr, `"eval_count": 42`) {
+		t.Errorf("request file missing raw response fields: %s", fileStr)
+	}
+}
